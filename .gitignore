@@ -1,0 +1,16 @@
+node_modules
+.DS_Store
+dist
+coverage
+.turbo
+.vite
+playwright-report
+test-results
+apps/web/dist
+apps/server/dist
+packages/shared/dist
+apps/server/drizzle
+*.tsbuildinfo
+.env
+.env.*
+
