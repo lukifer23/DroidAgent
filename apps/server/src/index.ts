@@ -628,8 +628,9 @@ app.post("/api/jobs", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
+  const user = c.get("user");
   const body = (await c.req.json()) as { command: string; cwd: string };
-  const jobId = await jobService.startJob(body.command, body.cwd);
+  const jobId = await jobService.startJob(body.command, body.cwd ?? ".", user?.id);
   await websocketHub.refreshAll();
   return c.json({ jobId });
 });

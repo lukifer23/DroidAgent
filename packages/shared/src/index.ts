@@ -15,6 +15,9 @@ export type ChannelId = z.infer<typeof ChannelIdSchema>;
 export const HealthStateSchema = z.enum(["ok", "warn", "error"]);
 export type HealthState = z.infer<typeof HealthStateSchema>;
 
+export const AccessModeSchema = z.enum(["loopback", "tailscale"]);
+export type AccessMode = z.infer<typeof AccessModeSchema>;
+
 export const CloudProviderIdSchema = z.enum([
   "openai",
   "anthropic",
@@ -55,6 +58,72 @@ export type SignalRegistrationState = z.infer<typeof SignalRegistrationStateSche
 
 export const SignalDaemonStateSchema = z.enum(["stopped", "starting", "running", "error"]);
 export type SignalDaemonState = z.infer<typeof SignalDaemonStateSchema>;
+
+export const PasskeyEnrollmentStateSchema = z.enum(["notStarted", "bootstrapPending", "ready", "complete"]);
+export type PasskeyEnrollmentState = z.infer<typeof PasskeyEnrollmentStateSchema>;
+
+export const CanonicalOriginSchema = z.object({
+  accessMode: AccessModeSchema,
+  origin: z.string().url(),
+  rpId: z.string(),
+  hostname: z.string(),
+  source: z.enum(["tailscaleServe", "manual"]),
+  updatedAt: z.string()
+});
+export type CanonicalOrigin = z.infer<typeof CanonicalOriginSchema>;
+
+export const TailscaleStatusSchema = z.object({
+  installed: z.boolean(),
+  running: z.boolean(),
+  authenticated: z.boolean(),
+  health: HealthStateSchema,
+  healthMessage: z.string(),
+  version: z.string().nullable(),
+  deviceName: z.string().nullable(),
+  tailnetName: z.string().nullable(),
+  dnsName: z.string().nullable(),
+  magicDnsEnabled: z.boolean(),
+  httpsEnabled: z.boolean(),
+  serveCommand: z.string().nullable(),
+  canonicalUrl: z.string().url().nullable(),
+  lastCheckedAt: z.string().nullable()
+});
+export type TailscaleStatus = z.infer<typeof TailscaleStatusSchema>;
+
+export const ServeStatusSchema = z.object({
+  enabled: z.boolean(),
+  health: HealthStateSchema,
+  healthMessage: z.string(),
+  source: z.enum(["tailscale", "none"]),
+  url: z.string().url().nullable(),
+  target: z.string().nullable(),
+  lastCheckedAt: z.string().nullable()
+});
+export type ServeStatus = z.infer<typeof ServeStatusSchema>;
+
+export const BootstrapStateSchema = z.object({
+  ownerExists: z.boolean(),
+  bootstrapRequired: z.boolean(),
+  enrollmentState: PasskeyEnrollmentStateSchema,
+  accessMode: AccessModeSchema,
+  canonicalOrigin: CanonicalOriginSchema.nullable(),
+  tailscaleStatus: TailscaleStatusSchema,
+  serveStatus: ServeStatusSchema,
+  bootstrapTokenIssuedAt: z.string().nullable(),
+  bootstrapTokenExpiresAt: z.string().nullable(),
+  bootstrapUrl: z.string().url().nullable(),
+  localhostOnlyMessage: z.string()
+});
+export type BootstrapState = z.infer<typeof BootstrapStateSchema>;
+
+export const StartupDiagnosticSchema = z.object({
+  id: z.enum(["tailscale", "openclaw", "ollama", "llamaCpp", "signal", "cloudProviders"]),
+  health: HealthStateSchema,
+  message: z.string(),
+  blocking: z.boolean(),
+  action: z.string().nullable()
+});
+export type StartupDiagnostic = z.infer<typeof StartupDiagnosticSchema>;
 
 export const RuntimeStatusSchema = z.object({
   id: RuntimeIdSchema,
@@ -222,6 +291,11 @@ export type SetupState = z.infer<typeof SetupStateSchema>;
 
 export const DashboardStateSchema = z.object({
   setup: SetupStateSchema,
+  canonicalUrl: z.string().url().nullable(),
+  tailscaleStatus: TailscaleStatusSchema,
+  serveStatus: ServeStatusSchema,
+  bootstrapRequired: z.boolean(),
+  startupDiagnostics: z.array(StartupDiagnosticSchema),
   runtimes: z.array(RuntimeStatusSchema),
   providers: z.array(ProviderProfileSchema),
   cloudProviders: z.array(CloudProviderSummarySchema),
@@ -250,6 +324,12 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("chat.history"),
+    payload: z.object({
+      sessionId: z.string()
+    })
+  }),
+  z.object({
+    type: z.literal("chat.abort"),
     payload: z.object({
       sessionId: z.string()
     })

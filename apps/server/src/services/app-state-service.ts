@@ -3,8 +3,12 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 
 import {
+  AccessModeSchema,
+  CanonicalOriginSchema,
   SetupStateSchema,
+  type CanonicalOrigin,
   nowIso,
+  type AccessMode,
   type CloudProviderId,
   type SetupState,
   type SignalDaemonState,
@@ -20,6 +24,14 @@ export interface CloudProviderPreference {
 }
 
 export type CloudProviderPreferences = Record<CloudProviderId, CloudProviderPreference>;
+
+export interface AccessSettings {
+  mode: AccessMode;
+  canonicalOrigin: CanonicalOrigin | null;
+  bootstrapTokenHash: string | null;
+  bootstrapTokenIssuedAt: string | null;
+  bootstrapTokenExpiresAt: string | null;
+}
 
 export interface RuntimeSettings {
   selectedRuntime: "ollama" | "llamaCpp";
@@ -45,6 +57,14 @@ export interface RuntimeSettings {
   signalLastStartedAt: string | null;
   cloudProviders: CloudProviderPreferences;
 }
+
+const DEFAULT_ACCESS_SETTINGS: AccessSettings = {
+  mode: "loopback",
+  canonicalOrigin: null,
+  bootstrapTokenHash: null,
+  bootstrapTokenIssuedAt: null,
+  bootstrapTokenExpiresAt: null
+};
 
 export const DEFAULT_CLOUD_PROVIDER_PREFERENCES: CloudProviderPreferences = {
   openai: {
@@ -132,6 +152,14 @@ function mergeRuntimeSettings(update: Partial<RuntimeSettings>, current: Runtime
   };
 }
 
+function mergeAccessSettings(update: Partial<AccessSettings>, current: AccessSettings): AccessSettings {
+  return {
+    ...current,
+    ...update,
+    canonicalOrigin: update.canonicalOrigin === undefined ? current.canonicalOrigin : update.canonicalOrigin
+  };
+}
+
 export class AppStateService {
   async getJsonSetting<T>(key: string, fallback: T): Promise<T> {
     const row = await db.query.appSettings.findFirst({
@@ -164,6 +192,25 @@ export class AppStateService {
   async getRuntimeSettings(): Promise<RuntimeSettings> {
     const current = await this.getJsonSetting("runtimeSettings", DEFAULT_RUNTIME_SETTINGS);
     return mergeRuntimeSettings(current, DEFAULT_RUNTIME_SETTINGS);
+  }
+
+  async getAccessSettings(): Promise<AccessSettings> {
+    const current = await this.getJsonSetting("accessSettings", DEFAULT_ACCESS_SETTINGS);
+    return mergeAccessSettings(
+      {
+        ...current,
+        canonicalOrigin: current.canonicalOrigin ? CanonicalOriginSchema.parse(current.canonicalOrigin) : null,
+        mode: AccessModeSchema.parse(current.mode ?? DEFAULT_ACCESS_SETTINGS.mode)
+      },
+      DEFAULT_ACCESS_SETTINGS
+    );
+  }
+
+  async updateAccessSettings(update: Partial<AccessSettings>): Promise<AccessSettings> {
+    const current = await this.getAccessSettings();
+    const next = mergeAccessSettings(update, current);
+    await this.setJsonSetting("accessSettings", next);
+    return next;
   }
 
   async updateRuntimeSettings(update: Partial<RuntimeSettings>): Promise<RuntimeSettings> {
