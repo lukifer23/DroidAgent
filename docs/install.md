@@ -6,6 +6,7 @@
 - Homebrew
 - Node.js 22+
 - pnpm 10+
+- `openjdk` is required when you want to use `signal-cli`
 
 ## Bootstrap
 
@@ -28,7 +29,11 @@ The bootstrap script:
 3. Install/start `Ollama` or `llama.cpp`.
 4. Pull/select a model.
 5. Let DroidAgent seed the dedicated `openclaw --profile droidagent` configuration.
-6. Optionally install/configure `signal-cli`.
+6. Optionally store cloud provider keys in Keychain and activate a cloud model.
+7. Optionally install/configure `signal-cli`, then either:
+   - register a dedicated number and verify the code
+   - link an existing Signal account by scanning the generated QR code
+8. Optionally install and start the LaunchAgent for background startup.
 
 ## Homebrew runtime commands
 
@@ -38,6 +43,5 @@ brew services start ollama
 
 brew install llama.cpp
 
-brew install signal-cli
+brew install openjdk signal-cli
 ```
-

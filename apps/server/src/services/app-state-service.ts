@@ -1,33 +1,105 @@
 import { randomUUID } from "node:crypto";
 
-import { and, eq, inArray } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
-import { DashboardStateSchema, SetupStateSchema, nowIso, type SetupState } from "@droidagent/shared";
+import {
+  SetupStateSchema,
+  nowIso,
+  type CloudProviderId,
+  type SetupState,
+  type SignalDaemonState,
+  type SignalRegistrationMode,
+  type SignalRegistrationState
+} from "@droidagent/shared";
 
 import { db, schema } from "../db/index.js";
 
-interface RuntimeSettings {
+export interface CloudProviderPreference {
+  defaultModel: string;
+  lastUpdatedAt: string | null;
+}
+
+export type CloudProviderPreferences = Record<CloudProviderId, CloudProviderPreference>;
+
+export interface RuntimeSettings {
   selectedRuntime: "ollama" | "llamaCpp";
+  activeProviderId: string;
   ollamaModel: string;
   llamaCppModel: string;
   llamaCppContextWindow: number;
   workspaceRoot: string | null;
-  signalPhoneNumber: string | null;
-  signalCliPath: string | null;
   remoteAccessEnabled: boolean;
   launchAgentInstalled: boolean;
+  signalCliPath: string | null;
+  signalJavaHome: string | null;
+  signalPhoneNumber: string | null;
+  signalAccountId: string | null;
+  signalDeviceName: string | null;
+  signalRegistrationMode: SignalRegistrationMode;
+  signalRegistrationState: SignalRegistrationState;
+  signalLinkUri: string | null;
+  signalDaemonUrl: string | null;
+  signalDaemonPid: number | null;
+  signalDaemonState: SignalDaemonState;
+  signalLastError: string | null;
+  signalLastStartedAt: string | null;
+  cloudProviders: CloudProviderPreferences;
 }
+
+export const DEFAULT_CLOUD_PROVIDER_PREFERENCES: CloudProviderPreferences = {
+  openai: {
+    defaultModel: "openai/gpt-5.4",
+    lastUpdatedAt: null
+  },
+  anthropic: {
+    defaultModel: "anthropic/claude-sonnet-4-5",
+    lastUpdatedAt: null
+  },
+  openrouter: {
+    defaultModel: "openrouter/anthropic/claude-sonnet-4-5",
+    lastUpdatedAt: null
+  },
+  gemini: {
+    defaultModel: "gemini/gemini-2.5-pro",
+    lastUpdatedAt: null
+  },
+  groq: {
+    defaultModel: "groq/llama-3.3-70b-versatile",
+    lastUpdatedAt: null
+  },
+  together: {
+    defaultModel: "together/deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
+    lastUpdatedAt: null
+  },
+  xai: {
+    defaultModel: "xai/grok-4-fast",
+    lastUpdatedAt: null
+  }
+};
 
 const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   selectedRuntime: "ollama",
+  activeProviderId: "ollama-default",
   ollamaModel: "gpt-oss:20b",
   llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
   llamaCppContextWindow: 8192,
   workspaceRoot: null,
-  signalPhoneNumber: null,
-  signalCliPath: null,
   remoteAccessEnabled: false,
-  launchAgentInstalled: false
+  launchAgentInstalled: false,
+  signalCliPath: null,
+  signalJavaHome: null,
+  signalPhoneNumber: null,
+  signalAccountId: null,
+  signalDeviceName: null,
+  signalRegistrationMode: "none",
+  signalRegistrationState: "unconfigured",
+  signalLinkUri: null,
+  signalDaemonUrl: null,
+  signalDaemonPid: null,
+  signalDaemonState: "stopped",
+  signalLastError: null,
+  signalLastStartedAt: null,
+  cloudProviders: DEFAULT_CLOUD_PROVIDER_PREFERENCES
 };
 
 const DEFAULT_SETUP_STATE: SetupState = {
@@ -47,6 +119,17 @@ function deserializeJson<T>(raw: string, fallback: T): T {
   } catch {
     return fallback;
   }
+}
+
+function mergeRuntimeSettings(update: Partial<RuntimeSettings>, current: RuntimeSettings): RuntimeSettings {
+  return {
+    ...current,
+    ...update,
+    cloudProviders: {
+      ...current.cloudProviders,
+      ...(update.cloudProviders ?? {})
+    }
+  };
 }
 
 export class AppStateService {
@@ -79,14 +162,31 @@ export class AppStateService {
   }
 
   async getRuntimeSettings(): Promise<RuntimeSettings> {
-    return await this.getJsonSetting("runtimeSettings", DEFAULT_RUNTIME_SETTINGS);
+    const current = await this.getJsonSetting("runtimeSettings", DEFAULT_RUNTIME_SETTINGS);
+    return mergeRuntimeSettings(current, DEFAULT_RUNTIME_SETTINGS);
   }
 
   async updateRuntimeSettings(update: Partial<RuntimeSettings>): Promise<RuntimeSettings> {
     const current = await this.getRuntimeSettings();
-    const next = { ...current, ...update };
+    const next = mergeRuntimeSettings(update, current);
     await this.setJsonSetting("runtimeSettings", next);
     return next;
+  }
+
+  async updateCloudProviderPreference(
+    providerId: CloudProviderId,
+    update: Partial<CloudProviderPreference>
+  ): Promise<RuntimeSettings> {
+    const current = await this.getRuntimeSettings();
+    return await this.updateRuntimeSettings({
+      cloudProviders: {
+        ...current.cloudProviders,
+        [providerId]: {
+          ...current.cloudProviders[providerId],
+          ...update
+        }
+      }
+    });
   }
 
   async getSetupState(): Promise<SetupState> {

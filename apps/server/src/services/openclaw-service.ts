@@ -19,6 +19,7 @@ import {
 import { OPENCLAW_GATEWAY_PORT, OPENCLAW_GATEWAY_URL, OPENCLAW_PROFILE, baseEnv, paths, resolveOpenClawBin } from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
 import { appStateService } from "./app-state-service.js";
+import { keychainService } from "./keychain-service.js";
 
 function stringifyConfigValue(value: unknown): string {
   return JSON.stringify(value);
@@ -58,7 +59,7 @@ export class OpenClawService {
   private async execOpenClaw(args: string[], allowFailure = false): Promise<string> {
     try {
       const result = await runCommand(this.openclawBin, this.profileArgs(args), {
-        env: { OPENCLAW_GATEWAY_TOKEN: await this.ensureGatewayToken() }
+        env: await this.openclawEnv()
       });
       return result.stdout;
     } catch (error) {
@@ -91,6 +92,15 @@ export class OpenClawService {
     }
 
     await this.execOpenClaw(["config", "set", "gateway.auth.token", stringifyConfigValue(await this.ensureGatewayToken()), "--strict-json"]);
+  }
+
+  private async openclawEnv(): Promise<NodeJS.ProcessEnv> {
+    return {
+      ...baseEnv(),
+      ...(await keychainService.getProcessEnv()),
+      OPENCLAW_GATEWAY_TOKEN: await this.ensureGatewayToken(),
+      OLLAMA_API_KEY: "ollama-local"
+    };
   }
 
   async status() {
@@ -184,10 +194,7 @@ export class OpenClawService {
         String(OPENCLAW_GATEWAY_PORT)
       ]),
       {
-        env: {
-          ...baseEnv(),
-          OLLAMA_API_KEY: "ollama-local"
-        },
+        env: await this.openclawEnv(),
         stdio: ["ignore", "pipe", "pipe"]
       }
     );
@@ -359,26 +366,43 @@ export class OpenClawService {
         ChannelStatusSchema.parse({
           id: "signal",
           label: "Signal",
-          enabled: signalRows.some((row) => row.enabled !== false),
-          configured: signalRows.length > 0,
-          health: signalRows.some((row) => row.ok === false) ? "warn" : "ok",
-          healthMessage: signalRows.length > 0 ? "Signal channel detected in OpenClaw." : "Signal is not configured yet.",
-          metadata: {}
+          enabled: signalRows.some((row) => row.enabled !== false) || runtimeSettings.signalRegistrationState === "registered",
+          configured: signalRows.length > 0 || Boolean(runtimeSettings.signalAccountId),
+          health:
+            runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
+              ? "ok"
+              : runtimeSettings.signalLastError
+                ? "warn"
+                : signalRows.some((row) => row.ok === false)
+                  ? "warn"
+                  : "warn",
+          healthMessage:
+            runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
+              ? "Signal is linked through the local signal-cli HTTP daemon."
+              : runtimeSettings.signalLastError ??
+                (signalRows.length > 0 ? "Signal channel detected in OpenClaw." : "Signal is not configured yet."),
+          metadata: {
+            daemonRunning: runtimeSettings.signalDaemonState === "running",
+            hasAccount: Boolean(runtimeSettings.signalAccountId)
+          }
         })
       );
     } catch {
       statuses.push(
         ChannelStatusSchema.parse({
-          id: "signal",
-          label: "Signal",
-          enabled: false,
-          configured: false,
-          health: "warn",
-          healthMessage: "Signal is not configured yet.",
-          metadata: {}
-        })
-      );
-    }
+        id: "signal",
+        label: "Signal",
+        enabled: runtimeSettings.signalRegistrationState === "registered",
+        configured: Boolean(runtimeSettings.signalAccountId),
+        health: "warn",
+        healthMessage: runtimeSettings.signalLastError ?? "Signal is not configured yet.",
+        metadata: {
+          daemonRunning: runtimeSettings.signalDaemonState === "running",
+          hasAccount: Boolean(runtimeSettings.signalAccountId)
+        }
+      })
+    );
+  }
 
     let pairingPending = 0;
     let approvedPeers: string[] = [];
@@ -400,18 +424,28 @@ export class OpenClawService {
         signal: {
           installed: Boolean(runtimeSettings.signalCliPath),
           binaryPath: runtimeSettings.signalCliPath,
+          javaHome: runtimeSettings.signalJavaHome,
+          accountId: runtimeSettings.signalAccountId,
           phoneNumber: runtimeSettings.signalPhoneNumber,
+          deviceName: runtimeSettings.signalDeviceName,
+          registrationMode: runtimeSettings.signalRegistrationMode,
+          registrationState: runtimeSettings.signalRegistrationState,
+          daemonState: runtimeSettings.signalDaemonState,
+          daemonUrl: runtimeSettings.signalDaemonUrl,
           dmPolicy: "pairing",
           allowGroups: false,
           pairingPending,
-          approvedPeers
+          approvedPeers,
+          linkUri: runtimeSettings.signalLinkUri,
+          lastError: runtimeSettings.signalLastError,
+          lastStartedAt: runtimeSettings.signalLastStartedAt
         }
       })
     };
   }
 
-  async configureSignal(params: { cliPath: string; phoneNumber: string }): Promise<void> {
-    await this.execOpenClaw([
+  async configureSignal(params: { cliPath: string; accountId: string; httpUrl?: string }): Promise<void> {
+    const args = [
       "channels",
       "add",
       "--channel",
@@ -419,12 +453,31 @@ export class OpenClawService {
       "--cli-path",
       params.cliPath,
       "--signal-number",
-      params.phoneNumber
+      params.accountId
+    ];
+
+    if (params.httpUrl) {
+      args.push("--http-url", params.httpUrl);
+    }
+
+    await this.execOpenClaw(args);
+    await this.execOpenClaw([
+      "config",
+      "set",
+      "channels.signal.autoStart",
+      stringifyConfigValue(!params.httpUrl),
+      "--strict-json"
     ]);
     await appStateService.updateRuntimeSettings({
       signalCliPath: params.cliPath,
-      signalPhoneNumber: params.phoneNumber
+      signalAccountId: params.accountId,
+      signalPhoneNumber: params.accountId.startsWith("+") ? params.accountId : null,
+      signalDaemonUrl: params.httpUrl ?? null
     });
+  }
+
+  async removeSignalChannel(): Promise<void> {
+    await this.execOpenClaw(["channels", "remove", "--channel", "signal", "--delete"], true);
   }
 
   async approveSignalPairing(code: string): Promise<void> {
@@ -455,7 +508,12 @@ export class OpenClawService {
 
   async selectOllamaModel(modelId: string): Promise<void> {
     await this.ensureConfigured();
-    await this.execOpenClaw(["models", "set", `ollama/${modelId}`]);
+    await this.selectPrimaryModel(`ollama/${modelId}`);
+  }
+
+  async selectPrimaryModel(modelId: string): Promise<void> {
+    await this.ensureConfigured();
+    await this.execOpenClaw(["models", "set", modelId]);
   }
 }
 

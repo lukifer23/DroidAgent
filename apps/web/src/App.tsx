@@ -25,6 +25,7 @@ import {
 import type {
   ChatMessage,
   ChannelStatus,
+  CloudProviderSummary,
   DashboardState,
   JobRecord,
   ProviderProfile,
@@ -64,13 +65,21 @@ export function App() {
   const [chatInput, setChatInput] = useState("");
   const [directoryPath, setDirectoryPath] = useState(".");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [workspaceInput, setWorkspaceInput] = useState("~/Projects");
+  const [workspaceInput, setWorkspaceInput] = useState(".");
   const [commandInput, setCommandInput] = useState("pwd");
   const [jobCwdInput, setJobCwdInput] = useState(".");
   const [signalPhone, setSignalPhone] = useState("");
+  const [signalCaptcha, setSignalCaptcha] = useState("");
+  const [signalVerificationCode, setSignalVerificationCode] = useState("");
+  const [signalVerificationPin, setSignalVerificationPin] = useState("");
+  const [signalDeviceName, setSignalDeviceName] = useState("DroidAgent");
   const [pairingCode, setPairingCode] = useState("");
   const [setupModel, setSetupModel] = useState("gpt-oss:20b");
   const [llamaModel, setLlamaModel] = useState("gemma-3-1b-it");
+  const [providerApiKeys, setProviderApiKeys] = useState<Record<string, string>>({});
+  const [providerModels, setProviderModels] = useState<Record<string, string>>({});
+  const [notice, setNotice] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const deferredMessages = useDeferredValue(messages);
 
   const authQuery = useQuery({
@@ -96,7 +105,42 @@ export function App() {
     enabled: Boolean(authQuery.data?.user && selectedFile)
   });
 
-  const sessions = dashboardQuery.data?.sessions ?? [];
+  const dashboard = dashboardQuery.data;
+  const sessions = dashboard?.sessions ?? [];
+  const signal = dashboard?.channelConfig.signal;
+
+  const setProviderKey = useEffectEvent((providerId: string, value: string) => {
+    setProviderApiKeys((current) => ({
+      ...current,
+      [providerId]: value
+    }));
+  });
+
+  const setProviderModel = useEffectEvent((providerId: string, value: string) => {
+    setProviderModels((current) => ({
+      ...current,
+      [providerId]: value
+    }));
+  });
+
+  const refreshDashboard = useEffectEvent(async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+      queryClient.invalidateQueries({ queryKey: ["files", directoryPath] })
+    ]);
+  });
+
+  const runAction = useEffectEvent(async (work: () => Promise<void>, successMessage?: string) => {
+    setErrorMessage(null);
+    try {
+      await work();
+      if (successMessage) {
+        setNotice(successMessage);
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "DroidAgent action failed.");
+    }
+  });
 
   const loadSession = useEffectEvent(async (sessionId: string) => {
     const sessionMessages = await api<ChatMessage[]>(`/api/sessions/${encodeURIComponent(sessionId)}/messages`);
@@ -124,7 +168,7 @@ export function App() {
         return;
       }
       if (payload.type === "error") {
-        console.error(payload.payload.message);
+        setErrorMessage(payload.payload.message);
       }
     };
     return () => socket.close();
@@ -141,18 +185,25 @@ export function App() {
     void loadSession(active.id);
   }, [sessions, selectedSessionId, loadSession]);
 
+  useEffect(() => {
+    if (!dashboard?.setup.workspaceRoot) {
+      return;
+    }
+    setWorkspaceInput(dashboard.setup.workspaceRoot);
+  }, [dashboard?.setup.workspaceRoot]);
+
   const summaryCards = useMemo(() => {
-    const setup = dashboardQuery.data?.setup;
-    const runtimeCount =
-      dashboardQuery.data?.runtimes.filter((runtime: RuntimeStatus) => runtime.state === "running").length ?? 0;
+    const setup = dashboard?.setup;
+    const runtimeCount = dashboard?.runtimes.filter((runtime: RuntimeStatus) => runtime.state === "running").length ?? 0;
     return [
       { label: "Setup", value: `${setup?.completedSteps.length ?? 0}/11 steps` },
       { label: "Live Runtimes", value: String(runtimeCount) },
-      { label: "Sessions", value: String(dashboardQuery.data?.sessions.length ?? 0) }
+      { label: "LaunchAgent", value: dashboard?.launchAgent.running ? "Running" : dashboard?.launchAgent.installed ? "Loaded" : "Off" }
     ];
-  }, [dashboardQuery.data]);
+  }, [dashboard]);
 
   async function handleRegister() {
+    setErrorMessage(null);
     const options = await postJson<PublicKeyCredentialCreationOptionsJSON>("/api/auth/register/options", {});
     const response = await startRegistration({ optionsJSON: options as BrowserRegistrationOptions });
     await postJson("/api/auth/register/verify", response);
@@ -161,6 +212,7 @@ export function App() {
   }
 
   async function handleLogin() {
+    setErrorMessage(null);
     const options = await postJson<PublicKeyCredentialRequestOptionsJSON>("/api/auth/login/options", {});
     const response = await startAuthentication({ optionsJSON: options as BrowserAuthenticationOptions });
     await postJson("/api/auth/login/verify", response);
@@ -180,11 +232,6 @@ export function App() {
     await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
   }
 
-  async function refreshDashboard() {
-    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-    await queryClient.invalidateQueries({ queryKey: ["files", directoryPath] });
-  }
-
   if (authQuery.isLoading) {
     return <main className="app-shell loading">Loading DroidAgent…</main>;
   }
@@ -196,9 +243,10 @@ export function App() {
           <div className="hero-kicker">DroidAgent</div>
           <h1>Mobile-first control for OpenClaw on your own Mac.</h1>
           <p>
-            Passkey login, Ollama-first local setup, advanced llama.cpp mode, and optional Signal ingress through
-            OpenClaw.
+            Passkey login, Ollama-first local setup, advanced llama.cpp mode, Keychain-backed cloud providers, and
+            optional Signal ingress through a local `signal-cli` daemon.
           </p>
+          {errorMessage ? <p className="status-banner error">{errorMessage}</p> : null}
           <div className="hero-actions">
             {authQuery.data?.hasUser ? (
               <button onClick={() => void handleLogin()}>Sign in with Passkey</button>
@@ -229,6 +277,9 @@ export function App() {
         </button>
       </header>
 
+      {notice ? <section className="status-banner success">{notice}</section> : null}
+      {errorMessage ? <section className="status-banner error">{errorMessage}</section> : null}
+
       <section className="summary-grid">
         {summaryCards.map((card) => (
           <article key={card.label} className="summary-card">
@@ -238,7 +289,7 @@ export function App() {
         ))}
       </section>
 
-      {dashboardQuery.data && dashboardQuery.data.setup.completedSteps.length < 6 ? (
+      {dashboard && dashboard.setup.completedSteps.length < 6 ? (
         <section className="setup-panel">
           <div className="panel-heading">
             <div>
@@ -252,12 +303,14 @@ export function App() {
               <p>Choose the directory DroidAgent can browse and run jobs inside.</p>
               <input value={workspaceInput} onChange={(event) => setWorkspaceInput(event.target.value)} />
               <button
-                onClick={async () => {
-                  await postJson("/api/setup/workspace", {
-                    workspaceRoot: workspaceInput.replace(/^~(?=\/)/, (window as unknown as { HOME?: string }).HOME ?? "~")
-                  });
-                  await refreshDashboard();
-                }}
+                onClick={() =>
+                  void runAction(async () => {
+                    await postJson("/api/setup/workspace", {
+                      workspaceRoot: workspaceInput
+                    });
+                    await refreshDashboard();
+                  }, "Workspace updated.")
+                }
               >
                 Save Workspace
               </button>
@@ -268,19 +321,23 @@ export function App() {
               <p>Ollama is the default path. llama.cpp stays available as the advanced route.</p>
               <div className="button-row">
                 <button
-                  onClick={async () => {
-                    await postJson("/api/setup/runtime", { runtimeId: "ollama" });
-                    await refreshDashboard();
-                  }}
+                  onClick={() =>
+                    void runAction(async () => {
+                      await postJson("/api/setup/runtime", { runtimeId: "ollama" });
+                      await refreshDashboard();
+                    }, "Ollama installed and started.")
+                  }
                 >
                   Install + Start Ollama
                 </button>
                 <button
                   className="secondary"
-                  onClick={async () => {
-                    await postJson("/api/setup/runtime", { runtimeId: "llamaCpp" });
-                    await refreshDashboard();
-                  }}
+                  onClick={() =>
+                    void runAction(async () => {
+                      await postJson("/api/setup/runtime", { runtimeId: "llamaCpp" });
+                      await refreshDashboard();
+                    }, "llama.cpp installed.")
+                  }
                 >
                   Install llama.cpp
                 </button>
@@ -296,13 +353,15 @@ export function App() {
                   <input value={setupModel} onChange={(event) => setSetupModel(event.target.value)} />
                 </label>
                 <button
-                  onClick={async () => {
-                    await postJson("/api/setup/model", {
-                      runtimeId: "ollama",
-                      modelId: setupModel
-                    });
-                    await refreshDashboard();
-                  }}
+                  onClick={() =>
+                    void runAction(async () => {
+                      await postJson("/api/setup/model", {
+                        runtimeId: "ollama",
+                        modelId: setupModel
+                      });
+                      await refreshDashboard();
+                    }, "Ollama model pulled.")
+                  }
                 >
                   Pull Ollama Model
                 </button>
@@ -317,12 +376,14 @@ export function App() {
                 </label>
                 <button
                   className="secondary"
-                  onClick={async () => {
-                    await postJson("/api/runtime/llamaCpp/models", {
-                      modelId: llamaModel
-                    });
-                    await refreshDashboard();
-                  }}
+                  onClick={() =>
+                    void runAction(async () => {
+                      await postJson("/api/runtime/llamaCpp/models", {
+                        modelId: llamaModel
+                      });
+                      await refreshDashboard();
+                    }, "llama.cpp provider updated.")
+                  }
                 >
                   Select llama.cpp Preset
                 </button>
@@ -360,7 +421,7 @@ export function App() {
                 className="composer"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void handleSendChat();
+                  void runAction(handleSendChat);
                 }}
               >
                 <textarea
@@ -417,19 +478,21 @@ export function App() {
                   <input value={jobCwdInput} onChange={(event) => setJobCwdInput(event.target.value)} />
                 </label>
                 <button
-                  onClick={async () => {
-                    await postJson("/api/jobs", {
-                      command: commandInput,
-                      cwd: jobCwdInput
-                    });
-                    await refreshDashboard();
-                  }}
+                  onClick={() =>
+                    void runAction(async () => {
+                      await postJson("/api/jobs", {
+                        command: commandInput,
+                        cwd: jobCwdInput
+                      });
+                      await refreshDashboard();
+                    }, "Job started.")
+                  }
                 >
                   Run
                 </button>
               </div>
               <div className="stack-list">
-                {(dashboardQuery.data?.jobs ?? []).map((job: JobRecord) => (
+                {(dashboard?.jobs ?? []).map((job: JobRecord) => (
                   <article key={job.id} className="panel-card compact">
                     <strong>{job.command}</strong>
                     <span>{job.status}</span>
@@ -442,44 +505,50 @@ export function App() {
 
           {tab === "models" ? (
             <section className="stack-list">
-              {(dashboardQuery.data?.runtimes ?? []).map((runtime: RuntimeStatus) => (
+              {(dashboard?.runtimes ?? []).map((runtime: RuntimeStatus) => (
                 <article key={runtime.id} className="panel-card">
                   <h3>{runtime.label}</h3>
                   <p>{runtime.healthMessage}</p>
                   <div className="button-row">
                     {!runtime.installed && runtime.id !== "openclaw" ? (
                       <button
-                        onClick={async () => {
-                          await postJson(`/api/runtime/${runtime.id}/install`, {});
-                          await refreshDashboard();
-                        }}
+                        onClick={() =>
+                          void runAction(async () => {
+                            await postJson(`/api/runtime/${runtime.id}/install`, {});
+                            await refreshDashboard();
+                          }, `${runtime.label} installed.`)
+                        }
                       >
                         Install
                       </button>
                     ) : null}
                     <button
                       className="secondary"
-                      onClick={async () => {
-                        await postJson(`/api/runtime/${runtime.id}/start`, {});
-                        await refreshDashboard();
-                      }}
+                      onClick={() =>
+                        void runAction(async () => {
+                          await postJson(`/api/runtime/${runtime.id}/start`, {});
+                          await refreshDashboard();
+                        }, `${runtime.label} start requested.`)
+                      }
                     >
                       Start
                     </button>
                     <button
                       className="secondary"
-                      onClick={async () => {
-                        await postJson(`/api/runtime/${runtime.id}/stop`, {});
-                        await refreshDashboard();
-                      }}
+                      onClick={() =>
+                        void runAction(async () => {
+                          await postJson(`/api/runtime/${runtime.id}/stop`, {});
+                          await refreshDashboard();
+                        }, `${runtime.label} stop requested.`)
+                      }
                     >
                       Stop
                     </button>
                   </div>
                 </article>
               ))}
-              {(dashboardQuery.data?.providers ?? []).map((provider: ProviderProfile) => (
-                <article key={provider.id} className="panel-card compact">
+              {(dashboard?.providers ?? []).map((provider: ProviderProfile) => (
+                <article key={provider.id} className={classNames("panel-card compact", provider.enabled && "active-card")}>
                   <strong>{provider.label}</strong>
                   <span>{provider.model}</span>
                   <small>{provider.healthMessage}</small>
@@ -490,42 +559,201 @@ export function App() {
 
           {tab === "channels" ? (
             <section className="stack-list">
-              {(dashboardQuery.data?.channels ?? []).map((channel: ChannelStatus) => (
+              {(dashboard?.channels ?? []).map((channel: ChannelStatus) => (
                 <article key={channel.id} className="panel-card">
                   <h3>{channel.label}</h3>
                   <p>{channel.healthMessage}</p>
                 </article>
               ))}
+
               <article className="panel-card">
-                <h3>Signal Setup</h3>
-                <p>Installs `signal-cli` if needed, then registers the Signal channel in OpenClaw.</p>
-                <input value={signalPhone} onChange={(event) => setSignalPhone(event.target.value)} placeholder="+15555550123" />
-                <button
-                  onClick={async () => {
-                    await postJson("/api/setup/signal", {
-                      phoneNumber: signalPhone,
-                      autoInstall: true
-                    });
-                    await refreshDashboard();
-                  }}
-                >
-                  Install + Configure Signal
-                </button>
+                <h3>Signal Runtime</h3>
+                <p>
+                  Install `signal-cli`, then either register a dedicated number or link an existing Signal account. The
+                  web app remains primary; Signal is a paired owner ingress.
+                </p>
+                <div className="button-row">
+                  <button
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/install", {});
+                        await refreshDashboard();
+                      }, "signal-cli installed or repaired.")
+                    }
+                  >
+                    Install or Repair signal-cli
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/daemon/start", {});
+                        await refreshDashboard();
+                      }, "Signal daemon started.")
+                    }
+                  >
+                    Start Daemon
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/daemon/stop", {});
+                        await refreshDashboard();
+                      }, "Signal daemon stopped.")
+                    }
+                  >
+                    Stop Daemon
+                  </button>
+                </div>
+                <pre>{JSON.stringify(signal ?? {}, null, 2)}</pre>
+              </article>
+
+              <article className="panel-card">
+                <h3>Register Dedicated Number</h3>
+                <label>
+                  Phone number
+                  <input value={signalPhone} onChange={(event) => setSignalPhone(event.target.value)} placeholder="+15555550123" />
+                </label>
+                <label>
+                  Captcha token
+                  <input
+                    value={signalCaptcha}
+                    onChange={(event) => setSignalCaptcha(event.target.value)}
+                    placeholder="Optional, only when Signal requests one"
+                  />
+                </label>
+                <div className="button-row">
+                  <button
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/register/start", {
+                          phoneNumber: signalPhone,
+                          captcha: signalCaptcha || undefined,
+                          autoInstall: true
+                        });
+                        await refreshDashboard();
+                      }, "Signal registration started. Enter the SMS or voice code next.")
+                    }
+                  >
+                    Register via SMS
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/register/start", {
+                          phoneNumber: signalPhone,
+                          useVoice: true,
+                          captcha: signalCaptcha || undefined,
+                          autoInstall: true
+                        });
+                        await refreshDashboard();
+                      }, "Voice verification requested.")
+                    }
+                  >
+                    Use Voice Call
+                  </button>
+                </div>
                 <div className="field-stack">
                   <label>
-                    Pairing code
-                    <input value={pairingCode} onChange={(event) => setPairingCode(event.target.value)} />
+                    Verification code
+                    <input
+                      value={signalVerificationCode}
+                      onChange={(event) => setSignalVerificationCode(event.target.value)}
+                      placeholder="123-456"
+                    />
+                  </label>
+                  <label>
+                    Registration lock PIN
+                    <input
+                      value={signalVerificationPin}
+                      onChange={(event) => setSignalVerificationPin(event.target.value)}
+                      placeholder="Optional"
+                    />
                   </label>
                   <button
                     className="secondary"
-                    onClick={async () => {
-                      await postJson("/api/channels/signal/pairing/approve", {
-                        code: pairingCode
-                      });
-                      await refreshDashboard();
-                    }}
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/register/verify", {
+                          verificationCode: signalVerificationCode,
+                          pin: signalVerificationPin || undefined
+                        });
+                        await refreshDashboard();
+                      }, "Signal account verified.")
+                    }
+                  >
+                    Verify Registration
+                  </button>
+                </div>
+              </article>
+
+              <article className="panel-card">
+                <h3>Link Existing Signal App</h3>
+                <label>
+                  Device name
+                  <input value={signalDeviceName} onChange={(event) => setSignalDeviceName(event.target.value)} />
+                </label>
+                <div className="button-row">
+                  <button
+                    onClick={() =>
+                      void runAction(async () => {
+                        const response = await postJson<{ linkUri: string }>("/api/channels/signal/link/start", {
+                          deviceName: signalDeviceName
+                        });
+                        setNotice(`Scan the QR in your Signal app. Link URI: ${response.linkUri}`);
+                        await refreshDashboard();
+                      })
+                    }
+                  >
+                    Start Link Flow
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/link/cancel", {});
+                        await refreshDashboard();
+                      }, "Signal link flow cancelled.")
+                    }
+                  >
+                    Cancel Link
+                  </button>
+                </div>
+                {signal?.linkUri ? <pre>{signal.linkUri}</pre> : null}
+              </article>
+
+              <article className="panel-card">
+                <h3>OpenClaw Pairing</h3>
+                <p>Inbound Signal DMs stay on pairing mode by default. Approve the pairing code after the first contact.</p>
+                <input value={pairingCode} onChange={(event) => setPairingCode(event.target.value)} placeholder="Pairing code" />
+                <div className="button-row">
+                  <button
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/pairing/approve", {
+                          code: pairingCode
+                        });
+                        await refreshDashboard();
+                      }, "Signal pairing approved.")
+                    }
                   >
                     Approve Pairing
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/disconnect", {
+                          unregister: false,
+                          clearLocalData: true
+                        });
+                        await refreshDashboard();
+                      }, "Signal channel disconnected and local data cleared.")
+                    }
+                  >
+                    Disconnect Signal
                   </button>
                 </div>
               </article>
@@ -536,18 +764,146 @@ export function App() {
             <section className="stack-list">
               <article className="panel-card">
                 <h3>Workspace</h3>
-                <p>{dashboardQuery.data?.setup.workspaceRoot ?? "Not configured yet."}</p>
+                <p>{dashboard?.setup.workspaceRoot ?? "Not configured yet."}</p>
               </article>
+
+              <article className="panel-card">
+                <h3>LaunchAgent</h3>
+                <p>{dashboard?.launchAgent.healthMessage}</p>
+                <pre>{JSON.stringify(dashboard?.launchAgent ?? {}, null, 2)}</pre>
+                <div className="button-row">
+                  <button
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/service/launch-agent/install", {});
+                        await refreshDashboard();
+                      }, "LaunchAgent plist installed.")
+                    }
+                  >
+                    Install
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/service/launch-agent/start", {});
+                        await refreshDashboard();
+                      }, "LaunchAgent start requested.")
+                    }
+                  >
+                    Start
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/service/launch-agent/stop", {});
+                        await refreshDashboard();
+                      }, "LaunchAgent stop requested.")
+                    }
+                  >
+                    Stop
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/service/launch-agent/uninstall", {});
+                        await refreshDashboard();
+                      }, "LaunchAgent removed.")
+                    }
+                  >
+                    Uninstall
+                  </button>
+                </div>
+              </article>
+
+              <article className="panel-card">
+                <h3>Cloud Providers</h3>
+                <p>API keys are stored in the macOS login keychain. Only provider metadata stays inside DroidAgent.</p>
+                <div className="stack-list">
+                  {(dashboard?.cloudProviders ?? []).map((provider: CloudProviderSummary) => {
+                    const apiKey = providerApiKeys[provider.id] ?? "";
+                    const defaultModel = providerModels[provider.id] ?? provider.defaultModel ?? "";
+                    return (
+                      <article key={provider.id} className={classNames("panel-card compact", provider.active && "active-card")}>
+                        <strong>{provider.label}</strong>
+                        <small>{provider.healthMessage}</small>
+                        <label>
+                          API key
+                          <input
+                            type="password"
+                            value={apiKey}
+                            onChange={(event) => setProviderKey(provider.id, event.target.value)}
+                            placeholder={provider.stored ? "Stored in Keychain" : provider.envVar}
+                          />
+                        </label>
+                        <label>
+                          Default model
+                          <input
+                            value={defaultModel}
+                            onChange={(event) => setProviderModel(provider.id, event.target.value)}
+                            placeholder={provider.defaultModel ?? ""}
+                          />
+                        </label>
+                        <div className="button-row">
+                          <button
+                            onClick={() =>
+                              void runAction(async () => {
+                                await postJson("/api/providers/secrets", {
+                                  providerId: provider.id,
+                                  apiKey,
+                                  defaultModel
+                                });
+                                setProviderKey(provider.id, "");
+                                await refreshDashboard();
+                              }, `${provider.label} key stored in Keychain.`)
+                            }
+                          >
+                            Save Secret
+                          </button>
+                          <button
+                            className="secondary"
+                            onClick={() =>
+                              void runAction(async () => {
+                                await postJson(`/api/providers/${provider.id}/select`, {
+                                  modelId: defaultModel
+                                });
+                                await refreshDashboard();
+                              }, `${provider.label} activated.`)
+                            }
+                          >
+                            Activate
+                          </button>
+                          <button
+                            className="secondary"
+                            onClick={() =>
+                              void runAction(async () => {
+                                await api(`/api/providers/secrets/${provider.id}`, { method: "DELETE" });
+                                await refreshDashboard();
+                              }, `${provider.label} secret removed.`)
+                            }
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </article>
+
               <article className="panel-card">
                 <h3>Remote Access</h3>
                 <p>
-                  Private-network-first by design. Use Tailscale or SSH forwarding in front of the local DroidAgent
-                  server.
+                  Private-network-first by design. Keep the service on loopback by default, then use Tailscale or SSH
+                  forwarding in front of DroidAgent when you need remote access.
                 </p>
               </article>
+
               <article className="panel-card">
                 <h3>Current Setup State</h3>
-                <pre>{JSON.stringify(dashboardQuery.data?.setup ?? {}, null, 2)}</pre>
+                <pre>{JSON.stringify(dashboard?.setup ?? {}, null, 2)}</pre>
               </article>
             </section>
           ) : null}

@@ -8,6 +8,7 @@
 - first-party file and job operations are limited to the configured workspace root
 - first-party jobs reject `sudo`
 - Signal is optional and does not bypass local approval policy
+- LaunchAgent control is local-only and still gated behind passkey auth
 
 ## Approval model
 
@@ -17,5 +18,7 @@
 
 ## Secrets
 
-The current implementation keeps non-secret state in SQLite. Provider secret storage is intentionally separated from repo state and should be expanded to Keychain-backed storage for cloud providers before wider deployment.
-
+- non-secret state lives in SQLite under `~/.droidagent`
+- cloud provider API keys are stored as generic passwords in the macOS login Keychain
+- provider secrets are injected into OpenClaw child-process environments at runtime and are not written into repo files or SQLite
+- the OpenClaw profile `.env` only carries the local non-secret Ollama token placeholder used for loopback configuration

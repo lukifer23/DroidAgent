@@ -14,7 +14,9 @@ import {
 import { LLAMA_CPP_PORT, baseEnv } from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
 import { appStateService } from "./app-state-service.js";
+import { keychainService } from "./keychain-service.js";
 import { openclawService } from "./openclaw-service.js";
+import { signalService } from "./signal-service.js";
 
 interface LlamaModelPreset {
   id: string;
@@ -224,6 +226,7 @@ export class RuntimeService {
       await runCommand("ollama", ["pull", modelId]);
       await appStateService.updateRuntimeSettings({
         selectedRuntime: "ollama",
+        activeProviderId: "ollama-default",
         ollamaModel: modelId
       });
       await openclawService.selectOllamaModel(modelId);
@@ -238,6 +241,7 @@ export class RuntimeService {
       const preset = LLAMA_CPP_PRESETS.find((entry) => entry.id === modelId) ?? LLAMA_CPP_PRESETS[0]!;
       await appStateService.updateRuntimeSettings({
         selectedRuntime: "llamaCpp",
+        activeProviderId: "llamacpp-default",
         llamaCppModel: preset.hfRepo,
         llamaCppContextWindow: preset.contextWindow
       });
@@ -253,6 +257,7 @@ export class RuntimeService {
   async listProviderProfiles(): Promise<ProviderProfile[]> {
     const statuses = await this.getRuntimeStatuses();
     const settings = await appStateService.getRuntimeSettings();
+    const cloudProviders = await keychainService.listProviderSummaries();
 
     return [
       ProviderProfileSchema.parse({
@@ -261,7 +266,7 @@ export class RuntimeService {
         label: "Ollama",
         model: settings.ollamaModel,
         baseUrl: "http://127.0.0.1:11434",
-        enabled: settings.selectedRuntime === "ollama",
+        enabled: settings.activeProviderId === "ollama-default",
         toolSupport: true,
         health: statuses.find((status) => status.id === "ollama")?.health ?? "warn",
         healthMessage: statuses.find((status) => status.id === "ollama")?.healthMessage ?? "Unavailable"
@@ -272,11 +277,26 @@ export class RuntimeService {
         label: "llama.cpp",
         model: settings.llamaCppModel,
         baseUrl: `http://127.0.0.1:${LLAMA_CPP_PORT}/v1`,
-        enabled: settings.selectedRuntime === "llamaCpp",
+        enabled: settings.activeProviderId === "llamacpp-default",
         toolSupport: true,
         health: statuses.find((status) => status.id === "llamaCpp")?.health ?? "warn",
         healthMessage: statuses.find((status) => status.id === "llamaCpp")?.healthMessage ?? "Unavailable"
-      })
+      }),
+      ...cloudProviders
+        .filter((provider) => provider.stored && provider.defaultModel)
+        .map((provider) =>
+          ProviderProfileSchema.parse({
+            id: provider.id,
+            provider: "cloud",
+            label: provider.label,
+            model: provider.defaultModel ?? "",
+            baseUrl: null,
+            enabled: settings.activeProviderId === provider.id,
+            toolSupport: true,
+            health: provider.health,
+            healthMessage: provider.healthMessage
+          })
+        )
     ];
   }
 
@@ -298,13 +318,8 @@ export class RuntimeService {
   }
 
   async installSignalCli(): Promise<string> {
-    await runCommand("brew", ["install", "signal-cli"]);
-    const binaryPath = await this.binaryPath("signal-cli");
-    if (!binaryPath) {
-      throw new Error("signal-cli install completed, but the binary was not found on PATH.");
-    }
-    await appStateService.updateRuntimeSettings({ signalCliPath: binaryPath });
-    return binaryPath;
+    const runtime = await signalService.installCli();
+    return runtime.cliPath;
   }
 
   private async startLlamaCppServer(): Promise<void> {

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
@@ -11,9 +12,12 @@ import { authService } from "./services/auth-service.js";
 import { dashboardService } from "./services/dashboard-service.js";
 import { fileService } from "./services/file-service.js";
 import { jobService } from "./services/job-service.js";
+import { keychainService } from "./services/keychain-service.js";
+import { launchAgentService } from "./services/launch-agent-service.js";
 import { openclawService } from "./services/openclaw-service.js";
 import { runtimeService } from "./services/runtime-service.js";
 import { appStateService } from "./services/app-state-service.js";
+import { signalService } from "./services/signal-service.js";
 import { websocketHub } from "./websocket-hub.js";
 import { SERVER_PORT, ensureAppDirs, paths } from "./env.js";
 
@@ -26,6 +30,15 @@ type AppVariables = {
 const app = new Hono<{ Variables: AppVariables }>();
 app.use("*", logger());
 app.use("/api/*", cors());
+app.onError((error, c) => {
+  console.error(error);
+  return c.json(
+    {
+      error: error instanceof Error ? error.message : "Unhandled DroidAgent error."
+    },
+    500
+  );
+});
 
 app.use("/api/*", async (c, next) => {
   c.set("user", await authService.getCurrentUser(c));
@@ -53,16 +66,31 @@ function mutationGuard(c: Context<{ Variables: AppVariables }>) {
   return null;
 }
 
+function expandHomePath(input: string): string {
+  if (input === "~") {
+    return process.env.HOME ?? input;
+  }
+  if (input.startsWith("~/")) {
+    return path.join(process.env.HOME ?? "", input.slice(2));
+  }
+  return input;
+}
+
 app.get("/api/health", async (c) => {
-  const [runtimeSummary, setup] = await Promise.all([
+  await signalService.refreshState();
+  const [runtimeSummary, setup, launchAgent, channels] = await Promise.all([
     runtimeService.getRuntimeStatuses(),
-    appStateService.getSetupState()
+    appStateService.getSetupState(),
+    launchAgentService.status(),
+    openclawService.getChannelStatuses()
   ]);
   return c.json({
     ok: true,
     timestamp: new Date().toISOString(),
     runtimeSummary,
-    setup
+    setup,
+    launchAgent,
+    channels
   });
 });
 
@@ -125,12 +153,13 @@ app.post("/api/setup/workspace", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { workspaceRoot: string };
-  if (!body.workspaceRoot || !fs.existsSync(body.workspaceRoot)) {
+  const workspaceRoot = expandHomePath(body.workspaceRoot);
+  if (!workspaceRoot || !fs.existsSync(workspaceRoot)) {
     return c.json({ error: "Workspace root does not exist." }, 400);
   }
-  await appStateService.updateRuntimeSettings({ workspaceRoot: body.workspaceRoot });
+  await appStateService.updateRuntimeSettings({ workspaceRoot });
   const state = await appStateService.markSetupStepCompleted("workspace", {
-    workspaceRoot: body.workspaceRoot
+    workspaceRoot
   });
   await websocketHub.refreshAll();
   return c.json(state);
@@ -172,19 +201,26 @@ app.post("/api/setup/signal", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  const body = (await c.req.json()) as { phoneNumber: string; autoInstall?: boolean; cliPath?: string };
-  let cliPath = body.cliPath ?? null;
-  if (body.autoInstall) {
-    cliPath = await runtimeService.installSignalCli();
-  }
-  if (!cliPath) {
-    return c.json({ error: "signal-cli path is required." }, 400);
-  }
-  await openclawService.configureSignal({
-    cliPath,
+  const body = (await c.req.json()) as { phoneNumber: string; autoInstall?: boolean; useVoice?: boolean; captcha?: string };
+  const registrationRequest: {
+    phoneNumber: string;
+    autoInstall?: boolean;
+    useVoice?: boolean;
+    captcha?: string;
+  } = {
     phoneNumber: body.phoneNumber
-  });
-  const state = await appStateService.markSetupStepCompleted("signal", {
+  };
+  if (typeof body.autoInstall === "boolean") {
+    registrationRequest.autoInstall = body.autoInstall;
+  }
+  if (typeof body.useVoice === "boolean") {
+    registrationRequest.useVoice = body.useVoice;
+  }
+  if (body.captcha?.trim()) {
+    registrationRequest.captcha = body.captcha.trim();
+  }
+  await signalService.startRegistration(registrationRequest);
+  const state = await appStateService.updateSetupState({
     signalEnabled: true
   });
   await websocketHub.refreshAll();
@@ -244,9 +280,215 @@ app.get("/api/providers", async (c) => {
   return c.json(await runtimeService.listProviderProfiles());
 });
 
+app.get("/api/providers/secrets", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await keychainService.listProviderSummaries());
+});
+
+app.post("/api/providers/secrets", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = (await c.req.json()) as {
+    providerId: "openai" | "anthropic" | "openrouter" | "gemini" | "groq" | "together" | "xai";
+    apiKey: string;
+    defaultModel?: string;
+  };
+  await keychainService.setProviderSecret(body.providerId, body.apiKey);
+  if (body.defaultModel?.trim()) {
+    await keychainService.updateProviderModel(body.providerId, body.defaultModel.trim());
+  }
+  await appStateService.markSetupStepCompleted("cloudProviders");
+  await openclawService.stopGateway();
+  await openclawService.startGateway();
+  await websocketHub.refreshAll();
+  return c.json(await keychainService.listProviderSummaries());
+});
+
+app.delete("/api/providers/secrets/:providerId", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const providerId = c.req.param("providerId") as "openai" | "anthropic" | "openrouter" | "gemini" | "groq" | "together" | "xai";
+  const settings = await appStateService.getRuntimeSettings();
+  await keychainService.deleteProviderSecret(providerId);
+
+  if (settings.activeProviderId === providerId) {
+    if (settings.selectedRuntime === "ollama") {
+      await appStateService.updateRuntimeSettings({ activeProviderId: "ollama-default" });
+      await openclawService.selectOllamaModel(settings.ollamaModel);
+    } else {
+      await appStateService.updateRuntimeSettings({ activeProviderId: "llamacpp-default" });
+      await openclawService.registerLlamaCppProvider(
+        path.basename(settings.llamaCppModel).toLowerCase(),
+        settings.llamaCppContextWindow
+      );
+    }
+  }
+
+  await openclawService.stopGateway();
+  await openclawService.startGateway();
+  await websocketHub.refreshAll();
+  return c.json(await keychainService.listProviderSummaries());
+});
+
+app.post("/api/providers/:providerId/select", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const providerId = c.req.param("providerId") as "openai" | "anthropic" | "openrouter" | "gemini" | "groq" | "together" | "xai";
+  const body = (await c.req.json()) as { modelId?: string };
+  await keychainService.assertConfigured(providerId);
+  const settings = await appStateService.getRuntimeSettings();
+  const modelId = body.modelId?.trim() || settings.cloudProviders[providerId].defaultModel;
+  if (!modelId) {
+    return c.json({ error: "A model id is required for the selected cloud provider." }, 400);
+  }
+
+  await keychainService.updateProviderModel(providerId, modelId);
+  await appStateService.updateRuntimeSettings({
+    activeProviderId: providerId
+  });
+  await openclawService.selectPrimaryModel(modelId);
+  await appStateService.markSetupStepCompleted("cloudProviders", {
+    selectedModel: modelId
+  });
+  await websocketHub.refreshAll();
+  return c.json(await runtimeService.listProviderProfiles());
+});
+
 app.get("/api/channels", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
+  await signalService.refreshState();
+  return c.json(await openclawService.getChannelStatuses());
+});
+
+app.post("/api/channels/signal/install", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  await signalService.installCli();
+  await websocketHub.refreshAll();
+  return c.json(await openclawService.getChannelStatuses());
+});
+
+app.post("/api/channels/signal/register/start", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = (await c.req.json()) as {
+    phoneNumber: string;
+    useVoice?: boolean;
+    captcha?: string;
+    reregister?: boolean;
+    autoInstall?: boolean;
+  };
+  const signalRegistrationRequest: {
+    phoneNumber: string;
+    useVoice?: boolean;
+    captcha?: string;
+    reregister?: boolean;
+    autoInstall?: boolean;
+  } = {
+    phoneNumber: body.phoneNumber
+  };
+  if (typeof body.useVoice === "boolean") {
+    signalRegistrationRequest.useVoice = body.useVoice;
+  }
+  if (body.captcha?.trim()) {
+    signalRegistrationRequest.captcha = body.captcha.trim();
+  }
+  if (typeof body.reregister === "boolean") {
+    signalRegistrationRequest.reregister = body.reregister;
+  }
+  if (typeof body.autoInstall === "boolean") {
+    signalRegistrationRequest.autoInstall = body.autoInstall;
+  }
+  await signalService.startRegistration(signalRegistrationRequest);
+  await websocketHub.refreshAll();
+  return c.json(await openclawService.getChannelStatuses());
+});
+
+app.post("/api/channels/signal/register/verify", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = (await c.req.json()) as { verificationCode: string; pin?: string };
+  await signalService.verifyRegistration(body);
+  await websocketHub.refreshAll();
+  return c.json(await openclawService.getChannelStatuses());
+});
+
+app.post("/api/channels/signal/link/start", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = (await c.req.json()) as { deviceName?: string };
+  const result = await signalService.startLink(body.deviceName?.trim() || "DroidAgent");
+  await websocketHub.refreshAll();
+  return c.json(result);
+});
+
+app.post("/api/channels/signal/link/cancel", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  await signalService.cancelLink();
+  await websocketHub.refreshAll();
+  return c.json(await openclawService.getChannelStatuses());
+});
+
+app.post("/api/channels/signal/daemon/start", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  await signalService.startDaemon();
+  await websocketHub.refreshAll();
+  return c.json(await openclawService.getChannelStatuses());
+});
+
+app.post("/api/channels/signal/daemon/stop", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  await signalService.stopDaemon();
+  await websocketHub.refreshAll();
+  return c.json(await openclawService.getChannelStatuses());
+});
+
+app.post("/api/channels/signal/disconnect", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = (await c.req.json()) as { unregister?: boolean; deleteAccount?: boolean; clearLocalData?: boolean };
+  const disconnectRequest: {
+    unregister: boolean;
+    deleteAccount?: boolean;
+    clearLocalData?: boolean;
+  } = {
+    unregister: body.unregister ?? false,
+  };
+  if (typeof body.deleteAccount === "boolean") {
+    disconnectRequest.deleteAccount = body.deleteAccount;
+  }
+  if (typeof body.clearLocalData === "boolean") {
+    disconnectRequest.clearLocalData = body.clearLocalData;
+  }
+  await signalService.disconnect(disconnectRequest);
+  await websocketHub.refreshAll();
   return c.json(await openclawService.getChannelStatuses());
 });
 
@@ -259,6 +501,52 @@ app.post("/api/channels/signal/pairing/approve", async (c) => {
   await openclawService.approveSignalPairing(body.code);
   await websocketHub.refreshAll();
   return c.json({ ok: true });
+});
+
+app.get("/api/service/launch-agent", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await launchAgentService.status());
+});
+
+app.post("/api/service/launch-agent/install", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const status = await launchAgentService.install();
+  await websocketHub.refreshAll();
+  return c.json(status);
+});
+
+app.post("/api/service/launch-agent/start", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const status = await launchAgentService.start();
+  await websocketHub.refreshAll();
+  return c.json(status);
+});
+
+app.post("/api/service/launch-agent/stop", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const status = await launchAgentService.stop();
+  await websocketHub.refreshAll();
+  return c.json(status);
+});
+
+app.post("/api/service/launch-agent/uninstall", async (c) => {
+  const blocked = mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const status = await launchAgentService.uninstall();
+  await websocketHub.refreshAll();
+  return c.json(status);
 });
 
 app.get("/api/sessions", async (c) => {

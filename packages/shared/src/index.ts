@@ -15,6 +15,17 @@ export type ChannelId = z.infer<typeof ChannelIdSchema>;
 export const HealthStateSchema = z.enum(["ok", "warn", "error"]);
 export type HealthState = z.infer<typeof HealthStateSchema>;
 
+export const CloudProviderIdSchema = z.enum([
+  "openai",
+  "anthropic",
+  "openrouter",
+  "gemini",
+  "groq",
+  "together",
+  "xai"
+]);
+export type CloudProviderId = z.infer<typeof CloudProviderIdSchema>;
+
 export const SetupStepIdSchema = z.enum([
   "hostScan",
   "auth",
@@ -29,6 +40,21 @@ export const SetupStepIdSchema = z.enum([
   "launchAgent"
 ]);
 export type SetupStepId = z.infer<typeof SetupStepIdSchema>;
+
+export const SignalRegistrationModeSchema = z.enum(["none", "register", "link"]);
+export type SignalRegistrationMode = z.infer<typeof SignalRegistrationModeSchema>;
+
+export const SignalRegistrationStateSchema = z.enum([
+  "unconfigured",
+  "awaitingVerification",
+  "awaitingLink",
+  "registered",
+  "error"
+]);
+export type SignalRegistrationState = z.infer<typeof SignalRegistrationStateSchema>;
+
+export const SignalDaemonStateSchema = z.enum(["stopped", "starting", "running", "error"]);
+export type SignalDaemonState = z.infer<typeof SignalDaemonStateSchema>;
 
 export const RuntimeStatusSchema = z.object({
   id: RuntimeIdSchema,
@@ -60,6 +86,19 @@ export const ProviderProfileSchema = z.object({
 });
 export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
 
+export const CloudProviderSummarySchema = z.object({
+  id: CloudProviderIdSchema,
+  label: z.string(),
+  envVar: z.string(),
+  stored: z.boolean(),
+  active: z.boolean(),
+  defaultModel: z.string().nullable(),
+  health: HealthStateSchema,
+  healthMessage: z.string(),
+  lastUpdatedAt: z.string().nullable()
+});
+export type CloudProviderSummary = z.infer<typeof CloudProviderSummarySchema>;
+
 export const ChannelStatusSchema = z.object({
   id: ChannelIdSchema,
   label: z.string(),
@@ -71,15 +110,40 @@ export const ChannelStatusSchema = z.object({
 });
 export type ChannelStatus = z.infer<typeof ChannelStatusSchema>;
 
+export const LaunchAgentStatusSchema = z.object({
+  label: z.string(),
+  plistPath: z.string(),
+  stdoutPath: z.string(),
+  stderrPath: z.string(),
+  installed: z.boolean(),
+  loaded: z.boolean(),
+  running: z.boolean(),
+  pid: z.number().int().positive().nullable(),
+  lastExitStatus: z.number().int().nullable(),
+  health: HealthStateSchema,
+  healthMessage: z.string()
+});
+export type LaunchAgentStatus = z.infer<typeof LaunchAgentStatusSchema>;
+
 export const ChannelConfigSummarySchema = z.object({
   signal: z.object({
     installed: z.boolean(),
     binaryPath: z.string().nullable(),
+    javaHome: z.string().nullable(),
+    accountId: z.string().nullable(),
     phoneNumber: z.string().nullable(),
+    deviceName: z.string().nullable(),
+    registrationMode: SignalRegistrationModeSchema,
+    registrationState: SignalRegistrationStateSchema,
+    daemonState: SignalDaemonStateSchema,
+    daemonUrl: z.string().nullable(),
     dmPolicy: z.enum(["pairing", "allowlist", "open"]),
     allowGroups: z.boolean(),
     pairingPending: z.number(),
-    approvedPeers: z.array(z.string())
+    approvedPeers: z.array(z.string()),
+    linkUri: z.string().nullable(),
+    lastError: z.string().nullable(),
+    lastStartedAt: z.string().nullable()
   })
 });
 export type ChannelConfigSummary = z.infer<typeof ChannelConfigSummarySchema>;
@@ -160,8 +224,10 @@ export const DashboardStateSchema = z.object({
   setup: SetupStateSchema,
   runtimes: z.array(RuntimeStatusSchema),
   providers: z.array(ProviderProfileSchema),
+  cloudProviders: z.array(CloudProviderSummarySchema),
   channels: z.array(ChannelStatusSchema),
   channelConfig: ChannelConfigSummarySchema,
+  launchAgent: LaunchAgentStatusSchema,
   sessions: z.array(SessionSummarySchema),
   jobs: z.array(JobRecordSchema),
   approvals: z.array(ApprovalRecordSchema)
