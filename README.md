@@ -26,6 +26,8 @@ node apps/server/dist/index.js
 
 Then open `http://127.0.0.1:4318`.
 
+If your local `pnpm` policy skips native build scripts, the bootstrap script also compiles `better-sqlite3` explicitly inside `apps/server`.
+
 ## Runtime model paths
 
 - Default local path: `Ollama`
@@ -70,4 +72,3 @@ Further details:
 - [Architecture](./docs/architecture.md)
 - [Security](./docs/security.md)
 - [Operations](./docs/operations.md)
-

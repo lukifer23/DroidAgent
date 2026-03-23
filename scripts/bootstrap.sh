@@ -15,6 +15,10 @@ if ! command -v brew >/dev/null 2>&1; then
 fi
 
 pnpm install
+(
+  cd apps/server
+  npm explore better-sqlite3 -- npm run build-release
+)
 pnpm --filter @droidagent/shared build
 pnpm build
 
@@ -29,4 +33,3 @@ SERVER_PID=$!
 sleep 2
 open http://127.0.0.1:4318 || true
 wait "$SERVER_PID"
-
