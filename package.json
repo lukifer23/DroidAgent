@@ -8,12 +8,13 @@
     "node": ">=22.16.0"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @droidagent/server --filter @droidagent/web dev",
+    "dev": "pnpm --filter @droidagent/shared build && pnpm --parallel --filter @droidagent/server --filter @droidagent/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "bootstrap": "./scripts/bootstrap.sh"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
@@ -21,4 +22,3 @@
     "typescript": "^5.9.2"
   }
 }
-

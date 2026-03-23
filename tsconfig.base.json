@@ -16,12 +16,8 @@
     "baseUrl": ".",
     "paths": {
       "@droidagent/shared": [
-        "packages/shared/src/index.ts"
-      ],
-      "@droidagent/shared/*": [
-        "packages/shared/src/*"
+        "packages/shared/dist/index.d.ts"
       ]
     }
   }
 }
-

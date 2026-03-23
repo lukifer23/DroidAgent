@@ -10,13 +10,7 @@
       "node"
     ]
   },
-  "references": [
-    {
-      "path": "../../packages/shared"
-    }
-  ],
   "include": [
     "src/**/*.ts"
   ]
 }
-
