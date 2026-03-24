@@ -11,12 +11,16 @@ import {
   type RuntimeStatus
 } from "@droidagent/shared";
 
-import { LLAMA_CPP_PORT, baseEnv } from "../env.js";
+import { LLAMA_CPP_PORT, baseEnv, paths } from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
 import { appStateService } from "./app-state-service.js";
+import { harnessService } from "./harness-service.js";
 import { keychainService } from "./keychain-service.js";
 import { openclawService } from "./openclaw-service.js";
 import { signalService } from "./signal-service.js";
+
+const HEALTH_CHECK_RETRIES = 3;
+const HEALTH_CHECK_DELAY_MS = 500;
 
 interface LlamaModelPreset {
   id: string;
@@ -178,7 +182,7 @@ export class RuntimeService {
   }
 
   async getRuntimeStatuses(): Promise<RuntimeStatus[]> {
-    return await Promise.all([openclawService.status(), this.ollamaStatus(), this.llamaCppStatus()]);
+    return await Promise.all([harnessService.health(), this.ollamaStatus(), this.llamaCppStatus()]);
   }
 
   async installRuntime(runtimeId: RuntimeId): Promise<void> {
@@ -229,7 +233,10 @@ export class RuntimeService {
         activeProviderId: "ollama-default",
         ollamaModel: modelId
       });
-      await openclawService.selectOllamaModel(modelId);
+      await harnessService.configureRuntimeModel({
+        providerId: "ollama-default",
+        modelId
+      });
       await appStateService.markSetupStepCompleted("models", {
         selectedRuntime: "ollama",
         selectedModel: modelId
@@ -245,7 +252,11 @@ export class RuntimeService {
         llamaCppModel: preset.hfRepo,
         llamaCppContextWindow: preset.contextWindow
       });
-      await openclawService.registerLlamaCppProvider(path.basename(preset.hfRepo).toLowerCase(), preset.contextWindow);
+      await harnessService.configureRuntimeModel({
+        providerId: "llamacpp-default",
+        modelId: path.basename(preset.hfRepo).toLowerCase(),
+        contextWindow: preset.contextWindow
+      });
       await appStateService.markSetupStepCompleted("models", {
         selectedRuntime: "llamaCpp",
         selectedModel: preset.hfRepo
@@ -333,6 +344,7 @@ export class RuntimeService {
     }
 
     const settings = await appStateService.getRuntimeSettings();
+    const logPath = path.join(paths.logsDir, "llama-cpp.log");
     const child = spawn(
       binaryPath,
       ["-hf", settings.llamaCppModel, "--host", "127.0.0.1", "--port", String(LLAMA_CPP_PORT)],
@@ -343,18 +355,37 @@ export class RuntimeService {
     );
 
     child.stdout.on("data", (chunk) => {
-      fs.appendFileSync(path.join(process.env.HOME ?? "", ".droidagent", "logs", "llama-cpp.log"), chunk);
+      fs.appendFileSync(logPath, chunk);
     });
     child.stderr.on("data", (chunk) => {
-      fs.appendFileSync(path.join(process.env.HOME ?? "", ".droidagent", "logs", "llama-cpp.log"), chunk);
+      fs.appendFileSync(logPath, chunk);
     });
-    child.on("exit", () => {
+    child.on("exit", (code) => {
       this.llamaCppProcess = null;
+      if (code !== 0 && code !== null) {
+        fs.appendFileSync(logPath, `\n[Process exited with code ${code}]\n`);
+      }
     });
 
     this.llamaCppProcess = child;
     await appStateService.setJsonSetting("llamaCppStartedAt", new Date().toISOString());
-    await openclawService.registerLlamaCppProvider(path.basename(settings.llamaCppModel).toLowerCase(), settings.llamaCppContextWindow);
+
+    for (let i = 0; i < HEALTH_CHECK_RETRIES; i++) {
+      await new Promise((r) => setTimeout(r, HEALTH_CHECK_DELAY_MS * (i + 1)));
+      try {
+        await this.fetchJson(`http://127.0.0.1:${LLAMA_CPP_PORT}/v1/models`);
+        await harnessService.configureRuntimeModel({
+          providerId: "llamacpp-default",
+          modelId: path.basename(settings.llamaCppModel).toLowerCase(),
+          contextWindow: settings.llamaCppContextWindow
+        });
+        return;
+      } catch {
+        if (i === HEALTH_CHECK_RETRIES - 1) {
+          throw new Error("llama.cpp server started but did not become ready in time.");
+        }
+      }
+    }
   }
 }
 

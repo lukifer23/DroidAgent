@@ -3,36 +3,36 @@
 ## Overview
 
 - `apps/server`
-  - authenticates the operator with passkeys
+  - authenticates the owner with passkeys
   - stores state in SQLite under `~/.droidagent`
-  - stores cloud provider API keys in the macOS login Keychain
+  - stores cloud-provider API keys in the macOS login Keychain
   - manages runtimes and OpenClaw through CLI/process supervision
-  - manages the local LaunchAgent lifecycle through `launchctl`
-  - manages `signal-cli` registration/linking and a local HTTP daemon
-  - exposes the browser API and WebSocket update stream
+  - exposes the browser REST API and owner-authenticated WebSocket update stream
+  - owns the only browser-facing integration boundary; the browser never receives an OpenClaw token
 - `apps/web`
-  - mobile-first PWA
-  - session/chat shell
-  - workspace browser
-  - job launcher and status surfaces
-  - runtime/channel settings
+  - mobile-first routed PWA
+  - Setup, Chat, Files, Jobs, Models, Channels, Settings
+  - reconnect-safe streaming, install prompt, Fold-friendly layout
 - `packages/shared`
-  - common schemas and event contracts
+  - common schemas for dashboard state, files, jobs, passkeys, access/bootstrap payloads, and WebSocket events
+
+## Harness boundary
+
+- DroidAgent now treats OpenClaw through an internal harness adapter boundary.
+- v1 only ships the OpenClaw implementation, but generic consumers depend on the harness surface for:
+  - session listing and history
+  - message send/abort
+  - approvals
+  - channel status
+  - runtime-model configuration
+  - harness health
 
 ## OpenClaw integration
 
-DroidAgent treats OpenClaw as an external engine, not an internal library API. The server uses:
-
-- `openclaw config set`
-- `openclaw gateway run`
-- `openclaw gateway call`
-- `openclaw approvals get`
-- `openclaw channels status`
-- `openclaw channels add/remove`
-- `openclaw pairing ...`
-- `openclaw models set`
-
-The profile is isolated as `openclaw --profile droidagent`.
+- Lifecycle, config, model registration, approvals, channels, and pairing continue through the OpenClaw CLI/Gateway.
+- Live chat now uses a server-side relay path into the OpenClaw Chat Completions endpoint on the local gateway.
+- DroidAgent re-emits sanitized stream events to the browser over its own WebSocket.
+- OpenClaw remains loopback-only with token auth.
 
 ## Local runtimes
 
@@ -44,9 +44,22 @@ The profile is isolated as `openclaw --profile droidagent`.
   - started as a supervised `llama-server` process
   - registered into OpenClaw as an OpenAI-compatible provider
 
-## Signal path
+## Remote access
 
-- `signal-cli` is isolated under `~/.droidagent/signal-cli`
-- DroidAgent prefers the brewed OpenJDK runtime for Signal compatibility
-- registration state, link URI, daemon PID, and daemon URL are tracked in app state
-- OpenClaw is configured against the local Signal HTTP daemon instead of relying on ad hoc shell invocations
+- local daily control starts on loopback
+- Tailscale Serve is the supported remote phone path
+- DroidAgent tracks canonical origin, bootstrap token issuance, and phone-side owner enrollment state
+- after canonical setup, the Tailscale URL is the primary daily-use origin
+
+## File and job model
+
+- files are addressed by workspace-relative path, never absolute host path
+- text files can be loaded and saved through the PWA with conflict checks and atomic writes
+- jobs are owner-submitted shell commands inside the configured workspace jail
+- stdout/stderr are streamed live and persisted under `~/.droidagent/logs/jobs`
+
+## Optional Signal path
+
+- `signal-cli` stays isolated under `~/.droidagent/signal-cli`
+- the PWA remains the primary control surface
+- Signal stays available as an advanced secondary owner ingress, not a required onboarding step

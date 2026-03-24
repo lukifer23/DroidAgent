@@ -11,10 +11,14 @@ export default defineConfig({
       manifest: {
         name: "DroidAgent",
         short_name: "DroidAgent",
+        description: "Mobile-first control for OpenClaw on your Mac",
         start_url: "/",
+        scope: "/",
         display: "standalone",
+        orientation: "portrait-primary",
         background_color: "#111315",
         theme_color: "#111315",
+        id: "/",
         icons: [
           {
             src: "/icon.svg",

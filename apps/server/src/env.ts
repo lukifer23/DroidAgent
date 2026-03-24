@@ -9,6 +9,7 @@ export const LLAMA_CPP_PORT = Number(process.env.DROIDAGENT_LLAMA_CPP_PORT ?? 80
 export const SIGNAL_DAEMON_PORT = Number(process.env.DROIDAGENT_SIGNAL_PORT ?? 8091);
 export const OPENCLAW_PROFILE = process.env.DROIDAGENT_OPENCLAW_PROFILE ?? "droidagent";
 export const OPENCLAW_GATEWAY_URL = `ws://127.0.0.1:${OPENCLAW_GATEWAY_PORT}`;
+export const OPENCLAW_GATEWAY_HTTP_URL = `http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}`;
 export const SIGNAL_DAEMON_URL = `http://127.0.0.1:${SIGNAL_DAEMON_PORT}`;
 export const LAUNCH_AGENT_LABEL = "com.droidagent.server";
 
@@ -22,6 +23,7 @@ export const paths = {
   appDir: path.join(os.homedir(), ".droidagent"),
   dbPath: path.join(os.homedir(), ".droidagent", "droidagent.sqlite"),
   logsDir: path.join(os.homedir(), ".droidagent", "logs"),
+  jobsLogsDir: path.join(os.homedir(), ".droidagent", "logs", "jobs"),
   tempDir: path.join(os.homedir(), ".droidagent", "tmp"),
   uploadsDir: path.join(os.homedir(), ".droidagent", "uploads"),
   stateDir: path.join(os.homedir(), ".droidagent", "state"),
@@ -38,7 +40,7 @@ export const paths = {
 };
 
 export function ensureAppDirs(): void {
-  for (const dir of [paths.appDir, paths.logsDir, paths.tempDir, paths.uploadsDir, paths.stateDir, paths.signalCliConfigDir]) {
+  for (const dir of [paths.appDir, paths.logsDir, paths.jobsLogsDir, paths.tempDir, paths.uploadsDir, paths.stateDir, paths.signalCliConfigDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }

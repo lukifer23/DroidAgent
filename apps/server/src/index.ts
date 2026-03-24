@@ -8,9 +8,11 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { WebSocketServer } from "ws";
 
+import { accessService } from "./services/access-service.js";
 import { authService } from "./services/auth-service.js";
 import { dashboardService } from "./services/dashboard-service.js";
-import { fileService } from "./services/file-service.js";
+import { FileConflictError, fileService } from "./services/file-service.js";
+import { harnessService } from "./services/harness-service.js";
 import { jobService } from "./services/job-service.js";
 import { keychainService } from "./services/keychain-service.js";
 import { launchAgentService } from "./services/launch-agent-service.js";
@@ -32,6 +34,15 @@ app.use("*", logger());
 app.use("/api/*", cors());
 app.onError((error, c) => {
   console.error(error);
+  if (error instanceof FileConflictError) {
+    return c.json(
+      {
+        error: error.message,
+        currentModifiedAt: error.currentModifiedAt
+      },
+      409
+    );
+  }
   return c.json(
     {
       error: error instanceof Error ? error.message : "Unhandled DroidAgent error."
@@ -53,17 +64,35 @@ async function requireUser(c: Context<{ Variables: AppVariables }>) {
   return null;
 }
 
-function mutationGuard(c: Context<{ Variables: AppVariables }>) {
-  const origin = c.req.header("origin");
-  if (!origin) {
+async function requireOwnerOrLocalBootstrap(c: Context<{ Variables: AppVariables }>) {
+  const ownerExists = await authService.hasUser();
+  if (ownerExists) {
+    return await requireUser(c);
+  }
+
+  try {
+    await accessService.assertLocalhostBootstrapRequest(c);
     return null;
+  } catch (error) {
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "Bootstrap action is not allowed."
+      },
+      403
+    );
   }
-  const requestUrl = new URL(c.req.url);
-  const expected = `${requestUrl.protocol}//${requestUrl.host}`;
-  if (origin !== expected) {
-    return c.json({ error: "Origin mismatch." }, 403);
+}
+
+async function mutationGuard(c: Context<{ Variables: AppVariables }>): Promise<Response | null> {
+  try {
+    await accessService.assertCanonicalMutation(c, true);
+    return null;
+  } catch (err) {
+    return c.json(
+      { error: err instanceof Error ? err.message : "Origin mismatch." },
+      403
+    );
   }
-  return null;
 }
 
 function expandHomePath(input: string): string {
@@ -82,7 +111,7 @@ app.get("/api/health", async (c) => {
     runtimeService.getRuntimeStatuses(),
     appStateService.getSetupState(),
     launchAgentService.status(),
-    openclawService.getChannelStatuses()
+    harnessService.listChannels()
   ]);
   return c.json({
     ok: true,
@@ -103,13 +132,13 @@ app.get("/api/auth/me", async (c) => {
 });
 
 app.post("/api/auth/register/options", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   return c.json(await authService.beginRegistration(c));
 });
 
 app.post("/api/auth/register/verify", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const body = await c.req.json();
   const user = await authService.finishRegistration(c, body);
@@ -117,21 +146,80 @@ app.post("/api/auth/register/verify", async (c) => {
 });
 
 app.post("/api/auth/login/options", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
-  return c.json(await authService.beginAuthentication(c));
+  return c.json(await authService.beginAuthenticationFromContext(c));
 });
 
 app.post("/api/auth/login/verify", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const body = await c.req.json();
-  const user = await authService.finishAuthentication(c, body);
+  const user = await authService.finishAuthenticationFromContext(c, body);
   return c.json({ user });
 });
 
 app.post("/api/auth/logout", async (c) => {
   await authService.clearSession(c);
+  return c.json({ ok: true });
+});
+
+app.get("/api/auth/passkeys", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const user = c.get("user");
+  return c.json(await authService.listPasskeys(user!));
+});
+
+app.post("/api/auth/passkeys/register/options", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const user = c.get("user");
+  return c.json(await authService.beginAdditionalRegistrationFromContext(c, user!));
+});
+
+app.post("/api/auth/passkeys/register/verify", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const user = c.get("user");
+  const body = await c.req.json();
+  return c.json({
+    user: await authService.finishAdditionalRegistrationFromContext(c, user!, body),
+    passkeys: await authService.listPasskeys(user!)
+  });
+});
+
+app.get("/api/access", async (c) => {
+  return c.json(await accessService.getBootstrapState());
+});
+
+app.post("/api/access/tailscale/enable", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const gate = await requireOwnerOrLocalBootstrap(c);
+  if (gate) return gate;
+  const result = await accessService.enableTailscaleServe();
+  await websocketHub.refreshAll();
+  return c.json(result);
+});
+
+app.post("/api/access/bootstrap", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const gate = await requireOwnerOrLocalBootstrap(c);
+  if (gate) return gate;
+  return c.json(await accessService.createBootstrapToken());
+});
+
+app.post("/api/access/bootstrap/consume", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const body = (await c.req.json()) as { token: string };
+  await accessService.consumeBootstrapToken(body.token);
   return c.json({ ok: true });
 });
 
@@ -148,7 +236,7 @@ app.get("/api/setup", async (c) => {
 });
 
 app.post("/api/setup/workspace", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -166,7 +254,7 @@ app.post("/api/setup/workspace", async (c) => {
 });
 
 app.post("/api/setup/runtime", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -184,7 +272,7 @@ app.post("/api/setup/runtime", async (c) => {
 });
 
 app.post("/api/setup/model", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -197,7 +285,7 @@ app.post("/api/setup/model", async (c) => {
 });
 
 app.post("/api/setup/signal", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -234,7 +322,7 @@ app.get("/api/runtime", async (c) => {
 });
 
 app.post("/api/runtime/:runtimeId/install", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -244,7 +332,7 @@ app.post("/api/runtime/:runtimeId/install", async (c) => {
 });
 
 app.post("/api/runtime/:runtimeId/start", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -254,7 +342,7 @@ app.post("/api/runtime/:runtimeId/start", async (c) => {
 });
 
 app.post("/api/runtime/:runtimeId/stop", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -264,7 +352,7 @@ app.post("/api/runtime/:runtimeId/stop", async (c) => {
 });
 
 app.post("/api/runtime/:runtimeId/models", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -287,7 +375,7 @@ app.get("/api/providers/secrets", async (c) => {
 });
 
 app.post("/api/providers/secrets", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -301,14 +389,13 @@ app.post("/api/providers/secrets", async (c) => {
     await keychainService.updateProviderModel(body.providerId, body.defaultModel.trim());
   }
   await appStateService.markSetupStepCompleted("cloudProviders");
-  await openclawService.stopGateway();
-  await openclawService.startGateway();
+  await runtimeService.startRuntime("openclaw");
   await websocketHub.refreshAll();
   return c.json(await keychainService.listProviderSummaries());
 });
 
 app.delete("/api/providers/secrets/:providerId", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -319,24 +406,27 @@ app.delete("/api/providers/secrets/:providerId", async (c) => {
   if (settings.activeProviderId === providerId) {
     if (settings.selectedRuntime === "ollama") {
       await appStateService.updateRuntimeSettings({ activeProviderId: "ollama-default" });
-      await openclawService.selectOllamaModel(settings.ollamaModel);
+      await harnessService.configureRuntimeModel({
+        providerId: "ollama-default",
+        modelId: settings.ollamaModel
+      });
     } else {
       await appStateService.updateRuntimeSettings({ activeProviderId: "llamacpp-default" });
-      await openclawService.registerLlamaCppProvider(
-        path.basename(settings.llamaCppModel).toLowerCase(),
-        settings.llamaCppContextWindow
-      );
+      await harnessService.configureRuntimeModel({
+        providerId: "llamacpp-default",
+        modelId: path.basename(settings.llamaCppModel).toLowerCase(),
+        contextWindow: settings.llamaCppContextWindow
+      });
     }
   }
 
-  await openclawService.stopGateway();
-  await openclawService.startGateway();
+  await runtimeService.startRuntime("openclaw");
   await websocketHub.refreshAll();
   return c.json(await keychainService.listProviderSummaries());
 });
 
 app.post("/api/providers/:providerId/select", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -353,7 +443,10 @@ app.post("/api/providers/:providerId/select", async (c) => {
   await appStateService.updateRuntimeSettings({
     activeProviderId: providerId
   });
-  await openclawService.selectPrimaryModel(modelId);
+  await harnessService.configureRuntimeModel({
+    providerId,
+    modelId
+  });
   await appStateService.markSetupStepCompleted("cloudProviders", {
     selectedModel: modelId
   });
@@ -365,21 +458,21 @@ app.get("/api/channels", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await signalService.refreshState();
-  return c.json(await openclawService.getChannelStatuses());
+  return c.json(await harnessService.listChannels());
 });
 
 app.post("/api/channels/signal/install", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await signalService.installCli();
   await websocketHub.refreshAll();
-  return c.json(await openclawService.getChannelStatuses());
+  return c.json(await harnessService.listChannels());
 });
 
 app.post("/api/channels/signal/register/start", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -413,22 +506,22 @@ app.post("/api/channels/signal/register/start", async (c) => {
   }
   await signalService.startRegistration(signalRegistrationRequest);
   await websocketHub.refreshAll();
-  return c.json(await openclawService.getChannelStatuses());
+  return c.json(await harnessService.listChannels());
 });
 
 app.post("/api/channels/signal/register/verify", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { verificationCode: string; pin?: string };
   await signalService.verifyRegistration(body);
   await websocketHub.refreshAll();
-  return c.json(await openclawService.getChannelStatuses());
+  return c.json(await harnessService.listChannels());
 });
 
 app.post("/api/channels/signal/link/start", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -439,37 +532,37 @@ app.post("/api/channels/signal/link/start", async (c) => {
 });
 
 app.post("/api/channels/signal/link/cancel", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await signalService.cancelLink();
   await websocketHub.refreshAll();
-  return c.json(await openclawService.getChannelStatuses());
+  return c.json(await harnessService.listChannels());
 });
 
 app.post("/api/channels/signal/daemon/start", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await signalService.startDaemon();
   await websocketHub.refreshAll();
-  return c.json(await openclawService.getChannelStatuses());
+  return c.json(await harnessService.listChannels());
 });
 
 app.post("/api/channels/signal/daemon/stop", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await signalService.stopDaemon();
   await websocketHub.refreshAll();
-  return c.json(await openclawService.getChannelStatuses());
+  return c.json(await harnessService.listChannels());
 });
 
 app.post("/api/channels/signal/disconnect", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -489,11 +582,11 @@ app.post("/api/channels/signal/disconnect", async (c) => {
   }
   await signalService.disconnect(disconnectRequest);
   await websocketHub.refreshAll();
-  return c.json(await openclawService.getChannelStatuses());
+  return c.json(await harnessService.listChannels());
 });
 
 app.post("/api/channels/signal/pairing/approve", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -510,7 +603,7 @@ app.get("/api/service/launch-agent", async (c) => {
 });
 
 app.post("/api/service/launch-agent/install", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -520,7 +613,7 @@ app.post("/api/service/launch-agent/install", async (c) => {
 });
 
 app.post("/api/service/launch-agent/start", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -530,7 +623,7 @@ app.post("/api/service/launch-agent/start", async (c) => {
 });
 
 app.post("/api/service/launch-agent/stop", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -540,7 +633,7 @@ app.post("/api/service/launch-agent/stop", async (c) => {
 });
 
 app.post("/api/service/launch-agent/uninstall", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -552,40 +645,65 @@ app.post("/api/service/launch-agent/uninstall", async (c) => {
 app.get("/api/sessions", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  return c.json(await openclawService.listSessions());
+  return c.json(await harnessService.listSessions());
 });
 
 app.get("/api/sessions/:sessionId/messages", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  return c.json(await openclawService.loadChatHistory(c.req.param("sessionId")));
+  return c.json(await harnessService.loadHistory(c.req.param("sessionId")));
 });
 
 app.post("/api/sessions/:sessionId/messages", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { text: string };
-  await openclawService.sendChat(c.req.param("sessionId"), body.text);
-  const messages = await openclawService.loadChatHistory(c.req.param("sessionId"));
+  const sessionId = c.req.param("sessionId");
+  const run = await harnessService.sendMessage(sessionId, body.text, {
+    onDelta: async (delta) => {
+      websocketHub.publishChatDelta(sessionId, run.runId, delta);
+    },
+    onDone: async () => {
+      websocketHub.publishChatDone(sessionId, run.runId);
+      await websocketHub.pushChatHistory(sessionId);
+      await websocketHub.refreshAll();
+    },
+    onError: async (message) => {
+      websocketHub.publishChatError(sessionId, run.runId, message);
+      await websocketHub.pushChatHistory(sessionId);
+      await websocketHub.refreshAll();
+    }
+  });
+  return c.json({ ok: true, runId: run.runId }, 202);
+});
+
+app.post("/api/sessions/:sessionId/abort", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const sessionId = c.req.param("sessionId");
+  await harnessService.abortMessage(sessionId);
+  await websocketHub.pushChatHistory(sessionId);
   await websocketHub.refreshAll();
-  return c.json({ messages });
+  return c.json({ ok: true });
 });
 
 app.get("/api/approvals", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  return c.json(await openclawService.listApprovals());
+  return c.json(await harnessService.listApprovals());
 });
 
 app.post("/api/approvals/:approvalId", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { resolution: "approved" | "denied" };
-  await openclawService.resolveApproval(c.req.param("approvalId"), body.resolution);
+  await harnessService.resolveApproval(c.req.param("approvalId"), body.resolution);
   await websocketHub.refreshAll();
   return c.json({ ok: true });
 });
@@ -604,11 +722,22 @@ app.get("/api/files/content", async (c) => {
   if (!target) {
     return c.json({ error: "path is required." }, 400);
   }
-  return c.json({ content: await fileService.readFile(target) });
+  return c.json(await fileService.readFile(target));
+});
+
+app.put("/api/files/content", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = (await c.req.json()) as { path: string; content: string; expectedModifiedAt: string | null };
+  const saved = await fileService.writeFile(body.path, body.content, body.expectedModifiedAt ?? null);
+  await websocketHub.refreshAll();
+  return c.json(saved);
 });
 
 app.post("/api/files/directory", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -623,8 +752,14 @@ app.get("/api/jobs", async (c) => {
   return c.json(await jobService.listJobs());
 });
 
+app.get("/api/jobs/:jobId/output", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await jobService.readJobOutput(c.req.param("jobId")));
+});
+
 app.post("/api/jobs", async (c) => {
-  const blocked = mutationGuard(c);
+  const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;

@@ -45,7 +45,8 @@ export function resolveCwdWithinWorkspace(cwd: string, workspaceRoot: string): s
       : cwd;
   const resolved = path.resolve(workspaceRoot, expanded);
   const normalizedRoot = path.resolve(workspaceRoot);
-  if (!resolved.startsWith(normalizedRoot)) {
+  const relative = path.relative(normalizedRoot, resolved);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("Working directory must be inside the workspace root.");
   }
   return resolved;

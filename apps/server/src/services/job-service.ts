@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
-import { JobRecordSchema, nowIso } from "@droidagent/shared";
+import { JobOutputSnapshotSchema, JobRecordSchema, nowIso, type JobRecord } from "@droidagent/shared";
 
 import { baseEnv, paths } from "../env.js";
 import { JOB_MAX_OUTPUT_BYTES, JOB_TIMEOUT_MS, resolveCwdWithinWorkspace, validateCommand } from "../lib/job-policy.js";
@@ -15,6 +15,18 @@ interface JobOutputEvent {
   chunk: string;
 }
 
+type MutableJobRecord = {
+  id: string;
+  command: string;
+  cwd: string;
+  status: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  exitCode: number | null;
+  lastLine: string;
+};
+
 const AUDIT_LOG_PATH = path.join(paths.logsDir, "jobs-audit.log");
 
 async function auditLog(jobId: string, command: string, cwd: string, userId?: string): Promise<void> {
@@ -22,24 +34,92 @@ async function auditLog(jobId: string, command: string, cwd: string, userId?: st
   await fs.appendFile(AUDIT_LOG_PATH, line).catch(() => {});
 }
 
+function stdoutPath(jobId: string): string {
+  return path.join(paths.jobsLogsDir, `${jobId}.stdout.log`);
+}
+
+function stderrPath(jobId: string): string {
+  return path.join(paths.jobsLogsDir, `${jobId}.stderr.log`);
+}
+
+function truncatedMarkerPath(jobId: string): string {
+  return path.join(paths.jobsLogsDir, `${jobId}.truncated`);
+}
+
+async function fileSize(filePath: string): Promise<number> {
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.size;
+  } catch {
+    return 0;
+  }
+}
+
+async function readUtf8(filePath: string): Promise<string> {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
 export class JobService extends EventEmitter<{
   output: [JobOutputEvent];
+  updated: [JobRecord];
 }> {
+  private async toJobRecord(record: MutableJobRecord): Promise<JobRecord> {
+    const [stdoutBytes, stderrBytes] = await Promise.all([fileSize(stdoutPath(record.id)), fileSize(stderrPath(record.id))]);
+    return JobRecordSchema.parse({
+      ...record,
+      hasOutput: stdoutBytes + stderrBytes > 0,
+      stdoutBytes,
+      stderrBytes
+    });
+  }
+
+  private async emitUpdated(record: MutableJobRecord): Promise<void> {
+    this.emit("updated", await this.toJobRecord(record));
+  }
+
   async listJobs() {
     const records = await appStateService.listRecentJobs(30);
-    return records.map((record) =>
-      JobRecordSchema.parse({
-        id: record.id,
-        command: record.command,
-        cwd: record.cwd,
-        status: record.status,
-        createdAt: record.createdAt,
-        startedAt: record.startedAt,
-        finishedAt: record.finishedAt,
-        exitCode: record.exitCode,
-        lastLine: record.lastLine
-      })
+    return await Promise.all(
+      records.map((record) =>
+        this.toJobRecord({
+          id: record.id,
+          command: record.command,
+          cwd: record.cwd,
+          status: record.status,
+          createdAt: record.createdAt,
+          startedAt: record.startedAt,
+          finishedAt: record.finishedAt,
+          exitCode: record.exitCode,
+          lastLine: record.lastLine
+        })
+      )
     );
+  }
+
+  async readJobOutput(jobId: string) {
+    const [stdout, stderr, stdoutBytes, stderrBytes, truncated] = await Promise.all([
+      readUtf8(stdoutPath(jobId)),
+      readUtf8(stderrPath(jobId)),
+      fileSize(stdoutPath(jobId)),
+      fileSize(stderrPath(jobId)),
+      fs
+        .stat(truncatedMarkerPath(jobId))
+        .then(() => true)
+        .catch(() => false)
+    ]);
+
+    return JobOutputSnapshotSchema.parse({
+      jobId,
+      stdout,
+      stderr,
+      truncated,
+      stdoutBytes,
+      stderrBytes
+    });
   }
 
   async startJob(command: string, cwd: string, userId?: string) {
@@ -52,6 +132,15 @@ export class JobService extends EventEmitter<{
     const jailedCwd = resolveCwdWithinWorkspace(cwd, settings.workspaceRoot);
 
     const record = await appStateService.createJob(command, jailedCwd);
+    const state: MutableJobRecord = { ...record };
+
+    await Promise.all([
+      fs.writeFile(stdoutPath(record.id), "", "utf8"),
+      fs.writeFile(stderrPath(record.id), "", "utf8"),
+      fs.rm(truncatedMarkerPath(record.id), { force: true })
+    ]);
+
+    await this.emitUpdated(state);
     void auditLog(record.id, command, jailedCwd, userId);
 
     const child = spawn("/bin/zsh", ["-lc", command], {
@@ -60,58 +149,124 @@ export class JobService extends EventEmitter<{
       stdio: ["ignore", "pipe", "pipe"]
     });
 
+    state.status = "running";
+    state.startedAt = nowIso();
     await appStateService.updateJob(record.id, {
-      status: "running",
-      startedAt: nowIso()
+      status: state.status,
+      startedAt: state.startedAt
     });
+    await this.emitUpdated(state);
 
     let outputBytes = 0;
+    let truncated = false;
+    let finalized = false;
+
+    const markTruncated = async () => {
+      if (truncated) {
+        return;
+      }
+      truncated = true;
+      await fs.writeFile(truncatedMarkerPath(record.id), "1", "utf8");
+      const note = "\n[output truncated]\n";
+      await fs.appendFile(stderrPath(record.id), note, "utf8");
+      this.emit("output", {
+        jobId: record.id,
+        stream: "stderr",
+        chunk: note
+      });
+    };
+
+    const updateLastLine = async (chunk: string) => {
+      const trimmed = chunk.trim().split("\n").filter(Boolean).at(-1) ?? "";
+      if (!trimmed) {
+        return;
+      }
+
+      const nextLastLine = trimmed.length > 512 ? `${trimmed.slice(0, 509)}...` : trimmed;
+      if (nextLastLine === state.lastLine) {
+        return;
+      }
+
+      state.lastLine = nextLastLine;
+      await appStateService.updateJob(record.id, {
+        lastLine: nextLastLine
+      });
+      await this.emitUpdated(state);
+    };
+
+    const writeChunk = async (stream: "stdout" | "stderr", chunk: string) => {
+      if (truncated) {
+        return;
+      }
+
+      const bytes = Buffer.byteLength(chunk, "utf8");
+      const remaining = JOB_MAX_OUTPUT_BYTES - outputBytes;
+      let allowedChunk = chunk;
+
+      if (remaining <= 0) {
+        await markTruncated();
+        return;
+      }
+
+      if (bytes > remaining) {
+        allowedChunk = Buffer.from(chunk, "utf8").subarray(0, remaining).toString("utf8");
+      }
+
+      outputBytes += Buffer.byteLength(allowedChunk, "utf8");
+      const logPath = stream === "stdout" ? stdoutPath(record.id) : stderrPath(record.id);
+      await fs.appendFile(logPath, allowedChunk, "utf8");
+      await updateLastLine(allowedChunk);
+      this.emit("output", {
+        jobId: record.id,
+        stream,
+        chunk: allowedChunk
+      });
+
+      if (bytes > remaining) {
+        await markTruncated();
+      }
+    };
+
+    const finalize = async (status: "succeeded" | "failed" | "cancelled", exitCode: number | null, lastLine?: string) => {
+      if (finalized) {
+        return;
+      }
+      finalized = true;
+      if (lastLine) {
+        state.lastLine = lastLine;
+      }
+      state.status = status;
+      state.finishedAt = nowIso();
+      state.exitCode = exitCode;
+      await appStateService.updateJob(record.id, {
+        status,
+        finishedAt: state.finishedAt,
+        exitCode,
+        lastLine: state.lastLine
+      });
+      await this.emitUpdated(state);
+    };
+
     const timeoutId = setTimeout(() => {
+      void fs.appendFile(stderrPath(record.id), "\n[Job timed out]\n", "utf8").catch(() => {});
       child.kill("SIGTERM");
       setTimeout(() => child.kill("SIGKILL"), 2000).unref();
-      void appStateService.updateJob(record.id, {
-        status: "failed",
-        finishedAt: nowIso(),
-        exitCode: 124,
-        lastLine: "Job timed out."
-      });
+      void finalize("failed", 124, "Job timed out.");
     }, JOB_TIMEOUT_MS);
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
 
-    const onChunk = async (stream: "stdout" | "stderr", chunk: string) => {
-      const bytes = Buffer.byteLength(chunk, "utf8");
-      outputBytes += bytes;
-      if (outputBytes > JOB_MAX_OUTPUT_BYTES) {
-        return;
-      }
-      const trimmed = chunk.trim().split("\n").filter(Boolean).at(-1) ?? "";
-      if (trimmed) {
-        await appStateService.updateJob(record.id, {
-          lastLine: trimmed.length > 512 ? trimmed.slice(0, 509) + "…" : trimmed
-        });
-      }
-      this.emit("output", {
-        jobId: record.id,
-        stream,
-        chunk: outputBytes <= JOB_MAX_OUTPUT_BYTES ? chunk : ""
-      });
-    };
-
     child.stdout.on("data", (chunk: string) => {
-      void onChunk("stdout", chunk);
+      void writeChunk("stdout", chunk);
     });
     child.stderr.on("data", (chunk: string) => {
-      void onChunk("stderr", chunk);
+      void writeChunk("stderr", chunk);
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       clearTimeout(timeoutId);
-      void appStateService.updateJob(record.id, {
-        status: code === 0 ? "succeeded" : "failed",
-        finishedAt: nowIso(),
-        exitCode: code
-      });
+      const exitCode = typeof code === "number" ? code : signal === "SIGTERM" ? 143 : 1;
+      void finalize(exitCode === 0 ? "succeeded" : "failed", exitCode);
     });
 
     return record.id;
@@ -119,4 +274,3 @@ export class JobService extends EventEmitter<{
 }
 
 export const jobService = new JobService();
-

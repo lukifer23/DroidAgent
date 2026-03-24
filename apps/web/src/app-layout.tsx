@@ -1,0 +1,104 @@
+import { Bot, FolderTree, Hammer, MessagesSquare, Radio, Settings2 } from "lucide-react";
+import { Link, Outlet } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
+
+import { useDroidAgentApp } from "./app-context";
+import { AuthScreen } from "./screens/auth-screen";
+import { postJson } from "./lib/api";
+
+const navItems = [
+  { to: "/chat", label: "Chat", icon: MessagesSquare },
+  { to: "/files", label: "Files", icon: FolderTree },
+  { to: "/jobs", label: "Jobs", icon: Hammer },
+  { to: "/models", label: "Models", icon: Bot },
+  { to: "/channels", label: "Channels", icon: Radio },
+  { to: "/settings", label: "Settings", icon: Settings2 }
+] as const;
+
+export function AppLayout() {
+  const queryClient = useQueryClient();
+  const { authQuery, dashboard, notice, errorMessage, isOnline, wsStatus } = useDroidAgentApp();
+
+  if (authQuery.isLoading) {
+    return <main className="app-shell loading">Loading DroidAgent...</main>;
+  }
+
+  if (!authQuery.data?.user) {
+    return <AuthScreen />;
+  }
+
+  const setup = dashboard?.setup;
+  const runtimeCount = dashboard?.runtimes.filter((runtime) => runtime.state === "running").length ?? 0;
+  const summaryCards = [
+    { label: "Setup", value: `${setup?.completedSteps.length ?? 0}/11 steps` },
+    { label: "Live Runtimes", value: String(runtimeCount) },
+    {
+      label: "LaunchAgent",
+      value: dashboard?.launchAgent.running ? "Running" : dashboard?.launchAgent.installed ? "Loaded" : "Off"
+    }
+  ];
+
+  return (
+    <main className="app-shell">
+      <header className="topbar">
+        <div>
+          <div className="eyebrow">DroidAgent</div>
+          <h1>Operator Console</h1>
+        </div>
+        <button
+          className="ghost-button"
+          onClick={async () => {
+            await postJson("/api/auth/logout", {});
+            await queryClient.invalidateQueries({ queryKey: ["auth"] });
+          }}
+        >
+          Sign out
+        </button>
+      </header>
+
+      {!isOnline ? (
+        <section className="status-banner offline offline-banner">You are offline. Agent control requires the host. Reconnecting...</section>
+      ) : null}
+      {wsStatus === "disconnected" && isOnline && authQuery.data?.user ? (
+        <section className="status-banner offline offline-banner">Reconnecting to DroidAgent...</section>
+      ) : null}
+      {notice ? <section className="status-banner success">{notice}</section> : null}
+      {errorMessage ? <section className="status-banner error">{errorMessage}</section> : null}
+
+      <section className="summary-grid">
+        {summaryCards.map((card) => (
+          <article key={card.label} className="summary-card">
+            <span>{card.label}</span>
+            <strong>{card.value}</strong>
+          </article>
+        ))}
+      </section>
+
+      {(setup?.completedSteps.length ?? 0) < 5 ? (
+        <section className="status-banner offline">
+          Onboarding is still incomplete.
+          {" "}
+          <Link to="/setup">Open setup</Link>
+        </section>
+      ) : null}
+
+      <section className="main-layout routed-layout">
+        <div className="content-panel">
+          <Outlet />
+        </div>
+
+        <nav className="bottom-nav">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <Link key={item.to} to={item.to} className="nav-link" activeProps={{ className: "nav-link active" }}>
+                <Icon size={18} />
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
+      </section>
+    </main>
+  );
+}

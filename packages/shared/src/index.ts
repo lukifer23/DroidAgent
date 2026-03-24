@@ -253,7 +253,10 @@ export const JobRecordSchema = z.object({
   startedAt: z.string().nullable(),
   finishedAt: z.string().nullable(),
   exitCode: z.number().nullable(),
-  lastLine: z.string().default("")
+  lastLine: z.string().default(""),
+  hasOutput: z.boolean().default(false),
+  stdoutBytes: z.number().int().nonnegative().default(0),
+  stderrBytes: z.number().int().nonnegative().default(0)
 });
 export type JobRecord = z.infer<typeof JobRecordSchema>;
 
@@ -276,6 +279,45 @@ export const WorkspaceEntrySchema = z.object({
   modifiedAt: z.string()
 });
 export type WorkspaceEntry = z.infer<typeof WorkspaceEntrySchema>;
+
+export const FileContentSchema = z.object({
+  path: z.string(),
+  content: z.string(),
+  modifiedAt: z.string(),
+  size: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+  mimeType: z.string(),
+  encoding: z.literal("utf-8")
+});
+export type FileContent = z.infer<typeof FileContentSchema>;
+
+export const JobOutputSnapshotSchema = z.object({
+  jobId: z.string(),
+  stdout: z.string(),
+  stderr: z.string(),
+  truncated: z.boolean(),
+  stdoutBytes: z.number().int().nonnegative(),
+  stderrBytes: z.number().int().nonnegative()
+});
+export type JobOutputSnapshot = z.infer<typeof JobOutputSnapshotSchema>;
+
+export const PasskeySummarySchema = z.object({
+  id: z.string(),
+  createdAt: z.string(),
+  lastUsedAt: z.string().nullable(),
+  deviceType: z.string(),
+  backedUp: z.boolean()
+});
+export type PasskeySummary = z.infer<typeof PasskeySummarySchema>;
+
+export const BootstrapLinkSchema = z.object({
+  token: z.string(),
+  issuedAt: z.string(),
+  expiresAt: z.string(),
+  canonicalOrigin: CanonicalOriginSchema,
+  bootstrapUrl: z.string().url()
+});
+export type BootstrapLink = z.infer<typeof BootstrapLinkSchema>;
 
 export const SetupStateSchema = z.object({
   completedSteps: z.array(SetupStepIdSchema),
@@ -371,12 +413,39 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
     })
   }),
   z.object({
+    type: z.literal("chat.stream.delta"),
+    payload: z.object({
+      sessionId: z.string(),
+      runId: z.string(),
+      delta: z.string()
+    })
+  }),
+  z.object({
+    type: z.literal("chat.stream.done"),
+    payload: z.object({
+      sessionId: z.string(),
+      runId: z.string()
+    })
+  }),
+  z.object({
+    type: z.literal("chat.stream.error"),
+    payload: z.object({
+      sessionId: z.string(),
+      runId: z.string(),
+      message: z.string()
+    })
+  }),
+  z.object({
     type: z.literal("job.output"),
     payload: z.object({
       jobId: z.string(),
       stream: z.enum(["stdout", "stderr"]),
       chunk: z.string()
     })
+  }),
+  z.object({
+    type: z.literal("job.updated"),
+    payload: JobRecordSchema
   }),
   z.object({
     type: z.literal("approval.updated"),

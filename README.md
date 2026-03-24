@@ -1,13 +1,18 @@
 # DroidAgent
 
-DroidAgent is a macOS-first, single-user, self-hosted mobile PWA for running OpenClaw on your own machine with a first-party web shell for chat, files, jobs, runtime control, Keychain-backed cloud providers, LaunchAgent management, and optional Signal ingress.
+DroidAgent is a macOS-first, single-owner, self-hosted mobile PWA for running OpenClaw on your own machine with a first-party web shell for chat, files, jobs, runtime control, passkey management, Tailscale-backed phone access, Keychain-backed cloud providers, LaunchAgent management, and optional Signal ingress.
 
 ## What is implemented
 
-- `apps/server`: Hono-based control plane with passkey auth, SQLite state, OpenClaw orchestration, runtime management for Ollama and `llama.cpp`, workspace-scoped file browsing, job execution, macOS LaunchAgent control, Keychain-backed provider secrets, Signal registration/daemon management, and WebSocket dashboard updates.
-- `apps/web`: installable React/Vite PWA with a Fold-friendly mobile layout and tabs for Chat, Files, Jobs, Models, Channels, and Settings.
-- `packages/shared`: shared Zod contracts for dashboard state, runtime status, channels, sessions, jobs, approvals, and WebSocket envelopes.
-- `scripts/bootstrap.sh`: one-command bootstrap that installs dependencies, builds the monorepo, starts the server, and opens the local UI.
+- `apps/server`
+  - Hono control plane with passkey auth, SQLite state, Tailscale bootstrap/origin enforcement, OpenClaw orchestration through a harness boundary, live chat relay, workspace-scoped file browsing and editing, job execution with persisted logs, Keychain-backed provider secrets, Signal registration/daemon management, and LaunchAgent control
+- `apps/web`
+  - installable React/Vite PWA with routed Setup, Chat, Files, Jobs, Models, Channels, and Settings surfaces
+  - Fold-friendly mobile layout, install-to-home-screen support, reconnect-safe WebSocket streaming, live approvals, file editing, and job replay
+- `packages/shared`
+  - shared Zod contracts for dashboard state, file/job payloads, passkeys, bootstrap links, and WebSocket envelopes
+- `scripts/bootstrap.sh`
+  - one-command bootstrap with preflight checks, workspace build, app-directory setup, optional Ollama start, and server health wait
 
 ## Quick start
 
@@ -15,7 +20,7 @@ DroidAgent is a macOS-first, single-user, self-hosted mobile PWA for running Ope
 pnpm bootstrap
 ```
 
-If you prefer to step through it manually:
+Manual path:
 
 ```bash
 pnpm install
@@ -26,62 +31,63 @@ node apps/server/dist/index.js
 
 Then open `http://127.0.0.1:4318`.
 
-If your local `pnpm` policy skips native build scripts, the bootstrap script also compiles `better-sqlite3` explicitly inside `apps/server`.
+## Product defaults
 
-## Runtime model paths
+- OpenClaw-first harness architecture
+- macOS-primary host integrations
+- single owner with multiple passkeys
+- loopback by default, Tailscale Serve for remote phone access
+- Ollama default local runtime, llama.cpp advanced local runtime
+- optional cloud providers stored in macOS Keychain
+- optional Signal as a secondary owner ingress
 
-- Default local path: `Ollama`
-  - Install/start handled through the UI or `brew install ollama && brew services start ollama`
-  - Default model entry in the onboarding flow is `gpt-oss:20b`
-- Advanced local path: `llama.cpp`
-  - Install via `brew install llama.cpp`
-  - DroidAgent starts `llama-server` locally and registers an OpenAI-compatible provider entry for OpenClaw
-- Optional Signal channel:
-  - Install or repair through the UI or `brew install openjdk signal-cli`
-  - Supports both dedicated-number registration (`register` + `verify`) and linked-device mode (`link`)
-  - Runs `signal-cli daemon --http` locally and wires OpenClaw to the daemon-backed Signal channel
+## Main routes in the PWA
 
-## Cloud providers
-
-- API keys are stored in the macOS login Keychain, not in SQLite or the repo.
-- Supported provider secret slots:
-  - `OPENAI_API_KEY`
-  - `ANTHROPIC_API_KEY`
-  - `OPENROUTER_API_KEY`
-  - `GEMINI_API_KEY`
-  - `GROQ_API_KEY`
-  - `TOGETHER_API_KEY`
-  - `XAI_API_KEY`
-- Cloud provider model selection is exposed in the PWA and pushed into the active OpenClaw default model.
-
-## Commands
-
-```bash
-pnpm dev         # builds shared package once, then runs server + web dev processes
-pnpm build       # builds shared, server, and web
-pnpm test        # vitest across workspace
-pnpm typecheck   # TS typecheck across workspace
-pnpm bootstrap   # one-command local bootstrap
-```
+- `Setup`
+  - workspace, runtime, model, Tailscale bootstrap
+- `Chat`
+  - streaming assistant turns, approvals, session history, abort
+- `Files`
+  - workspace-relative browser plus direct text-file editing with conflict checks
+- `Jobs`
+  - owner-submitted shell jobs, live stdout/stderr, replayable logs
+- `Models`
+  - runtime install/start/stop plus active provider view
+- `Channels`
+  - Signal runtime, registration, linking, pairing
+- `Settings`
+  - LaunchAgent, passkeys, cloud providers, remote access, PWA install
 
 ## Key paths
 
 - App state: `~/.droidagent`
+- Job logs: `~/.droidagent/logs/jobs`
 - OpenClaw profile: `~/.openclaw-droidagent`
 - Server URL: `http://127.0.0.1:4318`
 - OpenClaw Gateway URL: `ws://127.0.0.1:18789`
+- OpenClaw HTTP URL: `http://127.0.0.1:18789`
 - llama.cpp URL: `http://127.0.0.1:8012/v1`
 - Signal daemon URL: `http://127.0.0.1:8091`
 - LaunchAgent plist: `~/Library/LaunchAgents/com.droidagent.server.plist`
 
+## Commands
+
+```bash
+pnpm dev
+pnpm build
+pnpm test
+pnpm typecheck
+pnpm bootstrap
+```
+
 ## Notes
 
-- WebAuthn/passkeys are the primary login method.
-- The browser never talks directly to OpenClaw; it goes through the DroidAgent server.
-- File and job operations are constrained to the configured workspace root.
-- `sudo` is blocked for first-party job execution.
-- Signal is optional and treated as lower-trust ingress than the local web session.
-- LaunchAgent install/start/stop/uninstall is managed from the PWA and backed by `launchctl`.
+- The browser never talks directly to OpenClaw. DroidAgent is the only frontend and relay.
+- File and job operations are constrained to the configured workspace root. File APIs use workspace-relative paths.
+- Owner-submitted jobs run directly inside DroidAgent policy. Agent-requested exec continues through OpenClaw approvals.
+- Job execution enforces timeout and output ceilings. Replayable stdout/stderr logs live under `~/.droidagent/logs/jobs/`.
+- Tailscale is the supported remote path. Cloudflare/public exposure is out of scope.
+- If a feature is not production-ready, it is hidden instead of stubbed.
 
 Further details:
 

@@ -19,6 +19,8 @@
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
   background:
     radial-gradient(circle at top left, rgba(242, 193, 78, 0.22), transparent 30%),
     radial-gradient(circle at top right, rgba(237, 106, 90, 0.18), transparent 28%),
@@ -132,6 +134,16 @@ small {
   gap: 0.8rem;
 }
 
+.status-block {
+  display: grid;
+  gap: 0.45rem;
+  margin: 1rem 0;
+  padding: 0.9rem 1rem;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+}
+
 .topbar,
 .summary-grid,
 .setup-grid,
@@ -172,6 +184,17 @@ small {
   border-color: rgba(237, 106, 90, 0.45);
 }
 
+.status-banner.offline {
+  border-color: rgba(158, 167, 174, 0.5);
+  background: rgba(24, 29, 33, 0.95);
+}
+
+.offline-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
 .summary-card strong {
   display: block;
   font-size: 1.8rem;
@@ -202,8 +225,40 @@ small {
 }
 
 .main-layout {
+  container-type: inline-size;
+  container-name: main;
   grid-template-columns: 1fr;
-  padding-bottom: 5.5rem;
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+}
+
+.routed-layout {
+  align-items: start;
+}
+
+@container main (min-width: 640px) {
+  .split-panel {
+    grid-template-columns: minmax(240px, 320px) 1fr;
+  }
+
+  .chat-panel {
+    grid-template-columns: minmax(200px, 280px) 1fr;
+    grid-template-areas: "sessions thread" "sessions composer";
+  }
+
+  .session-strip {
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: visible;
+    grid-area: sessions;
+  }
+
+  .chat-thread {
+    grid-area: thread;
+  }
+
+  .composer {
+    grid-area: composer;
+  }
 }
 
 .stack-list {
@@ -290,25 +345,45 @@ small {
   color: var(--text);
 }
 
+.editor-panel {
+  display: grid;
+  gap: 0.8rem;
+  min-height: 0;
+}
+
+.editor-toolbar {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+}
+
+.editor-textarea {
+  min-height: 420px;
+  font-family: "SFMono-Regular", ui-monospace, monospace;
+}
+
 .viewer-panel {
   min-height: 420px;
 }
 
 .bottom-nav {
   position: fixed;
-  left: 1rem;
-  right: 1rem;
-  bottom: 1rem;
+  left: max(1rem, env(safe-area-inset-left));
+  right: max(1rem, env(safe-area-inset-right));
+  bottom: max(1rem, env(safe-area-inset-bottom));
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   gap: 0.6rem;
   padding: 0.75rem;
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
   border-radius: 26px;
   border: 1px solid var(--border);
   background: rgba(17, 19, 21, 0.92);
   backdrop-filter: blur(24px);
 }
 
+.nav-link,
 .bottom-nav button {
   background: transparent;
   color: var(--muted);
@@ -316,8 +391,11 @@ small {
   display: grid;
   justify-items: center;
   gap: 0.25rem;
+  text-decoration: none;
+  border-radius: 18px;
 }
 
+.nav-link.active,
 .bottom-nav button.active {
   color: var(--text);
   background: rgba(242, 193, 78, 0.12);
@@ -328,10 +406,27 @@ label {
   gap: 0.45rem;
 }
 
+.selectable {
+  cursor: pointer;
+}
+
+.job-output-grid {
+  gap: 1rem;
+}
+
+.message-card.streaming {
+  border-style: dashed;
+}
+
+.status-banner a {
+  color: var(--accent);
+}
+
 @media (max-width: 820px) {
   .summary-grid,
   .split-panel,
-  .composer {
+  .composer,
+  .editor-toolbar {
     grid-template-columns: 1fr;
   }
 

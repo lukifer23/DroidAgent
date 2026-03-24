@@ -2,10 +2,10 @@ import { DashboardStateSchema } from "@droidagent/shared";
 
 import { accessService } from "./access-service.js";
 import { appStateService } from "./app-state-service.js";
+import { harnessService } from "./harness-service.js";
 import { jobService } from "./job-service.js";
 import { keychainService } from "./keychain-service.js";
 import { launchAgentService } from "./launch-agent-service.js";
-import { openclawService } from "./openclaw-service.js";
 import { runtimeService } from "./runtime-service.js";
 import { signalService } from "./signal-service.js";
 import { startupService } from "./startup-service.js";
@@ -33,11 +33,11 @@ export class DashboardService {
       runtimeService.getRuntimeStatuses(),
       runtimeService.listProviderProfiles(),
       keychainService.listProviderSummaries(),
-      openclawService.getChannelStatuses(),
+      harnessService.listChannels(),
       launchAgentService.status(),
-      openclawService.listSessions(),
+      harnessService.listSessions(),
       jobService.listJobs(),
-      openclawService.listApprovals()
+      harnessService.listApprovals()
     ]);
 
     return DashboardStateSchema.parse({

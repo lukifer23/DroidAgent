@@ -12,10 +12,11 @@ import { and, desc, eq } from "drizzle-orm";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { Context } from "hono";
 
-import { nowIso } from "@droidagent/shared";
+import { PasskeySummarySchema, nowIso } from "@droidagent/shared";
 
 import { db, schema } from "../db/index.js";
 import { appStateService } from "./app-state-service.js";
+import { accessService } from "./access-service.js";
 
 const SESSION_COOKIE = "droidagent_session";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
@@ -222,6 +223,10 @@ export class AuthService {
     return user;
   }
 
+  async beginAuthenticationFromContext(c: Context) {
+    return this.beginAuthentication(this.getOriginInfo(c));
+  }
+
   async beginAuthentication(originInfo: RequestOriginInfo) {
     const user = await db.query.users.findFirst();
     if (!user) {
@@ -361,27 +366,90 @@ export class AuthService {
     if (!token) {
       return null;
     }
-
     const session = await db.query.authSessions.findFirst({
       where: eq(schema.authSessions.tokenHash, hashToken(token))
     });
     if (!session || new Date(session.expiresAt).getTime() <= Date.now()) {
       return null;
     }
-
     const user = await db.query.users.findFirst({
       where: eq(schema.users.id, session.userId)
     });
-
     if (!user) {
       return null;
     }
-
     return {
       id: user.id,
       username: user.username,
       displayName: user.displayName
     };
+  }
+
+  async listPasskeys(user: AuthUser) {
+    const passkeys = await db.query.passkeys.findMany({
+      where: eq(schema.passkeys.userId, user.id),
+      orderBy: () => [desc(schema.passkeys.createdAt)]
+    });
+
+    return passkeys.map((passkey) =>
+      PasskeySummarySchema.parse({
+        id: passkey.id,
+        createdAt: passkey.createdAt,
+        lastUsedAt: passkey.lastUsedAt,
+        deviceType: passkey.deviceType,
+        backedUp: passkey.backedUp
+      })
+    );
+  }
+
+  private getOriginInfo(c: Context): RequestOriginInfo {
+    const url = new URL(c.req.url);
+    return {
+      rpId: url.hostname || "localhost",
+      origin: url.origin
+    };
+  }
+
+  private requireSecureCookie(c: Context): boolean {
+    const url = new URL(c.req.url);
+    return url.protocol === "https:";
+  }
+
+  async beginRegistration(c: Context): Promise<ReturnType<AuthService["beginOwnerRegistration"]>> {
+    const ownerExists = await this.hasUser();
+    if (ownerExists) {
+      throw new Error("A passkey is already configured. Use sign in instead.");
+    }
+    const token = new URL(c.req.url).searchParams.get("bootstrap");
+    if (token) {
+      await accessService.assertBootstrapRegistrationRequest(c, token);
+    } else {
+      await accessService.assertLocalhostBootstrapRequest(c);
+    }
+    return this.beginOwnerRegistration(this.getOriginInfo(c));
+  }
+
+  async finishRegistration(c: Context, response: unknown): Promise<AuthUser> {
+    const token = new URL(c.req.url).searchParams.get("bootstrap");
+    if (token) {
+      await accessService.assertBootstrapRegistrationRequest(c, token);
+      await accessService.consumeBootstrapToken(token);
+    } else {
+      await accessService.assertLocalhostBootstrapRequest(c);
+    }
+    return this.finishOwnerRegistration(c, response, this.requireSecureCookie(c));
+  }
+
+  async finishAuthenticationFromContext(c: Context, response: unknown): Promise<AuthUser> {
+    return this.finishAuthentication(c, response, this.requireSecureCookie(c));
+  }
+
+  async beginAdditionalRegistrationFromContext(c: Context, user: AuthUser) {
+    return await this.beginAdditionalPasskeyRegistration(user, this.getOriginInfo(c));
+  }
+
+  async finishAdditionalRegistrationFromContext(c: Context, user: AuthUser, response: unknown) {
+    return await this.finishAdditionalPasskeyRegistration(c, user, response, this.requireSecureCookie(c));
   }
 }
 

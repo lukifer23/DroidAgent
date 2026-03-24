@@ -29,3 +29,9 @@ export function postJson<T>(input: string, body: unknown): Promise<T> {
   });
 }
 
+export function putJson<T>(input: string, body: unknown): Promise<T> {
+  return api<T>(input, {
+    method: "PUT",
+    body: JSON.stringify(body)
+  });
+}

@@ -1,4 +1,9 @@
-import { StartupDiagnosticSchema, type StartupDiagnostic } from "@droidagent/shared";
+import {
+  StartupDiagnosticSchema,
+  type CloudProviderSummary,
+  type RuntimeStatus,
+  type StartupDiagnostic
+} from "@droidagent/shared";
 
 import { accessService } from "./access-service.js";
 import { appStateService } from "./app-state-service.js";
@@ -77,7 +82,7 @@ export class StartupService {
       );
     }
 
-    const ollama = runtimes.find((runtime) => runtime.id === "ollama");
+    const ollama = runtimes.find((runtime: RuntimeStatus) => runtime.id === "ollama");
     diagnostics.push(
       StartupDiagnosticSchema.parse({
         id: "ollama",
@@ -93,7 +98,7 @@ export class StartupService {
       })
     );
 
-    const llamaCpp = runtimes.find((runtime) => runtime.id === "llamaCpp");
+    const llamaCpp = runtimes.find((runtime: RuntimeStatus) => runtime.id === "llamaCpp");
     try {
       if (applyChanges && runtimeSettings.selectedRuntime === "llamaCpp" && runtimeSettings.llamaCppModel) {
         await runtimeService.startRuntime("llamaCpp");
@@ -159,7 +164,9 @@ export class StartupService {
       );
     }
 
-    const activeCloud = cloudProviders.find((provider) => provider.id === runtimeSettings.activeProviderId);
+    const activeCloud = cloudProviders.find(
+      (provider: CloudProviderSummary) => provider.id === runtimeSettings.activeProviderId
+    );
     diagnostics.push(
       StartupDiagnosticSchema.parse({
         id: "cloudProviders",

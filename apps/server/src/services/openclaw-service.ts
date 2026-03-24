@@ -7,27 +7,111 @@ import {
   ApprovalRecordSchema,
   ChannelConfigSummarySchema,
   ChannelStatusSchema,
+  ChatMessageSchema,
   RuntimeStatusSchema,
   SessionSummarySchema,
   nowIso,
   type ApprovalRecord,
   type ChannelConfigSummary,
   type ChannelStatus,
+  type ChatMessage,
   type SessionSummary
 } from "@droidagent/shared";
 
-import { OPENCLAW_GATEWAY_PORT, OPENCLAW_GATEWAY_URL, OPENCLAW_PROFILE, baseEnv, paths, resolveOpenClawBin } from "../env.js";
+import {
+  OPENCLAW_GATEWAY_HTTP_URL,
+  OPENCLAW_GATEWAY_PORT,
+  OPENCLAW_GATEWAY_URL,
+  OPENCLAW_PROFILE,
+  baseEnv,
+  paths,
+  resolveOpenClawBin
+} from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
 import { appStateService } from "./app-state-service.js";
+import type { HarnessRuntimeModelConfig, StreamRelayCallbacks } from "./harness-service.js";
 import { keychainService } from "./keychain-service.js";
+
+const GATEWAY_READY_RETRIES = 5;
+const GATEWAY_READY_DELAY_MS = 800;
+const CHAT_COMPLETIONS_PATH = "/v1/chat/completions";
 
 function stringifyConfigValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function extractEventData(block: string): string | null {
+  const lines = block
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart());
+
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return lines.join("\n");
+}
+
+function extractDeltaText(payload: unknown): string {
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+
+  const choices = Array.isArray((payload as { choices?: unknown }).choices)
+    ? ((payload as { choices: Array<Record<string, unknown>> }).choices ?? [])
+    : [];
+  const delta = choices[0]?.delta;
+
+  if (typeof delta === "string") {
+    return delta;
+  }
+
+  if (delta && typeof delta === "object") {
+    const content = (delta as { content?: unknown }).content;
+    if (typeof content === "string") {
+      return content;
+    }
+    if (Array.isArray(content)) {
+      return content
+        .map((part) => {
+          if (typeof part === "string") {
+            return part;
+          }
+          if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
+            return (part as { text: string }).text;
+          }
+          return "";
+        })
+        .join("");
+    }
+  }
+
+  return "";
+}
+
+function parseHistoryMessage(sessionKey: string, message: Record<string, unknown>, index: number): ChatMessage {
+  return ChatMessageSchema.parse({
+    id: String(message.id ?? `${sessionKey}-${index}`),
+    sessionId: sessionKey,
+    role: message.role === "assistant" || message.role === "system" || message.role === "tool" ? message.role : "user",
+    text:
+      typeof message.content === "string"
+        ? message.content
+        : typeof message.text === "string"
+          ? message.text
+          : JSON.stringify(message.content ?? ""),
+    createdAt: new Date(Number(message.ts ?? message.createdAtMs ?? Date.now())).toISOString(),
+    status: "complete",
+    source: "openclaw"
+  });
+}
+
 export class OpenClawService {
   private gatewayProcess: ChildProcess | null = null;
   private gatewayToken: string | null = null;
+  private activeRuns = new Map<string, { controller: AbortController; runId: string }>();
 
   private get openclawBin(): string {
     const bin = resolveOpenClawBin();
@@ -45,11 +129,13 @@ export class OpenClawService {
     if (this.gatewayToken) {
       return this.gatewayToken;
     }
+
     const existing = await appStateService.getJsonSetting<string | null>("openclawGatewayToken", null);
     if (existing) {
       this.gatewayToken = existing;
       return existing;
     }
+
     const next = randomUUID();
     this.gatewayToken = next;
     await appStateService.setJsonSetting("openclawGatewayToken", next);
@@ -70,6 +156,120 @@ export class OpenClawService {
     }
   }
 
+  private async openclawEnv(): Promise<NodeJS.ProcessEnv> {
+    return {
+      ...baseEnv(),
+      ...(await keychainService.getProcessEnv()),
+      OPENCLAW_GATEWAY_TOKEN: await this.ensureGatewayToken(),
+      OLLAMA_API_KEY: "ollama-local"
+    };
+  }
+
+  private async gatewayHeaders(sessionKey: string): Promise<HeadersInit> {
+    return {
+      accept: "text/event-stream",
+      authorization: `Bearer ${await this.ensureGatewayToken()}`,
+      "content-type": "application/json",
+      "x-openclaw-agent-id": "main",
+      "x-openclaw-session-key": sessionKey
+    };
+  }
+
+  private async streamMessageRun(
+    sessionKey: string,
+    message: string,
+    runId: string,
+    controller: AbortController,
+    relay: StreamRelayCallbacks
+  ): Promise<void> {
+    try {
+      const response = await fetch(`${OPENCLAW_GATEWAY_HTTP_URL}${CHAT_COMPLETIONS_PATH}`, {
+        method: "POST",
+        headers: await this.gatewayHeaders(sessionKey),
+        body: JSON.stringify({
+          model: "openclaw",
+          stream: true,
+          messages: [
+            {
+              role: "user",
+              content: message
+            }
+          ]
+        }),
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        const responseText = await response.text().catch(() => response.statusText);
+        throw new Error(responseText || `OpenClaw stream failed with ${response.status}.`);
+      }
+
+      if (!response.body) {
+        throw new Error("OpenClaw stream did not provide a response body.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          buffer += decoder.decode();
+          break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() ?? "";
+
+        for (const block of blocks) {
+          const rawData = extractEventData(block);
+          if (!rawData || rawData === "[DONE]") {
+            continue;
+          }
+
+          try {
+            const parsed = JSON.parse(rawData) as unknown;
+            const delta = extractDeltaText(parsed);
+            if (delta) {
+              await relay.onDelta(delta);
+            }
+          } catch {
+            // Ignore malformed SSE frames from the local gateway and keep the stream alive.
+          }
+        }
+      }
+
+      const trailing = extractEventData(buffer);
+      if (trailing && trailing !== "[DONE]") {
+        try {
+          const parsed = JSON.parse(trailing) as unknown;
+          const delta = extractDeltaText(parsed);
+          if (delta) {
+            await relay.onDelta(delta);
+          }
+        } catch {
+          // ignore malformed trailing data
+        }
+      }
+
+      await relay.onDone();
+    } catch (error) {
+      if ((error as { name?: string }).name === "AbortError") {
+        await relay.onDone();
+        return;
+      }
+
+      await relay.onError(error instanceof Error ? error.message : "OpenClaw stream failed.");
+    } finally {
+      const active = this.activeRuns.get(sessionKey);
+      if (active?.runId === runId) {
+        this.activeRuns.delete(sessionKey);
+      }
+    }
+  }
+
   async ensureConfigured(): Promise<void> {
     fs.mkdirSync(paths.openClawStateDir, { recursive: true });
     fs.writeFileSync(paths.openClawEnvPath, "OLLAMA_API_KEY=ollama-local\n", { encoding: "utf8" });
@@ -79,6 +279,7 @@ export class OpenClawService {
       ["gateway.port", OPENCLAW_GATEWAY_PORT],
       ["gateway.bind", "loopback"],
       ["gateway.auth.mode", "token"],
+      ["gateway.http.endpoints.chatCompletions.enabled", true],
       ["agents.defaults.model.primary", "ollama/gpt-oss:20b"],
       ["tools.exec.host", "gateway"],
       ["tools.exec.security", "allowlist"],
@@ -91,16 +292,13 @@ export class OpenClawService {
       await this.execOpenClaw(["config", "set", key, stringifyConfigValue(value), "--strict-json"]);
     }
 
-    await this.execOpenClaw(["config", "set", "gateway.auth.token", stringifyConfigValue(await this.ensureGatewayToken()), "--strict-json"]);
-  }
-
-  private async openclawEnv(): Promise<NodeJS.ProcessEnv> {
-    return {
-      ...baseEnv(),
-      ...(await keychainService.getProcessEnv()),
-      OPENCLAW_GATEWAY_TOKEN: await this.ensureGatewayToken(),
-      OLLAMA_API_KEY: "ollama-local"
-    };
+    await this.execOpenClaw([
+      "config",
+      "set",
+      "gateway.auth.token",
+      stringifyConfigValue(await this.ensureGatewayToken()),
+      "--strict-json"
+    ]);
   }
 
   async status() {
@@ -137,7 +335,7 @@ export class OpenClawService {
         "--token",
         await this.ensureGatewayToken()
       ]);
-      const parsed = JSON.parse(output);
+      const parsed = JSON.parse(output) as { version?: unknown };
       return RuntimeStatusSchema.parse({
         id: "openclaw",
         label: "OpenClaw Gateway",
@@ -170,6 +368,10 @@ export class OpenClawService {
         metadata: {}
       });
     }
+  }
+
+  async health() {
+    return await this.status();
   }
 
   async startGateway(): Promise<void> {
@@ -211,6 +413,31 @@ export class OpenClawService {
 
     this.gatewayProcess = child;
     await appStateService.setJsonSetting("openclawStartedAt", nowIso());
+
+    for (let i = 0; i < GATEWAY_READY_RETRIES; i++) {
+      await new Promise((resolve) => setTimeout(resolve, GATEWAY_READY_DELAY_MS * (i + 1)));
+      if (this.gatewayProcess?.exitCode !== null) {
+        throw new Error("OpenClaw gateway process exited before becoming ready.");
+      }
+      try {
+        await this.execOpenClaw([
+          "gateway",
+          "health",
+          "--json",
+          "--timeout",
+          "2000",
+          "--url",
+          OPENCLAW_GATEWAY_URL,
+          "--token",
+          await this.ensureGatewayToken()
+        ]);
+        return;
+      } catch {
+        if (i === GATEWAY_READY_RETRIES - 1) {
+          throw new Error("OpenClaw gateway did not become ready in time.");
+        }
+      }
+    }
   }
 
   async stopGateway(): Promise<void> {
@@ -239,11 +466,12 @@ export class OpenClawService {
     }
 
     const output = await this.execOpenClaw(args);
-    const parsed = JSON.parse(output);
+    const parsed = JSON.parse(output) as Record<string, unknown>;
     if ("error" in parsed && parsed.error) {
-      throw new Error(typeof parsed.error?.message === "string" ? parsed.error.message : "OpenClaw gateway call failed.");
+      const errorDetails = parsed.error as { message?: unknown };
+      throw new Error(typeof errorDetails?.message === "string" ? errorDetails.message : "OpenClaw gateway call failed.");
     }
-    return parsed;
+    return parsed as T;
   }
 
   async listSessions(): Promise<SessionSummary[]> {
@@ -263,7 +491,9 @@ export class OpenClawService {
             scope: sessionKey.startsWith("signal") ? "signal" : "main",
             updatedAt: new Date(Number(item.updatedAtMs ?? item.updatedAt ?? Date.now())).toISOString(),
             unreadCount: Number(item.unreadCount ?? 0),
-            lastMessagePreview: String(item.lastMessagePreview ?? (item.lastMessage as { text?: unknown } | undefined)?.text ?? "")
+            lastMessagePreview: String(
+              item.lastMessagePreview ?? (item.lastMessage as { text?: unknown } | undefined)?.text ?? ""
+            )
           });
         })
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
@@ -272,27 +502,29 @@ export class OpenClawService {
     }
   }
 
-  async loadChatHistory(sessionKey: string) {
+  async loadHistory(sessionKey: string): Promise<ChatMessage[]> {
     const response = await this.callGateway<{ messages?: Array<Record<string, unknown>> }>("chat.history", {
       sessionKey,
       limit: 150
     });
 
     const messages = Array.isArray(response.messages) ? response.messages : [];
-    return messages.map((message, index) => ({
-      id: String(message.id ?? `${sessionKey}-${index}`),
-      sessionId: sessionKey,
-      role: message.role === "assistant" || message.role === "system" || message.role === "tool" ? message.role : "user",
-      text:
-        typeof message.content === "string"
-          ? message.content
-          : typeof message.text === "string"
-            ? message.text
-            : JSON.stringify(message.content ?? ""),
-      createdAt: new Date(Number(message.ts ?? message.createdAtMs ?? Date.now())).toISOString(),
-      status: "complete" as const,
-      source: "openclaw" as const
-    }));
+    return messages.map((message, index) => parseHistoryMessage(sessionKey, message, index));
+  }
+
+  async loadChatHistory(sessionKey: string) {
+    return await this.loadHistory(sessionKey);
+  }
+
+  async sendMessage(sessionKey: string, message: string, relay: StreamRelayCallbacks): Promise<{ runId: string }> {
+    await this.ensureConfigured();
+    await this.abortMessage(sessionKey);
+
+    const runId = randomUUID();
+    const controller = new AbortController();
+    this.activeRuns.set(sessionKey, { controller, runId });
+    void this.streamMessageRun(sessionKey, message, runId, controller, relay);
+    return { runId };
   }
 
   async sendChat(sessionKey: string, message: string): Promise<void> {
@@ -305,6 +537,20 @@ export class OpenClawService {
       },
       true
     );
+  }
+
+  async abortMessage(sessionKey: string): Promise<void> {
+    const active = this.activeRuns.get(sessionKey);
+    if (active) {
+      active.controller.abort();
+      this.activeRuns.delete(sessionKey);
+    }
+
+    try {
+      await this.callGateway("chat.abort", { sessionKey }, true);
+    } catch {
+      // Some gateway builds may not expose chat.abort; the local abort controller still ends the relay.
+    }
   }
 
   async listApprovals(): Promise<ApprovalRecord[]> {
@@ -346,7 +592,7 @@ export class OpenClawService {
 
   async getChannelStatuses(): Promise<{ statuses: ChannelStatus[]; config: ChannelConfigSummary }> {
     const runtimeSettings = await appStateService.getRuntimeSettings();
-    let statuses: ChannelStatus[] = [
+    const statuses: ChannelStatus[] = [
       ChannelStatusSchema.parse({
         id: "web",
         label: "Web/PWA",
@@ -390,19 +636,19 @@ export class OpenClawService {
     } catch {
       statuses.push(
         ChannelStatusSchema.parse({
-        id: "signal",
-        label: "Signal",
-        enabled: runtimeSettings.signalRegistrationState === "registered",
-        configured: Boolean(runtimeSettings.signalAccountId),
-        health: "warn",
-        healthMessage: runtimeSettings.signalLastError ?? "Signal is not configured yet.",
-        metadata: {
-          daemonRunning: runtimeSettings.signalDaemonState === "running",
-          hasAccount: Boolean(runtimeSettings.signalAccountId)
-        }
-      })
-    );
-  }
+          id: "signal",
+          label: "Signal",
+          enabled: runtimeSettings.signalRegistrationState === "registered",
+          configured: Boolean(runtimeSettings.signalAccountId),
+          health: "warn",
+          healthMessage: runtimeSettings.signalLastError ?? "Signal is not configured yet.",
+          metadata: {
+            daemonRunning: runtimeSettings.signalDaemonState === "running",
+            hasAccount: Boolean(runtimeSettings.signalAccountId)
+          }
+        })
+      );
+    }
 
     let pairingPending = 0;
     let approvedPeers: string[] = [];
@@ -442,6 +688,10 @@ export class OpenClawService {
         }
       })
     };
+  }
+
+  async listChannels(): Promise<{ statuses: ChannelStatus[]; config: ChannelConfigSummary }> {
+    return await this.getChannelStatuses();
   }
 
   async configureSignal(params: { cliPath: string; accountId: string; httpUrl?: string }): Promise<void> {
@@ -514,6 +764,21 @@ export class OpenClawService {
   async selectPrimaryModel(modelId: string): Promise<void> {
     await this.ensureConfigured();
     await this.execOpenClaw(["models", "set", modelId]);
+  }
+
+  async configureRuntimeModel(config: HarnessRuntimeModelConfig): Promise<void> {
+    if (config.providerId === "ollama-default") {
+      const modelId = config.modelId.startsWith("ollama/") ? config.modelId.slice("ollama/".length) : config.modelId;
+      await this.selectOllamaModel(modelId);
+      return;
+    }
+
+    if (config.providerId === "llamacpp-default") {
+      await this.registerLlamaCppProvider(config.modelId, config.contextWindow ?? 8192);
+      return;
+    }
+
+    await this.selectPrimaryModel(config.modelId);
   }
 }
 
