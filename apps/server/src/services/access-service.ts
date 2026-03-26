@@ -6,20 +6,23 @@ import {
   BootstrapStateSchema,
   CanonicalOriginSchema,
   ServeStatusSchema,
-  TailscaleStatusSchema,
   nowIso,
   type BootstrapState,
   type CanonicalOrigin,
-  type ServeStatus,
-  type TailscaleStatus
+  type ServeStatus
 } from "@droidagent/shared";
 
 import { SERVER_PORT } from "../env.js";
-import { CommandError, runCommand } from "../lib/process.js";
+import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 import { authService } from "./auth-service.js";
+import {
+  cloudflareRemoteAccessProvider,
+  tailscaleRemoteAccessProvider
+} from "./remote-access-service.js";
 
 const BOOTSTRAP_TOKEN_TTL_MS = 1000 * 60 * 15;
+const ACCESS_SNAPSHOT_TTL_MS = 5000;
 
 function normalizeOrigin(value: string): string {
   return new URL(value).origin;
@@ -39,64 +42,100 @@ function isLoopbackHostname(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
 }
 
-function recursiveStrings(value: unknown, result: string[] = []): string[] {
-  if (typeof value === "string") {
-    result.push(value);
-    return result;
-  }
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      recursiveStrings(item, result);
-    }
-    return result;
-  }
-
-  if (value && typeof value === "object") {
-    for (const item of Object.values(value)) {
-      recursiveStrings(item, result);
-    }
-  }
-
-  return result;
-}
-
-function cleanDnsName(value: unknown): string | null {
-  if (typeof value !== "string" || !value.trim()) {
-    return null;
-  }
-  return value.replace(/\.$/, "");
-}
-
-function safeJsonParse(raw: string): unknown {
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-}
-
-function extractServeTarget(raw: unknown): string | null {
-  const strings = recursiveStrings(raw);
-  return (
-    strings.find((value) => value.includes(`127.0.0.1:${SERVER_PORT}`)) ??
-    strings.find((value) => value.includes(`localhost:${SERVER_PORT}`)) ??
-    null
-  );
-}
-
-function extractServeUrl(raw: unknown): string | null {
-  const strings = recursiveStrings(raw);
-  return strings.find((value) => /^https:\/\/.+\.ts\.net\/?$/i.test(value.trim())) ?? null;
-}
-
 export class AccessService {
-  private async hasTailscaleBinary(): Promise<boolean> {
-    try {
-      await runCommand("which", ["tailscale"]);
-      return true;
-    } catch {
-      return false;
+  private readonly bootstrapStateCache = new TtlCache<BootstrapState>(ACCESS_SNAPSHOT_TTL_MS);
+  private readonly accessSnapshotCache = new TtlCache<{
+    canonicalUrl: string | null;
+    canonicalOrigin: CanonicalOrigin | null;
+    accessMode: "loopback" | "tailscale" | "cloudflare";
+    tailscaleStatus: Awaited<ReturnType<AccessService["getTailscaleStatus"]>>;
+    cloudflareStatus: Awaited<ReturnType<AccessService["getCloudflareStatus"]>>;
+    serveStatus: ServeStatus;
+    bootstrapRequired: boolean;
+  }>(ACCESS_SNAPSHOT_TTL_MS);
+
+  invalidateCache(): void {
+    this.bootstrapStateCache.invalidate();
+    this.accessSnapshotCache.invalidate();
+    tailscaleRemoteAccessProvider.invalidateStatus();
+    cloudflareRemoteAccessProvider.invalidateStatus();
+  }
+
+  private buildServeStatus(
+    accessMode: "loopback" | "tailscale" | "cloudflare",
+    tailscale: Awaited<ReturnType<AccessService["getTailscaleStatus"]>>,
+    cloudflare: Awaited<ReturnType<AccessService["getCloudflareStatus"]>>
+  ): ServeStatus {
+    const activeSource = accessMode === "cloudflare" ? "cloudflare" : accessMode === "tailscale" ? "tailscale" : "none";
+
+    if (activeSource === "cloudflare" && cloudflare.canonicalUrl && cloudflare.running) {
+      return ServeStatusSchema.parse({
+        enabled: true,
+        health: cloudflare.health,
+        healthMessage: `Cloudflare Tunnel is proxying to http://127.0.0.1:${SERVER_PORT}.`,
+        source: "cloudflare",
+        url: cloudflare.canonicalUrl,
+        target: `http://127.0.0.1:${SERVER_PORT}`,
+        lastCheckedAt: cloudflare.lastCheckedAt
+      });
+    }
+
+    if (tailscale.httpsEnabled && tailscale.canonicalUrl) {
+      return ServeStatusSchema.parse({
+        enabled: true,
+        health: tailscale.health,
+        healthMessage: `Serve is proxying to http://127.0.0.1:${SERVER_PORT}.`,
+        source: "tailscale",
+        url: tailscale.canonicalUrl,
+        target: `http://127.0.0.1:${SERVER_PORT}`,
+        lastCheckedAt: tailscale.lastCheckedAt
+      });
+    }
+
+    return ServeStatusSchema.parse({
+      enabled: false,
+      health: cloudflare.configured || tailscale.authenticated ? "warn" : "warn",
+      healthMessage: "No remote provider is exposing DroidAgent yet.",
+      source: "none",
+      url: null,
+      target: null,
+      lastCheckedAt: nowIso()
+    });
+  }
+
+  private async assertCanonicalOriginReadyForBootstrap(canonicalOrigin: CanonicalOrigin): Promise<void> {
+    if (canonicalOrigin.source === "tailscaleServe") {
+      const tailscale = await this.getTailscaleStatus();
+      if (
+        !tailscale.installed ||
+        !tailscale.running ||
+        !tailscale.authenticated ||
+        !tailscale.magicDnsEnabled ||
+        !tailscale.httpsEnabled ||
+        !tailscale.canonicalUrl ||
+        normalizeOrigin(tailscale.canonicalUrl) !== canonicalOrigin.origin
+      ) {
+        throw new Error(
+          "The canonical Tailscale URL is not currently reachable. Re-enable Tailscale Serve or switch the canonical DroidAgent URL before generating a phone bootstrap link."
+        );
+      }
+      return;
+    }
+
+    if (canonicalOrigin.source === "cloudflareTunnel") {
+      const cloudflare = await this.getCloudflareStatus();
+      if (
+        !cloudflare.installed ||
+        !cloudflare.configured ||
+        !cloudflare.tokenStored ||
+        !cloudflare.running ||
+        !cloudflare.canonicalUrl ||
+        normalizeOrigin(cloudflare.canonicalUrl) !== canonicalOrigin.origin
+      ) {
+        throw new Error(
+          "The canonical Cloudflare URL is not currently reachable. Re-enable the named tunnel or switch the canonical DroidAgent URL before generating a phone bootstrap link."
+        );
+      }
     }
   }
 
@@ -112,136 +151,31 @@ export class AccessService {
     return isLoopbackHostname(this.getRequestUrl(c).hostname);
   }
 
-  private async readTailscaleRawStatus(): Promise<{
-    version: string | null;
-    statusRaw: unknown;
-    serveRaw: unknown;
-    running: boolean;
-  }> {
-    if (!(await this.hasTailscaleBinary())) {
-      return {
-        version: null,
-        statusRaw: null,
-        serveRaw: null,
-        running: false
-      };
-    }
-
-    let version: string | null = null;
-    try {
-      version = (await runCommand("tailscale", ["version"], { okExitCodes: [0, 1] })).stdout.trim().split("\n")[0] || null;
-    } catch {
-      version = null;
-    }
-
-    try {
-      const statusOutput = await runCommand("tailscale", ["status", "--json"]);
-      const serveOutput = await runCommand("tailscale", ["serve", "status", "--json"], { okExitCodes: [0, 1] });
-      return {
-        version,
-        statusRaw: safeJsonParse(statusOutput.stdout),
-        serveRaw: safeJsonParse(serveOutput.stdout),
-        running: true
-      };
-    } catch (error) {
-      if (error instanceof CommandError) {
-        return {
-          version,
-          statusRaw: safeJsonParse(error.stdout),
-          serveRaw: null,
-          running: false
-        };
-      }
-      throw error;
-    }
+  async getTailscaleStatus() {
+    return await tailscaleRemoteAccessProvider.getStatus();
   }
 
-  async getTailscaleStatus(): Promise<TailscaleStatus> {
-    if (!(await this.hasTailscaleBinary())) {
-      return TailscaleStatusSchema.parse({
-        installed: false,
-        running: false,
-        authenticated: false,
-        health: "warn",
-        healthMessage: "Tailscale is not installed on this host.",
-        version: null,
-        deviceName: null,
-        tailnetName: null,
-        dnsName: null,
-        magicDnsEnabled: false,
-        httpsEnabled: false,
-        serveCommand: null,
-        canonicalUrl: null,
-        lastCheckedAt: nowIso()
-      });
-    }
-
-    const { version, statusRaw, serveRaw, running } = await this.readTailscaleRawStatus();
-    const status = (statusRaw ?? {}) as Record<string, unknown>;
-    const self = (status.Self ?? {}) as Record<string, unknown>;
-    const currentTailnet = (status.CurrentTailnet ?? {}) as Record<string, unknown>;
-    const backendState = typeof status.BackendState === "string" ? status.BackendState : null;
-    const dnsName = cleanDnsName(self.DNSName ?? status.DNSName);
-    const deviceName = typeof self.HostName === "string" ? self.HostName : dnsName?.split(".")[0] ?? null;
-    const tailnetName =
-      typeof currentTailnet.Name === "string"
-        ? currentTailnet.Name
-        : dnsName && dnsName.split(".").length > 2
-          ? dnsName.split(".").slice(1).join(".")
-          : null;
-    const magicDnsEnabled = Boolean(currentTailnet.MagicDNSEnabled) || Boolean(dnsName);
-    const authenticated = running && backendState !== "NeedsLogin" && backendState !== "NoState" && backendState !== "Stopped";
-    const serveTarget = extractServeTarget(serveRaw);
-    const serveUrl = extractServeUrl(serveRaw) ?? (dnsName ? `https://${dnsName}` : null);
-    const httpsEnabled = Boolean(serveTarget && serveUrl);
-
-    const healthMessage = !running
-      ? "Tailscale is installed but not currently running."
-      : !authenticated
-        ? "Tailscale is running but this device is not authenticated into a tailnet."
-        : !magicDnsEnabled
-          ? "Tailscale is connected, but MagicDNS is not available for a stable HTTPS host."
-          : httpsEnabled
-            ? `Tailscale Serve is exposing DroidAgent at ${serveUrl}.`
-            : "Tailscale is connected, but Serve is not yet exposing DroidAgent.";
-
-    return TailscaleStatusSchema.parse({
-      installed: true,
-      running,
-      authenticated,
-      health: httpsEnabled ? "ok" : authenticated ? "warn" : "warn",
-      healthMessage,
-      version,
-      deviceName,
-      tailnetName,
-      dnsName,
-      magicDnsEnabled,
-      httpsEnabled,
-      serveCommand: authenticated ? `tailscale serve --bg --https=443 ${SERVER_PORT}` : null,
-      canonicalUrl: authenticated && magicDnsEnabled ? serveUrl : null,
-      lastCheckedAt: nowIso()
-    });
+  async getCloudflareStatus() {
+    return await cloudflareRemoteAccessProvider.getStatus();
   }
 
   async getServeStatus(): Promise<ServeStatus> {
-    const tailscale = await this.getTailscaleStatus();
-    return ServeStatusSchema.parse({
-      enabled: tailscale.httpsEnabled,
-      health: tailscale.httpsEnabled ? "ok" : tailscale.authenticated ? "warn" : "warn",
-      healthMessage: tailscale.httpsEnabled
-        ? `Serve is proxying to http://127.0.0.1:${SERVER_PORT}.`
-        : "Serve is not exposing DroidAgent yet.",
-      source: tailscale.httpsEnabled ? "tailscale" : "none",
-      url: tailscale.canonicalUrl,
-      target: tailscale.httpsEnabled ? `http://127.0.0.1:${SERVER_PORT}` : null,
-      lastCheckedAt: tailscale.lastCheckedAt
-    });
+    const [tailscale, cloudflare, accessSettings] = await Promise.all([
+      this.getTailscaleStatus(),
+      this.getCloudflareStatus(),
+      appStateService.getAccessSettings()
+    ]);
+    return this.buildServeStatus(accessSettings.mode, tailscale, cloudflare);
   }
 
-  private canonicalFromUrl(url: string, source: CanonicalOrigin["source"]): CanonicalOrigin {
+  private canonicalFromUrl(
+    url: string,
+    source: CanonicalOrigin["source"],
+    accessMode: CanonicalOrigin["accessMode"]
+  ): CanonicalOrigin {
     const parsed = new URL(url);
     return CanonicalOriginSchema.parse({
-      accessMode: "tailscale",
+      accessMode,
       origin: parsed.origin,
       rpId: parsed.hostname,
       hostname: parsed.hostname,
@@ -259,11 +193,39 @@ export class AccessService {
       throw new Error("MagicDNS and a stable ts.net hostname are required before passkey enrollment can move to the phone.");
     }
 
-    const canonicalOrigin = this.canonicalFromUrl(tailscale.canonicalUrl, "tailscaleServe");
+    const canonicalOrigin = this.canonicalFromUrl(tailscale.canonicalUrl, "tailscaleServe", "tailscale");
     await appStateService.updateAccessSettings({
       mode: "tailscale",
-      canonicalOrigin
+      canonicalOrigin,
+      bootstrapTokenHash: null,
+      bootstrapTokenIssuedAt: null,
+      bootstrapTokenExpiresAt: null
     });
+    this.invalidateCache();
+    await appStateService.markSetupStepCompleted("remoteAccess", {
+      remoteAccessEnabled: true
+    });
+    return canonicalOrigin;
+  }
+
+  async refreshCanonicalOriginFromCloudflare(): Promise<CanonicalOrigin> {
+    const cloudflare = await this.getCloudflareStatus();
+    if (!cloudflare.installed || !cloudflare.configured || !cloudflare.tokenStored) {
+      throw new Error("Cloudflare must be installed and configured before it can become the canonical DroidAgent origin.");
+    }
+    if (!cloudflare.canonicalUrl || !cloudflare.running) {
+      throw new Error("Cloudflare tunnel must be running and the public hostname must be reachable first.");
+    }
+
+    const canonicalOrigin = this.canonicalFromUrl(cloudflare.canonicalUrl, "cloudflareTunnel", "cloudflare");
+    await appStateService.updateAccessSettings({
+      mode: "cloudflare",
+      canonicalOrigin,
+      bootstrapTokenHash: null,
+      bootstrapTokenIssuedAt: null,
+      bootstrapTokenExpiresAt: null
+    });
+    this.invalidateCache();
     await appStateService.markSetupStepCompleted("remoteAccess", {
       remoteAccessEnabled: true
     });
@@ -271,15 +233,24 @@ export class AccessService {
   }
 
   async setCanonicalOrigin(url: string, source: CanonicalOrigin["source"] = "manual"): Promise<CanonicalOrigin> {
-    const canonicalOrigin = this.canonicalFromUrl(url, source);
+    const accessMode = source === "cloudflareTunnel" ? "cloudflare" : source === "tailscaleServe" ? "tailscale" : "loopback";
+    const canonicalOrigin = this.canonicalFromUrl(url, source, accessMode);
     await appStateService.updateAccessSettings({
       mode: canonicalOrigin.accessMode,
-      canonicalOrigin
+      canonicalOrigin,
+      bootstrapTokenHash: null,
+      bootstrapTokenIssuedAt: null,
+      bootstrapTokenExpiresAt: null
     });
+    this.invalidateCache();
     return canonicalOrigin;
   }
 
-  async enableTailscaleServe(): Promise<{ canonicalOrigin: CanonicalOrigin; tailscale: TailscaleStatus; serve: ServeStatus }> {
+  async enableTailscaleServe(): Promise<{
+    canonicalOrigin: CanonicalOrigin;
+    tailscale: Awaited<ReturnType<AccessService["getTailscaleStatus"]>>;
+    serve: ServeStatus;
+  }> {
     const tailscale = await this.getTailscaleStatus();
     if (!tailscale.installed) {
       throw new Error("Install Tailscale first, then sign this Mac into your tailnet.");
@@ -288,11 +259,55 @@ export class AccessService {
       throw new Error("Tailscale must be running and authenticated before enabling DroidAgent phone access.");
     }
 
-    await runCommand("tailscale", ["serve", "--bg", "--https=443", String(SERVER_PORT)]);
+    await tailscaleRemoteAccessProvider.enableServe();
     const canonicalOrigin = await this.refreshCanonicalOriginFromTailscale();
     const refreshedTailscale = await this.getTailscaleStatus();
     const serve = await this.getServeStatus();
     return { canonicalOrigin, tailscale: refreshedTailscale, serve };
+  }
+
+  async enableCloudflareTunnel(params: { hostname: string; tunnelToken: string }) {
+    await cloudflareRemoteAccessProvider.enable(params);
+    this.invalidateCache();
+    const cloudflare = await this.getCloudflareStatus();
+    const serve = await this.getServeStatus();
+    return { cloudflare, serve };
+  }
+
+  async stopCloudflareTunnel() {
+    const [accessSettings, ownerExists] = await Promise.all([
+      appStateService.getAccessSettings(),
+      authService.hasUser()
+    ]);
+    if (accessSettings.canonicalOrigin?.source === "cloudflareTunnel") {
+      if (ownerExists) {
+        throw new Error(
+          "Cloudflare is still the canonical DroidAgent URL. Switch canonical access to Tailscale before stopping this tunnel."
+        );
+      }
+
+      await appStateService.updateAccessSettings({
+        mode: "loopback",
+        canonicalOrigin: null,
+        bootstrapTokenHash: null,
+        bootstrapTokenIssuedAt: null,
+        bootstrapTokenExpiresAt: null
+      });
+      this.invalidateCache();
+    }
+
+    await cloudflareRemoteAccessProvider.stop();
+    this.invalidateCache();
+    const cloudflare = await this.getCloudflareStatus();
+    const serve = await this.getServeStatus();
+    return { cloudflare, serve };
+  }
+
+  async setCanonicalSource(source: "tailscale" | "cloudflare"): Promise<CanonicalOrigin> {
+    if (source === "tailscale") {
+      return await this.refreshCanonicalOriginFromTailscale();
+    }
+    return await this.refreshCanonicalOriginFromCloudflare();
   }
 
   async getCanonicalOrigin(): Promise<CanonicalOrigin | null> {
@@ -315,6 +330,7 @@ export class AccessService {
     bootstrapUrl: string;
   }> {
     const canonicalOrigin = await this.ensureCanonicalOrigin();
+    await this.assertCanonicalOriginReadyForBootstrap(canonicalOrigin);
     const token = randomBytes(24).toString("base64url");
     const issuedAt = nowIso();
     const expiresAt = new Date(Date.now() + BOOTSTRAP_TOKEN_TTL_MS).toISOString();
@@ -323,6 +339,7 @@ export class AccessService {
       bootstrapTokenIssuedAt: issuedAt,
       bootstrapTokenExpiresAt: expiresAt
     });
+    this.invalidateCache();
     return {
       token,
       issuedAt,
@@ -338,6 +355,7 @@ export class AccessService {
       bootstrapTokenIssuedAt: null,
       bootstrapTokenExpiresAt: null
     });
+    this.invalidateCache();
   }
 
   async validateBootstrapToken(token: string): Promise<boolean> {
@@ -364,55 +382,63 @@ export class AccessService {
   }
 
   async getBootstrapState(): Promise<BootstrapState> {
-    const [ownerExists, accessSettings, tailscaleStatus, serveStatus] = await Promise.all([
-      authService.hasUser(),
-      appStateService.getAccessSettings(),
-      this.getTailscaleStatus(),
-      this.getServeStatus()
-    ]);
+    return await this.bootstrapStateCache.get(async () => {
+      const [ownerExists, accessSettings, tailscaleStatus, cloudflareStatus] = await Promise.all([
+        authService.hasUser(),
+        appStateService.getAccessSettings(),
+        this.getTailscaleStatus(),
+        this.getCloudflareStatus()
+      ]);
+      const serveStatus = this.buildServeStatus(accessSettings.mode, tailscaleStatus, cloudflareStatus);
 
-    const enrollmentState = ownerExists
-      ? "complete"
-      : accessSettings.bootstrapTokenHash && accessSettings.canonicalOrigin
-        ? "ready"
-        : accessSettings.canonicalOrigin
-          ? "bootstrapPending"
-          : "notStarted";
+      const enrollmentState = ownerExists
+        ? "complete"
+        : accessSettings.bootstrapTokenHash && accessSettings.canonicalOrigin
+          ? "ready"
+          : accessSettings.canonicalOrigin
+            ? "bootstrapPending"
+            : "notStarted";
 
-    return BootstrapStateSchema.parse({
-      ownerExists,
-      bootstrapRequired: !ownerExists,
-      enrollmentState,
-      accessMode: accessSettings.mode,
-      canonicalOrigin: accessSettings.canonicalOrigin,
-      tailscaleStatus,
-      serveStatus,
-      bootstrapTokenIssuedAt: accessSettings.bootstrapTokenIssuedAt,
-      bootstrapTokenExpiresAt: accessSettings.bootstrapTokenExpiresAt,
-      bootstrapUrl: null,
-      localhostOnlyMessage:
-        ownerExists && accessSettings.canonicalOrigin
-          ? `Daily sign-in is locked to ${accessSettings.canonicalOrigin.origin}. Use localhost only for maintenance and bootstrap tasks.`
-          : "Use localhost on the Mac to enable Tailscale and generate the one-time phone enrollment link."
+      return BootstrapStateSchema.parse({
+        ownerExists,
+        bootstrapRequired: !ownerExists,
+        enrollmentState,
+        accessMode: accessSettings.mode,
+        canonicalOrigin: accessSettings.canonicalOrigin,
+        tailscaleStatus,
+        cloudflareStatus,
+        serveStatus,
+        bootstrapTokenIssuedAt: accessSettings.bootstrapTokenIssuedAt,
+        bootstrapTokenExpiresAt: accessSettings.bootstrapTokenExpiresAt,
+        bootstrapUrl: null,
+        localhostOnlyMessage:
+          ownerExists && accessSettings.canonicalOrigin
+            ? `Daily sign-in is locked to ${accessSettings.canonicalOrigin.origin}. Use localhost only for maintenance and bootstrap tasks.`
+            : "Use localhost on the Mac to enable a supported remote provider and generate the one-time phone enrollment link."
+      });
     });
   }
 
   async getAccessSnapshot() {
-    const [accessSettings, tailscaleStatus, serveStatus, ownerExists] = await Promise.all([
-      appStateService.getAccessSettings(),
-      this.getTailscaleStatus(),
-      this.getServeStatus(),
-      authService.hasUser()
-    ]);
+    return await this.accessSnapshotCache.get(async () => {
+      const [accessSettings, tailscaleStatus, cloudflareStatus, ownerExists] = await Promise.all([
+        appStateService.getAccessSettings(),
+        this.getTailscaleStatus(),
+        this.getCloudflareStatus(),
+        authService.hasUser()
+      ]);
+      const serveStatus = this.buildServeStatus(accessSettings.mode, tailscaleStatus, cloudflareStatus);
 
-    return {
-      canonicalUrl: accessSettings.canonicalOrigin?.origin ?? null,
-      canonicalOrigin: accessSettings.canonicalOrigin,
-      accessMode: accessSettings.mode,
-      tailscaleStatus,
-      serveStatus,
-      bootstrapRequired: !ownerExists
-    };
+      return {
+        canonicalUrl: accessSettings.canonicalOrigin?.origin ?? null,
+        canonicalOrigin: accessSettings.canonicalOrigin,
+        accessMode: accessSettings.mode,
+        tailscaleStatus,
+        cloudflareStatus,
+        serveStatus,
+        bootstrapRequired: !ownerExists
+      };
+    });
   }
 
   async assertLocalhostBootstrapRequest(c: Context): Promise<void> {

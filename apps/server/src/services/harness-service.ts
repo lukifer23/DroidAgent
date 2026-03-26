@@ -1,3 +1,4 @@
+import { TEST_MODE } from "../env.js";
 import type {
   ApprovalRecord,
   ChannelConfigSummary,
@@ -8,6 +9,7 @@ import type {
 } from "@droidagent/shared";
 
 import { openclawService } from "./openclaw-service.js";
+import { testHarnessService } from "./test-harness-service.js";
 
 export interface StreamRelayCallbacks {
   onDelta(delta: string): void | Promise<void>;
@@ -34,4 +36,4 @@ export interface HarnessAdapter {
   configureRuntimeModel(config: HarnessRuntimeModelConfig): Promise<void>;
 }
 
-export const harnessService: HarnessAdapter = openclawService;
+export const harnessService: HarnessAdapter = TEST_MODE ? testHarnessService : openclawService;

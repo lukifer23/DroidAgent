@@ -3,11 +3,14 @@ import { useQuery } from "@tanstack/react-query";
 
 import type { JobOutputSnapshot, JobRecord } from "@droidagent/shared";
 
+import { useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { api, postJson } from "../lib/api";
 
 export function JobsScreen() {
-  const { dashboard, runAction, refreshDashboard } = useDroidAgentApp();
+  const { runAction, trackJobStart } = useDroidAgentApp();
+  const dashboardQuery = useDashboardQuery(true);
+  const dashboard = dashboardQuery.data;
   const [commandInput, setCommandInput] = useState("pwd");
   const [jobCwdInput, setJobCwdInput] = useState(".");
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -48,8 +51,8 @@ export function JobsScreen() {
                 command: commandInput,
                 cwd: jobCwdInput
               });
+              trackJobStart(response.jobId);
               setSelectedJobId(response.jobId);
-              await refreshDashboard();
             }, "Job started.")
           }
         >

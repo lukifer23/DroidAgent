@@ -6,6 +6,7 @@ coverage
 .vite
 playwright-report
 test-results
+artifacts
 apps/web/dist
 apps/server/dist
 packages/shared/dist
@@ -13,4 +14,3 @@ apps/server/drizzle
 *.tsbuildinfo
 .env
 .env.*
-

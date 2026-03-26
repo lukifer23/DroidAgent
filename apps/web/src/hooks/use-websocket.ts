@@ -2,6 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ClientCommand, DashboardState, JobOutputSnapshot, ServerEvent } from "@droidagent/shared";
 
+import { chatStreamStore } from "../lib/chat-stream-store";
+import { clientPerformance } from "../lib/client-performance";
+
 const INITIAL_DELAY_MS = 500;
 const MAX_DELAY_MS = 30000;
 const SNAPSHOT_URL = "/api/dashboard";
@@ -14,6 +17,68 @@ export interface UseWebSocketOptions {
 function updateDashboardState(current: DashboardState | undefined, event: ServerEvent): DashboardState | undefined {
   if (!current) {
     return current;
+  }
+
+  if (event.type === "setup.updated") {
+    return {
+      ...current,
+      setup: event.payload
+    };
+  }
+
+  if (event.type === "access.updated") {
+    return {
+      ...current,
+      canonicalUrl: event.payload.canonicalOrigin?.origin ?? null,
+      tailscaleStatus: event.payload.tailscaleStatus,
+      cloudflareStatus: event.payload.cloudflareStatus,
+      serveStatus: event.payload.serveStatus,
+      bootstrapRequired: event.payload.bootstrapRequired
+    };
+  }
+
+  if (event.type === "runtime.updated") {
+    return {
+      ...current,
+      runtimes: event.payload
+    };
+  }
+
+  if (event.type === "providers.updated") {
+    return {
+      ...current,
+      providers: event.payload.providers,
+      cloudProviders: event.payload.cloudProviders
+    };
+  }
+
+  if (event.type === "channel.updated") {
+    return {
+      ...current,
+      channels: event.payload.statuses,
+      channelConfig: event.payload.config
+    };
+  }
+
+  if (event.type === "launchAgent.updated") {
+    return {
+      ...current,
+      launchAgent: event.payload
+    };
+  }
+
+  if (event.type === "context.updated") {
+    return {
+      ...current,
+      contextManagement: event.payload
+    };
+  }
+
+  if (event.type === "sessions.updated") {
+    return {
+      ...current,
+      sessions: event.payload
+    };
   }
 
   if (event.type === "job.updated") {
@@ -34,6 +99,13 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
     };
   }
 
+  if (event.type === "approvals.updated") {
+    return {
+      ...current,
+      approvals: event.payload
+    };
+  }
+
   return current;
 }
 
@@ -45,7 +117,70 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const retryRef = useRef(0);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onMessageRef = useRef(onMessage);
+  const reconnectStartedAtRef = useRef<number | null>(null);
+  const flushHandleRef = useRef<number | ReturnType<typeof setTimeout> | null>(null);
+  const pendingStreamRunsRef = useRef<Record<string, { runId: string; text: string }>>({});
+  const pendingJobOutputRef = useRef<Map<string, { stdout: string; stderr: string; stdoutBytes: number; stderrBytes: number }>>(
+    new Map()
+  );
   onMessageRef.current = onMessage;
+
+  const flushPendingRealtimeState = useCallback(() => {
+    flushHandleRef.current = null;
+
+    const pendingRuns = pendingStreamRunsRef.current;
+    const hasRuns = Object.keys(pendingRuns).length > 0;
+    if (hasRuns) {
+      chatStreamStore.setRuns({
+        ...chatStreamStore.getSnapshot(),
+        ...pendingRuns
+      });
+      pendingStreamRunsRef.current = {};
+    }
+
+    if (pendingJobOutputRef.current.size > 0) {
+      for (const [jobId, pending] of pendingJobOutputRef.current.entries()) {
+        queryClient.setQueryData<JobOutputSnapshot | undefined>(["jobs", jobId, "output"], (current) => {
+          if (!current) {
+            return {
+              jobId,
+              stdout: pending.stdout,
+              stderr: pending.stderr,
+              truncated: false,
+              stdoutBytes: pending.stdoutBytes,
+              stderrBytes: pending.stderrBytes
+            };
+          }
+
+          return {
+            ...current,
+            stdout: `${current.stdout}${pending.stdout}`,
+            stderr: `${current.stderr}${pending.stderr}`,
+            stdoutBytes: current.stdoutBytes + pending.stdoutBytes,
+            stderrBytes: current.stderrBytes + pending.stderrBytes
+          };
+        });
+      }
+      pendingJobOutputRef.current.clear();
+    }
+  }, [queryClient]);
+
+  const scheduleFlush = useCallback(() => {
+    if (flushHandleRef.current !== null) {
+      return;
+    }
+
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      flushHandleRef.current = window.requestAnimationFrame(() => {
+        flushPendingRealtimeState();
+      });
+      return;
+    }
+
+    flushHandleRef.current = setTimeout(() => {
+      flushPendingRealtimeState();
+    }, 16);
+  }, [flushPendingRealtimeState]);
 
   const send = useCallback((command: ClientCommand) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -64,8 +199,15 @@ export function useWebSocket(options: UseWebSocketOptions) {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      const reconnectStartedAt = reconnectStartedAtRef.current;
       retryRef.current = 0;
       setStatus("connected");
+      if (reconnectStartedAt !== null) {
+        clientPerformance.record("client.ws.reconnect_to_socket", performance.now() - reconnectStartedAt, {
+          attempt: retryRef.current
+        }, reconnectStartedAt);
+        reconnectStartedAtRef.current = null;
+      }
     };
 
     ws.onmessage = (event) => {
@@ -74,37 +216,66 @@ export function useWebSocket(options: UseWebSocketOptions) {
         if (payload.type === "dashboard.state") {
           queryClient.setQueryData(["dashboard"], payload.payload);
         }
+        if (payload.type === "access.updated") {
+          queryClient.setQueryData(["access"], payload.payload);
+        }
         if (payload.type === "chat.history") {
+          chatStreamStore.clear(payload.payload.sessionId);
           queryClient.setQueryData(["sessions", payload.payload.sessionId, "messages"], payload.payload.messages);
         }
-        if (payload.type === "job.output") {
-          queryClient.setQueryData<JobOutputSnapshot | undefined>(["jobs", payload.payload.jobId, "output"], (current) => {
-            const chunkBytes = new TextEncoder().encode(payload.payload.chunk).length;
-            if (!current) {
-              return {
-                jobId: payload.payload.jobId,
-                stdout: payload.payload.stream === "stdout" ? payload.payload.chunk : "",
-                stderr: payload.payload.stream === "stderr" ? payload.payload.chunk : "",
-                truncated: false,
-                stdoutBytes: payload.payload.stream === "stdout" ? chunkBytes : 0,
-                stderrBytes: payload.payload.stream === "stderr" ? chunkBytes : 0
-              };
-            }
-
-            return {
-              ...current,
-              stdout: payload.payload.stream === "stdout" ? `${current.stdout}${payload.payload.chunk}` : current.stdout,
-              stderr: payload.payload.stream === "stderr" ? `${current.stderr}${payload.payload.chunk}` : current.stderr,
-              stdoutBytes: payload.payload.stream === "stdout" ? current.stdoutBytes + chunkBytes : current.stdoutBytes,
-              stderrBytes: payload.payload.stream === "stderr" ? current.stderrBytes + chunkBytes : current.stderrBytes
-            };
-          });
+        if (payload.type === "chat.stream.delta") {
+          const existing = pendingStreamRunsRef.current[payload.payload.sessionId] ?? chatStreamStore.getSnapshot()[payload.payload.sessionId];
+          pendingStreamRunsRef.current[payload.payload.sessionId] = {
+            runId: payload.payload.runId,
+            text: `${existing?.runId === payload.payload.runId ? existing.text : ""}${payload.payload.delta}`
+          };
+          scheduleFlush();
         }
-        if (payload.type === "job.updated" || payload.type === "approval.updated") {
+        if (payload.type === "chat.stream.done" || payload.type === "chat.stream.error") {
+          if (flushHandleRef.current !== null) {
+            flushPendingRealtimeState();
+          }
+          chatStreamStore.clear(payload.payload.sessionId);
+          delete pendingStreamRunsRef.current[payload.payload.sessionId];
+        }
+        if (payload.type === "job.output") {
+          const chunkBytes = new TextEncoder().encode(payload.payload.chunk).length;
+          const existing = pendingJobOutputRef.current.get(payload.payload.jobId) ?? {
+            stdout: "",
+            stderr: "",
+            stdoutBytes: 0,
+            stderrBytes: 0
+          };
+          if (payload.payload.stream === "stdout") {
+            existing.stdout += payload.payload.chunk;
+            existing.stdoutBytes += chunkBytes;
+          } else {
+            existing.stderr += payload.payload.chunk;
+            existing.stderrBytes += chunkBytes;
+          }
+          pendingJobOutputRef.current.set(payload.payload.jobId, existing);
+          scheduleFlush();
+        }
+        if (
+          payload.type === "setup.updated" ||
+          payload.type === "access.updated" ||
+          payload.type === "runtime.updated" ||
+          payload.type === "providers.updated" ||
+          payload.type === "channel.updated" ||
+          payload.type === "launchAgent.updated" ||
+          payload.type === "context.updated" ||
+          payload.type === "sessions.updated" ||
+          payload.type === "job.updated" ||
+          payload.type === "approval.updated" ||
+          payload.type === "approvals.updated"
+        ) {
           queryClient.setQueryData<DashboardState | undefined>(["dashboard"], (current) => updateDashboardState(current, payload));
         }
         if (payload.type === "error") {
           queryClient.setQueryData(["lastError"], payload.payload.message);
+        }
+        if (payload.type === "performance.updated") {
+          queryClient.setQueryData(["performance"], payload.payload);
         }
         onMessageRef.current?.(payload);
       } catch {
@@ -115,6 +286,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
     ws.onclose = () => {
       wsRef.current = null;
       setStatus("disconnected");
+      reconnectStartedAtRef.current = performance.now();
 
       if (!enabled) return;
 
@@ -123,10 +295,27 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
       timeoutRef.current = setTimeout(async () => {
         try {
-          const res = await fetch(SNAPSHOT_URL, { credentials: "include" });
-          if (res.ok) {
-            const data = await res.json();
+          const [dashboardResponse, accessResponse] = await Promise.all([
+            fetch(SNAPSHOT_URL, { credentials: "include" }),
+            fetch("/api/access", { credentials: "include" })
+          ]);
+          if (dashboardResponse.ok) {
+            const data = await dashboardResponse.json();
             queryClient.setQueryData(["dashboard"], data);
+          }
+          if (accessResponse.ok) {
+            const access = await accessResponse.json();
+            queryClient.setQueryData(["access"], access);
+          }
+          if (reconnectStartedAtRef.current !== null) {
+            clientPerformance.record(
+              "client.ws.reconnect_to_resync",
+              performance.now() - reconnectStartedAtRef.current,
+              {
+                attempt: retryRef.current
+              },
+              reconnectStartedAtRef.current
+            );
           }
         } catch {
           // ignore
@@ -147,12 +336,20 @@ export function useWebSocket(options: UseWebSocketOptions) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
       }
+      if (flushHandleRef.current !== null) {
+        if (typeof flushHandleRef.current === "number" && typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+          window.cancelAnimationFrame(flushHandleRef.current);
+        } else {
+          clearTimeout(flushHandleRef.current as ReturnType<typeof setTimeout>);
+        }
+        flushHandleRef.current = null;
+      }
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;
       }
     };
-  }, [connect]);
+  }, [connect, flushPendingRealtimeState]);
 
   return {
     status,

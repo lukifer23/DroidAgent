@@ -1,20 +1,26 @@
 import fs from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   ApprovalRecordSchema,
   ChannelConfigSummarySchema,
   ChannelStatusSchema,
   ChatMessageSchema,
+  ContextManagementStatusSchema,
   RuntimeStatusSchema,
+  SignalHealthCheckSchema,
+  SignalPendingPairingSchema,
   SessionSummarySchema,
   nowIso,
   type ApprovalRecord,
   type ChannelConfigSummary,
   type ChannelStatus,
   type ChatMessage,
+  type ContextManagementStatus,
   type SessionSummary
 } from "@droidagent/shared";
 
@@ -35,9 +41,45 @@ import { keychainService } from "./keychain-service.js";
 const GATEWAY_READY_RETRIES = 5;
 const GATEWAY_READY_DELAY_MS = 800;
 const CHAT_COMPLETIONS_PATH = "/v1/chat/completions";
+const DEFAULT_CONTEXT_WINDOW = 200000;
 
 function stringifyConfigValue(value: unknown): string {
   return JSON.stringify(value);
+}
+
+function getConfigPathValue(source: Record<string, unknown> | null, dottedPath: string): unknown {
+  if (!source) {
+    return undefined;
+  }
+
+  let current: unknown = source;
+  for (const segment of dottedPath.split(".")) {
+    if (!current || typeof current !== "object" || Array.isArray(current) || !(segment in current)) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+
+  return current;
+}
+
+function setConfigPathValue(target: Record<string, unknown>, dottedPath: string, value: unknown): void {
+  const segments = dottedPath.split(".");
+  let current: Record<string, unknown> = target;
+
+  for (const segment of segments.slice(0, -1)) {
+    const next = current[segment];
+    if (!next || typeof next !== "object" || Array.isArray(next)) {
+      current[segment] = {};
+    }
+    current = current[segment] as Record<string, unknown>;
+  }
+
+  current[segments.at(-1) ?? dottedPath] = value;
+}
+
+function configValueEquals(left: unknown, right: unknown): boolean {
+  return isDeepStrictEqual(left, right);
 }
 
 function extractEventData(block: string): string | null {
@@ -108,10 +150,149 @@ function parseHistoryMessage(sessionKey: string, message: Record<string, unknown
   });
 }
 
+function isAnthropicPruningCandidate(providerId: string, modelId: string): boolean {
+  if (providerId === "anthropic") {
+    return true;
+  }
+
+  if (providerId === "openrouter") {
+    return /anthropic\//i.test(modelId);
+  }
+
+  return false;
+}
+
+function resolveContextWindow(params: {
+  providerId: string;
+  contextWindow?: number;
+  runtimeSettings: Awaited<ReturnType<typeof appStateService.getRuntimeSettings>>;
+}): number {
+  if (typeof params.contextWindow === "number" && Number.isFinite(params.contextWindow) && params.contextWindow > 0) {
+    return params.contextWindow;
+  }
+
+  if (params.providerId === "llamacpp-default") {
+    return params.runtimeSettings.llamaCppContextWindow;
+  }
+
+  return DEFAULT_CONTEXT_WINDOW;
+}
+
+function buildContextManagementStatus(params: {
+  enabled: boolean;
+  providerId: string;
+  modelId: string;
+  contextWindow: number;
+}): ContextManagementStatus {
+  const reserveTokensFloor = Math.min(24000, Math.max(2048, Math.floor(params.contextWindow * 0.25)));
+  const softThresholdTokens = Math.min(6000, Math.max(512, Math.floor(params.contextWindow * 0.08)));
+  const pruningMode = params.enabled && isAnthropicPruningCandidate(params.providerId, params.modelId) ? "cache-ttl" : "off";
+
+  return ContextManagementStatusSchema.parse({
+    enabled: params.enabled,
+    compactionMode: params.enabled ? "safeguard" : "default",
+    pruningMode,
+    memoryFlushEnabled: params.enabled,
+    reserveTokensFloor,
+    softThresholdTokens
+  });
+}
+
 export class OpenClawService {
   private gatewayProcess: ChildProcess | null = null;
   private gatewayToken: string | null = null;
   private activeRuns = new Map<string, { controller: AbortController; runId: string }>();
+
+  private async gatewayHealthProbe(): Promise<{ version?: string }> {
+    const output = await this.execOpenClaw([
+      "gateway",
+      "health",
+      "--json",
+      "--timeout",
+      "2000",
+      "--url",
+      OPENCLAW_GATEWAY_URL,
+      "--token",
+      await this.ensureGatewayToken()
+    ]);
+
+    return JSON.parse(output) as { version?: string };
+  }
+
+  private async inspectGatewayPortOwner(): Promise<{ pid: number; command: string } | null> {
+    const result = await runCommand(
+      "lsof",
+      ["-nP", `-iTCP:${OPENCLAW_GATEWAY_PORT}`, "-sTCP:LISTEN", "-Fp"],
+      { okExitCodes: [0, 1] }
+    );
+    const pid = result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.startsWith("p"))
+      ?.slice(1);
+
+    if (!pid) {
+      return null;
+    }
+
+    try {
+      const processInfo = await runCommand("ps", ["-o", "command=", "-p", pid], { okExitCodes: [0, 1] });
+      const command = processInfo.stdout.trim() || "process";
+      return {
+        pid: Number(pid),
+        command
+      };
+    } catch {
+      return {
+        pid: Number(pid),
+        command: "process"
+      };
+    }
+  }
+
+  private buildGatewayPortConflictMessage(owner: { pid: number; command: string }): string {
+    const portDetails = `Port ${OPENCLAW_GATEWAY_PORT} is owned by ${owner.command} (pid ${owner.pid}).`;
+    const guidance = /openclaw/i.test(owner.command)
+      ? "A different OpenClaw service is already using the configured DroidAgent gateway port. Stop the conflicting service or change DROIDAGENT_OPENCLAW_PORT."
+      : "Another local process is already using the configured DroidAgent gateway port. Stop the conflicting service or change DROIDAGENT_OPENCLAW_PORT.";
+
+    return `${guidance} ${portDetails}`;
+  }
+
+  private async explainGatewayFailure(
+    error: unknown,
+    options: { expectedPid?: number | null; includePortConflicts?: boolean } = {}
+  ): Promise<{ message: string; portOwner: { pid: number; command: string } | null }> {
+    const fallbackMessage = error instanceof Error ? error.message : "Gateway is not yet reachable.";
+    const shouldInspectPort = options.includePortConflicts && /token mismatch|abnormal closure|connect failed|not yet reachable/i.test(fallbackMessage);
+
+    if (!shouldInspectPort) {
+      return {
+        message: fallbackMessage,
+        portOwner: null
+      };
+    }
+
+    const owner = await this.inspectGatewayPortOwner();
+    if (!owner) {
+      return {
+        message: fallbackMessage,
+        portOwner: null
+      };
+    }
+
+    if (options.expectedPid && owner.pid === options.expectedPid) {
+      return {
+        message: fallbackMessage,
+        portOwner: owner
+      };
+    }
+
+    return {
+      message: this.buildGatewayPortConflictMessage(owner),
+      portOwner: owner
+    };
+  }
 
   private get openclawBin(): string {
     const bin = resolveOpenClawBin();
@@ -173,6 +354,192 @@ export class OpenClawService {
       "x-openclaw-agent-id": "main",
       "x-openclaw-session-key": sessionKey
     };
+  }
+
+  private resolvePrimaryModel(runtimeSettings: Awaited<ReturnType<typeof appStateService.getRuntimeSettings>>): string {
+    if (runtimeSettings.activeProviderId === "ollama-default") {
+      return `ollama/${runtimeSettings.ollamaModel}`;
+    }
+
+    if (runtimeSettings.activeProviderId === "llamacpp-default") {
+      return `llamacpp/${path.basename(runtimeSettings.llamaCppModel).toLowerCase()}`;
+    }
+
+    return runtimeSettings.cloudProviders[runtimeSettings.activeProviderId as keyof typeof runtimeSettings.cloudProviders]?.defaultModel
+      ?? `ollama/${runtimeSettings.ollamaModel}`;
+  }
+
+  private async currentContextManagementStatus(overrides: Partial<HarnessRuntimeModelConfig> = {}): Promise<ContextManagementStatus> {
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    const providerId = overrides.providerId ?? runtimeSettings.activeProviderId;
+    const modelId =
+      overrides.modelId ??
+      (providerId === "ollama-default"
+        ? runtimeSettings.ollamaModel
+        : providerId === "llamacpp-default"
+          ? path.basename(runtimeSettings.llamaCppModel).toLowerCase()
+          : runtimeSettings.cloudProviders[providerId as keyof typeof runtimeSettings.cloudProviders]?.defaultModel ?? "");
+    const contextWindow = resolveContextWindow({
+      providerId,
+      ...(typeof overrides.contextWindow === "number" ? { contextWindow: overrides.contextWindow } : {}),
+      runtimeSettings
+    });
+
+    return buildContextManagementStatus({
+      enabled: runtimeSettings.smartContextManagementEnabled,
+      providerId,
+      modelId,
+      contextWindow
+    });
+  }
+
+  private readCurrentConfig(): Record<string, unknown> | null {
+    try {
+      if (!fs.existsSync(paths.openClawConfigPath)) {
+        return null;
+      }
+
+      const raw = fs.readFileSync(paths.openClawConfigPath, "utf8");
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async setConfigValueIfNeeded(
+    currentConfig: Record<string, unknown> | null,
+    key: string,
+    value: unknown
+  ): Promise<Record<string, unknown>> {
+    if (configValueEquals(getConfigPathValue(currentConfig, key), value)) {
+      return currentConfig ?? {};
+    }
+
+    await this.execOpenClaw(["config", "set", key, stringifyConfigValue(value), "--strict-json"]);
+    const nextConfig = currentConfig ? { ...currentConfig } : {};
+    setConfigPathValue(nextConfig, key, value);
+    return nextConfig;
+  }
+
+  private async applyContextManagementPolicy(
+    overrides: Partial<HarnessRuntimeModelConfig> = {},
+    currentConfig: Record<string, unknown> | null = this.readCurrentConfig()
+  ): Promise<Record<string, unknown>> {
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    const providerId = overrides.providerId ?? runtimeSettings.activeProviderId;
+    const modelId =
+      overrides.modelId ??
+      (providerId === "ollama-default"
+        ? runtimeSettings.ollamaModel
+        : providerId === "llamacpp-default"
+          ? path.basename(runtimeSettings.llamaCppModel).toLowerCase()
+          : runtimeSettings.cloudProviders[providerId as keyof typeof runtimeSettings.cloudProviders]?.defaultModel ?? "");
+    const status = await this.currentContextManagementStatus(overrides);
+
+    const compaction =
+      status.enabled
+        ? {
+            mode: "safeguard",
+            timeoutSeconds: 900,
+            reserveTokensFloor: status.reserveTokensFloor,
+            identifierPolicy: "strict",
+            postCompactionSections: ["Session Startup", "Red Lines"],
+            memoryFlush: {
+              enabled: true,
+              softThresholdTokens: status.softThresholdTokens,
+              systemPrompt: "Session nearing compaction. Store durable memories now.",
+              prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store."
+            }
+          }
+        : {
+            mode: "default",
+            timeoutSeconds: 900,
+            reserveTokensFloor: status.reserveTokensFloor,
+            identifierPolicy: "strict",
+            postCompactionSections: ["Session Startup", "Red Lines"],
+            memoryFlush: {
+              enabled: false,
+              softThresholdTokens: status.softThresholdTokens,
+              systemPrompt: "Session nearing compaction. Store durable memories now.",
+              prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store."
+            }
+          };
+
+    const contextPruning =
+      status.pruningMode === "cache-ttl" && isAnthropicPruningCandidate(providerId, modelId)
+        ? {
+            mode: "cache-ttl",
+            ttl: "30m",
+            keepLastAssistants: 3,
+            softTrimRatio: 0.3,
+            hardClearRatio: 0.5,
+            minPrunableToolChars: 50000,
+            softTrim: {
+              maxChars: 4000,
+              headChars: 1500,
+              tailChars: 1500
+            },
+            hardClear: {
+              enabled: true,
+              placeholder: "[Old tool result content cleared]"
+            },
+            tools: {
+              deny: ["browser", "canvas"]
+            }
+          }
+        : {
+            mode: "off"
+          };
+
+    let nextConfig = currentConfig;
+    nextConfig = await this.setConfigValueIfNeeded(nextConfig, "agents.defaults.compaction", compaction);
+    nextConfig = await this.setConfigValueIfNeeded(nextConfig, "agents.defaults.contextPruning", contextPruning);
+    return nextConfig;
+  }
+
+  private pairingStorePath(channel = "signal"): string {
+    return path.join(paths.openClawStateDir, "credentials", `${channel}-pairing.json`);
+  }
+
+  private async listPendingPairings(channel = "signal") {
+    try {
+      const output = await this.execOpenClaw(["pairing", "list", channel, "--json"], true);
+      const parsed = JSON.parse(output) as { pending?: Array<Record<string, unknown>> };
+      const pending = Array.isArray(parsed.pending) ? parsed.pending : [];
+      return pending.map((item) =>
+        SignalPendingPairingSchema.parse({
+          code: String(item.code ?? ""),
+          from: String(item.from ?? item.target ?? item.id ?? "Unknown sender"),
+          requestedAt:
+            typeof item.createdAt === "string"
+              ? item.createdAt
+              : typeof item.createdAtMs === "number"
+                ? new Date(item.createdAtMs).toISOString()
+                : null
+        })
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  private async denyPendingPairingCode(channel: string, code: string): Promise<void> {
+    const filePath = this.pairingStorePath(channel);
+    const raw = await fs.promises.readFile(filePath, "utf8").catch(() => "");
+    if (!raw) {
+      return;
+    }
+
+    const parsed = JSON.parse(raw) as { version?: unknown; requests?: Array<Record<string, unknown>> };
+    const requests = Array.isArray(parsed.requests) ? parsed.requests : [];
+    const next = requests.filter((entry) => String(entry.code ?? "").trim().toUpperCase() !== code.trim().toUpperCase());
+    if (next.length === requests.length) {
+      return;
+    }
+
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.promises.writeFile(filePath, JSON.stringify({ version: 1, requests: next }, null, 2), "utf8");
   }
 
   private async streamMessageRun(
@@ -273,6 +640,8 @@ export class OpenClawService {
   async ensureConfigured(): Promise<void> {
     fs.mkdirSync(paths.openClawStateDir, { recursive: true });
     fs.writeFileSync(paths.openClawEnvPath, "OLLAMA_API_KEY=ollama-local\n", { encoding: "utf8" });
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    let currentConfig = this.readCurrentConfig();
 
     const desiredConfig: Array<[string, unknown]> = [
       ["gateway.mode", "local"],
@@ -280,7 +649,8 @@ export class OpenClawService {
       ["gateway.bind", "loopback"],
       ["gateway.auth.mode", "token"],
       ["gateway.http.endpoints.chatCompletions.enabled", true],
-      ["agents.defaults.model.primary", "ollama/gpt-oss:20b"],
+      ["agents.defaults.model.primary", this.resolvePrimaryModel(runtimeSettings)],
+      ["agents.defaults.thinkingDefault", "off"],
       ["tools.exec.host", "gateway"],
       ["tools.exec.security", "allowlist"],
       ["tools.exec.ask", "on-miss"],
@@ -289,16 +659,12 @@ export class OpenClawService {
     ];
 
     for (const [key, value] of desiredConfig) {
-      await this.execOpenClaw(["config", "set", key, stringifyConfigValue(value), "--strict-json"]);
+      currentConfig = await this.setConfigValueIfNeeded(currentConfig, key, value);
     }
 
-    await this.execOpenClaw([
-      "config",
-      "set",
-      "gateway.auth.token",
-      stringifyConfigValue(await this.ensureGatewayToken()),
-      "--strict-json"
-    ]);
+    currentConfig = await this.setConfigValueIfNeeded(currentConfig, "gateway.auth.token", await this.ensureGatewayToken());
+
+    await this.applyContextManagementPolicy({}, currentConfig);
   }
 
   async status() {
@@ -324,18 +690,7 @@ export class OpenClawService {
     }
 
     try {
-      const output = await this.execOpenClaw([
-        "gateway",
-        "health",
-        "--json",
-        "--timeout",
-        "1500",
-        "--url",
-        OPENCLAW_GATEWAY_URL,
-        "--token",
-        await this.ensureGatewayToken()
-      ]);
-      const parsed = JSON.parse(output) as { version?: unknown };
+      const parsed = await this.gatewayHealthProbe();
       return RuntimeStatusSchema.parse({
         id: "openclaw",
         label: "OpenClaw Gateway",
@@ -352,6 +707,8 @@ export class OpenClawService {
         metadata: {}
       });
     } catch (error) {
+      const failure = await this.explainGatewayFailure(error, { includePortConflicts: true });
+
       return RuntimeStatusSchema.parse({
         id: "openclaw",
         label: "OpenClaw Gateway",
@@ -361,11 +718,16 @@ export class OpenClawService {
         detectedVersion: null,
         binaryPath: openclawBin,
         health: "warn",
-        healthMessage: error instanceof Error ? error.message : "Gateway is not yet reachable.",
+        healthMessage: failure.message,
         endpoint: OPENCLAW_GATEWAY_URL,
         installed: true,
         lastStartedAt: await appStateService.getJsonSetting<string | null>("openclawStartedAt", null),
-        metadata: {}
+        metadata: failure.portOwner
+          ? {
+              portOwnerPid: failure.portOwner.pid,
+              portOwnerCommand: failure.portOwner.command
+            }
+          : {}
       });
     }
   }
@@ -374,8 +736,23 @@ export class OpenClawService {
     return await this.status();
   }
 
+  async contextManagementStatus(): Promise<ContextManagementStatus> {
+    return await this.currentContextManagementStatus();
+  }
+
   async startGateway(): Promise<void> {
     await this.ensureConfigured();
+
+    try {
+      await this.gatewayHealthProbe();
+      return;
+    } catch (error) {
+      const failure = await this.explainGatewayFailure(error, { includePortConflicts: true });
+      if (failure.portOwner && (!this.gatewayProcess || failure.portOwner.pid !== this.gatewayProcess.pid)) {
+        throw new Error(failure.message);
+      }
+    }
+
     if (this.gatewayProcess && this.gatewayProcess.exitCode === null) {
       return;
     }
@@ -420,21 +797,15 @@ export class OpenClawService {
         throw new Error("OpenClaw gateway process exited before becoming ready.");
       }
       try {
-        await this.execOpenClaw([
-          "gateway",
-          "health",
-          "--json",
-          "--timeout",
-          "2000",
-          "--url",
-          OPENCLAW_GATEWAY_URL,
-          "--token",
-          await this.ensureGatewayToken()
-        ]);
+        await this.gatewayHealthProbe();
         return;
-      } catch {
+      } catch (error) {
         if (i === GATEWAY_READY_RETRIES - 1) {
-          throw new Error("OpenClaw gateway did not become ready in time.");
+          const failure = await this.explainGatewayFailure(error, {
+            expectedPid: child.pid ?? null,
+            includePortConflicts: true
+          });
+          throw new Error(failure.message === (error instanceof Error ? error.message : "") ? "OpenClaw gateway did not become ready in time." : failure.message);
         }
       }
     }
@@ -650,19 +1021,68 @@ export class OpenClawService {
       );
     }
 
-    let pairingPending = 0;
-    let approvedPeers: string[] = [];
-    try {
-      const output = await this.execOpenClaw(["pairing", "list", "signal", "--json"], true);
-      const parsed = JSON.parse(output) as { pending?: Array<Record<string, unknown>> };
-      pairingPending = Array.isArray(parsed.pending) ? parsed.pending.length : 0;
-      approvedPeers = Array.isArray(parsed.pending)
-        ? parsed.pending.map((item) => String(item.from ?? item.target ?? "")).filter(Boolean)
-        : [];
-    } catch {
-      pairingPending = 0;
-      approvedPeers = [];
-    }
+    const pendingPairings = await this.listPendingPairings("signal");
+    const healthChecks = [
+      SignalHealthCheckSchema.parse({
+        id: "cli",
+        label: "signal-cli",
+        health: runtimeSettings.signalCliPath && runtimeSettings.signalCliVersion ? "ok" : "warn",
+        message:
+          runtimeSettings.signalCliPath && runtimeSettings.signalCliVersion
+            ? `signal-cli ${runtimeSettings.signalCliVersion}`
+            : "signal-cli is not installed yet."
+      }),
+      SignalHealthCheckSchema.parse({
+        id: "java",
+        label: "Java",
+        health: runtimeSettings.signalJavaHome ? "ok" : "warn",
+        message: runtimeSettings.signalJavaHome ? runtimeSettings.signalJavaHome : "A compatible Java runtime is not configured."
+      }),
+      SignalHealthCheckSchema.parse({
+        id: "account",
+        label: "Account",
+        health: runtimeSettings.signalAccountId ? "ok" : "warn",
+        message: runtimeSettings.signalAccountId ?? "No Signal account is configured yet."
+      }),
+      SignalHealthCheckSchema.parse({
+        id: "daemon",
+        label: "Daemon",
+        health:
+          runtimeSettings.signalDaemonState === "running"
+            ? "ok"
+            : runtimeSettings.signalRegistrationState === "registered"
+              ? "warn"
+              : "warn",
+        message:
+          runtimeSettings.signalDaemonState === "running"
+            ? runtimeSettings.signalDaemonUrl ?? "Signal daemon is reachable."
+            : runtimeSettings.signalLastError ?? "Signal daemon is not running."
+      }),
+      SignalHealthCheckSchema.parse({
+        id: "channel",
+        label: "OpenClaw Channel",
+        health:
+          runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
+            ? "ok"
+            : "warn",
+        message:
+          runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
+            ? "Signal is configured in OpenClaw."
+            : "OpenClaw Signal channel is not fully operational yet."
+      }),
+      SignalHealthCheckSchema.parse({
+        id: "pairing",
+        label: "Pairing Queue",
+        health: pendingPairings.length > 0 ? "warn" : "ok",
+        message: pendingPairings.length > 0 ? `${pendingPairings.length} pending pairing request(s).` : "No pending Signal pairing requests."
+      }),
+      SignalHealthCheckSchema.parse({
+        id: "compatibility",
+        label: "Compatibility",
+        health: runtimeSettings.signalCompatibilityWarning ? "warn" : "ok",
+        message: runtimeSettings.signalCompatibilityWarning ?? "signal-cli version looks current enough for routine use."
+      })
+    ];
 
     return {
       statuses,
@@ -674,17 +1094,21 @@ export class OpenClawService {
           accountId: runtimeSettings.signalAccountId,
           phoneNumber: runtimeSettings.signalPhoneNumber,
           deviceName: runtimeSettings.signalDeviceName,
+          cliVersion: runtimeSettings.signalCliVersion,
           registrationMode: runtimeSettings.signalRegistrationMode,
           registrationState: runtimeSettings.signalRegistrationState,
           daemonState: runtimeSettings.signalDaemonState,
           daemonUrl: runtimeSettings.signalDaemonUrl,
+          receiveMode: runtimeSettings.signalReceiveMode,
           dmPolicy: "pairing",
           allowGroups: false,
-          pairingPending,
-          approvedPeers,
+          channelConfigured: runtimeSettings.signalRegistrationState === "registered",
+          pendingPairings,
           linkUri: runtimeSettings.signalLinkUri,
           lastError: runtimeSettings.signalLastError,
-          lastStartedAt: runtimeSettings.signalLastStartedAt
+          lastStartedAt: runtimeSettings.signalLastStartedAt,
+          compatibilityWarning: runtimeSettings.signalCompatibilityWarning,
+          healthChecks
         }
       })
     };
@@ -734,6 +1158,23 @@ export class OpenClawService {
     await this.execOpenClaw(["pairing", "approve", "signal", code, "--notify"]);
   }
 
+  async resolveSignalPairing(code: string, resolution: "approved" | "denied"): Promise<void> {
+    if (resolution === "approved") {
+      await this.approveSignalPairing(code);
+      return;
+    }
+
+    await this.denyPendingPairingCode("signal", code);
+  }
+
+  async setSmartContextManagement(enabled: boolean): Promise<ContextManagementStatus> {
+    await appStateService.updateRuntimeSettings({
+      smartContextManagementEnabled: enabled
+    });
+    await this.applyContextManagementPolicy();
+    return await this.contextManagementStatus();
+  }
+
   async registerLlamaCppProvider(modelId: string, contextWindow: number): Promise<void> {
     const provider = {
       baseUrl: `http://127.0.0.1:${process.env.DROIDAGENT_LLAMA_CPP_PORT ?? 8012}/v1`,
@@ -770,15 +1211,26 @@ export class OpenClawService {
     if (config.providerId === "ollama-default") {
       const modelId = config.modelId.startsWith("ollama/") ? config.modelId.slice("ollama/".length) : config.modelId;
       await this.selectOllamaModel(modelId);
+      await this.applyContextManagementPolicy({
+        providerId: "ollama-default",
+        modelId,
+        ...(typeof config.contextWindow === "number" ? { contextWindow: config.contextWindow } : {})
+      });
       return;
     }
 
     if (config.providerId === "llamacpp-default") {
       await this.registerLlamaCppProvider(config.modelId, config.contextWindow ?? 8192);
+      await this.applyContextManagementPolicy({
+        providerId: "llamacpp-default",
+        modelId: config.modelId,
+        contextWindow: config.contextWindow ?? 8192
+      });
       return;
     }
 
     await this.selectPrimaryModel(config.modelId);
+    await this.applyContextManagementPolicy(config);
   }
 }
 

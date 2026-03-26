@@ -23,9 +23,17 @@ function looksLikeE164(value: string): boolean {
   return /^\+[1-9]\d{6,14}$/.test(value);
 }
 
+const SIGNAL_STATE_TTL_MS = 5000;
+
 export class SignalService {
   private linkProcess: ChildProcess | null = null;
   private daemonProcess: ChildProcess | null = null;
+  private lastRefreshedAt = 0;
+  private refreshPromise: Promise<void> | null = null;
+
+  invalidateStateCache(): void {
+    this.lastRefreshedAt = 0;
+  }
 
   private async which(binary: string): Promise<string | null> {
     try {
@@ -82,6 +90,37 @@ export class SignalService {
     return { cliPath, javaHome };
   }
 
+  private async detectCliVersion(cliPath: string, javaHome: string): Promise<string | null> {
+    try {
+      const result = await runCommand(cliPath, ["--version"], {
+        env: {
+          ...baseEnv(),
+          JAVA_HOME: javaHome
+        }
+      });
+      return result.stdout.trim().split("\n")[0] || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async detectCompatibilityWarning(): Promise<string | null> {
+    try {
+      const brewPath = await this.which("brew");
+      if (!brewPath) {
+        return null;
+      }
+
+      const result = await runCommand("brew", ["outdated", "signal-cli"], { okExitCodes: [0] });
+      if (result.stdout.trim()) {
+        return "signal-cli is older than the current Homebrew formula. Upgrade it soon; upstream Signal changes can break older builds.";
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   private async signalEnv(): Promise<NodeJS.ProcessEnv> {
     const { javaHome } = await this.ensureSignalRuntime();
     return {
@@ -124,6 +163,7 @@ export class SignalService {
   async installCli(): Promise<{ cliPath: string; javaHome: string }> {
     await runCommand("brew", ["install", "openjdk", "signal-cli"]);
     const runtime = await this.ensureSignalRuntime();
+    this.invalidateStateCache();
     await this.refreshState();
     return runtime;
   }
@@ -139,6 +179,24 @@ export class SignalService {
   }
 
   async refreshState(): Promise<void> {
+    if (this.refreshPromise) {
+      await this.refreshPromise;
+      return;
+    }
+    if (Date.now() - this.lastRefreshedAt < SIGNAL_STATE_TTL_MS) {
+      return;
+    }
+
+    this.refreshPromise = this.refreshStateInternal();
+    try {
+      await this.refreshPromise;
+      this.lastRefreshedAt = Date.now();
+    } finally {
+      this.refreshPromise = null;
+    }
+  }
+
+  private async refreshStateInternal(): Promise<void> {
     const settings = await appStateService.getRuntimeSettings();
     const cliPath = await this.detectCliPath();
     const javaHome = await this.detectJavaHome();
@@ -148,23 +206,23 @@ export class SignalService {
     let daemonState = settings.signalDaemonState;
     let accountId = settings.signalAccountId;
     let phoneNumber = settings.signalPhoneNumber;
+    let cliVersion = settings.signalCliVersion;
+    let compatibilityWarning = settings.signalCompatibilityWarning;
 
     if (!cliPath || !javaHome) {
       await appStateService.updateRuntimeSettings({
         signalCliPath: cliPath,
         signalJavaHome: javaHome,
+        signalCliVersion: null,
+        signalCompatibilityWarning: null,
         signalDaemonState: "stopped"
       });
       return;
     }
 
     try {
-      await runCommand(cliPath, ["--version"], {
-        env: {
-          ...baseEnv(),
-          JAVA_HOME: javaHome
-        }
-      });
+      cliVersion = await this.detectCliVersion(cliPath, javaHome);
+      compatibilityWarning = await this.detectCompatibilityWarning();
       lastError = null;
       if (settings.signalRegistrationMode === "none" && settings.signalRegistrationState === "error") {
         registrationState = "unconfigured";
@@ -203,12 +261,15 @@ export class SignalService {
     await appStateService.updateRuntimeSettings({
       signalCliPath: cliPath,
       signalJavaHome: javaHome,
+      signalCliVersion: cliVersion,
       signalAccountId: accountId,
       signalPhoneNumber: phoneNumber,
+      signalReceiveMode: "persistent",
       signalRegistrationState: registrationState,
       signalDaemonState: daemonState,
       signalDaemonUrl: daemonUrl,
-      signalLastError: lastError
+      signalLastError: lastError,
+      signalCompatibilityWarning: compatibilityWarning
     });
   }
 
@@ -219,6 +280,7 @@ export class SignalService {
     reregister?: boolean;
     autoInstall?: boolean;
   }): Promise<void> {
+    this.invalidateStateCache();
     if (!looksLikeE164(params.phoneNumber)) {
       throw new Error("Signal registration requires an E.164 number like +15555550123.");
     }
@@ -263,6 +325,7 @@ export class SignalService {
   }
 
   async verifyRegistration(params: { verificationCode: string; pin?: string }): Promise<void> {
+    this.invalidateStateCache();
     const accountId = await this.resolveAccountId();
     if (!accountId) {
       throw new Error("No Signal account is pending verification.");
@@ -298,6 +361,7 @@ export class SignalService {
   }
 
   async startLink(deviceName: string): Promise<{ linkUri: string }> {
+    this.invalidateStateCache();
     if (this.linkProcess && this.linkProcess.exitCode === null) {
       const current = await appStateService.getRuntimeSettings();
       if (current.signalLinkUri) {
@@ -402,6 +466,7 @@ export class SignalService {
   }
 
   async cancelLink(): Promise<void> {
+    this.invalidateStateCache();
     if (this.linkProcess && this.linkProcess.exitCode === null) {
       this.linkProcess.kill("SIGTERM");
       this.linkProcess = null;
@@ -415,6 +480,7 @@ export class SignalService {
   }
 
   async startDaemon(): Promise<void> {
+    this.invalidateStateCache();
     const settings = await appStateService.getRuntimeSettings();
     const accountId = settings.signalAccountId ?? (await this.resolveAccountId());
     if (!accountId) {
@@ -446,8 +512,6 @@ export class SignalService {
         "daemon",
         "--http",
         `127.0.0.1:${SIGNAL_DAEMON_PORT}`,
-        "--receive-mode",
-        "on-start",
         "--ignore-stories",
         "--ignore-avatars"
       ],
@@ -474,6 +538,7 @@ export class SignalService {
       signalDaemonUrl: SIGNAL_DAEMON_URL,
       signalDaemonPid: child.pid ?? null,
       signalDaemonState: "starting",
+      signalReceiveMode: "persistent",
       signalLastError: null
     });
 
@@ -494,6 +559,7 @@ export class SignalService {
         await this.updateRegistrationState({
           signalDaemonState: "running",
           signalDaemonUrl: SIGNAL_DAEMON_URL,
+          signalReceiveMode: "persistent",
           signalLastStartedAt: nowIso(),
           signalLastError: null
         });
@@ -510,6 +576,7 @@ export class SignalService {
   }
 
   async stopDaemon(): Promise<void> {
+    this.invalidateStateCache();
     const settings = await appStateService.getRuntimeSettings();
     const pid = this.daemonProcess?.pid ?? settings.signalDaemonPid ?? null;
 
@@ -531,6 +598,7 @@ export class SignalService {
   }
 
   async disconnect(params: { unregister: boolean; deleteAccount?: boolean; clearLocalData?: boolean }): Promise<void> {
+    this.invalidateStateCache();
     const accountId = await this.resolveAccountId();
 
     if (this.linkProcess && this.linkProcess.exitCode === null) {
@@ -559,17 +627,35 @@ export class SignalService {
       signalPhoneNumber: null,
       signalAccountId: null,
       signalDeviceName: null,
+      signalReceiveMode: "persistent",
       signalRegistrationMode: "none",
       signalRegistrationState: "unconfigured",
       signalLinkUri: null,
       signalDaemonUrl: SIGNAL_DAEMON_URL,
       signalDaemonPid: null,
       signalDaemonState: "stopped",
-      signalLastError: null
+      signalLastError: null,
+      signalCompatibilityWarning: null
     });
     await appStateService.updateSetupState({
       signalEnabled: false
     });
+  }
+
+  async sendTestMessage(params: { target: string; text: string }): Promise<void> {
+    this.invalidateStateCache();
+    const accountId = await this.resolveAccountId();
+    if (!accountId) {
+      throw new Error("A registered Signal account is required before sending a test message.");
+    }
+    if (!params.target.trim()) {
+      throw new Error("A Signal recipient is required.");
+    }
+    if (!params.text.trim()) {
+      throw new Error("A Signal test message cannot be empty.");
+    }
+
+    await this.runSignal(["-a", accountId, "send", "-m", params.text.trim(), params.target.trim()]);
   }
 }
 

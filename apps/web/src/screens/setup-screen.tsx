@@ -2,21 +2,36 @@ import { useEffect, useState } from "react";
 
 import type { BootstrapLink } from "@droidagent/shared";
 
+import { useAccessQuery, useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { postJson } from "../lib/api";
 
 export function SetupScreen() {
-  const { dashboard, access, runAction, refreshDashboard } = useDroidAgentApp();
+  const { runAction } = useDroidAgentApp();
+  const dashboardQuery = useDashboardQuery(true);
+  const accessQuery = useAccessQuery();
+  const dashboard = dashboardQuery.data;
+  const access = accessQuery.data;
   const [workspaceInput, setWorkspaceInput] = useState(".");
   const [setupModel, setSetupModel] = useState("gpt-oss:20b");
   const [llamaModel, setLlamaModel] = useState("gemma-3-1b-it");
   const [bootstrapLink, setBootstrapLink] = useState<BootstrapLink | null>(null);
+  const [cloudflareHostname, setCloudflareHostname] = useState("");
+  const [cloudflareToken, setCloudflareToken] = useState("");
+  const canEnableCloudflare = cloudflareHostname.trim().length > 0 && (cloudflareToken.trim().length > 0 || Boolean(access?.cloudflareStatus.tokenStored));
+  const canGeneratePhoneLink = Boolean(access?.canonicalOrigin);
 
   useEffect(() => {
     if (dashboard?.setup.workspaceRoot) {
       setWorkspaceInput(dashboard.setup.workspaceRoot);
     }
   }, [dashboard?.setup.workspaceRoot]);
+
+  useEffect(() => {
+    if (access?.cloudflareStatus.hostname) {
+      setCloudflareHostname(access.cloudflareStatus.hostname);
+    }
+  }, [access?.cloudflareStatus.hostname]);
 
   return (
     <section className="stack-list">
@@ -37,7 +52,6 @@ export function SetupScreen() {
               await postJson("/api/setup/workspace", {
                 workspaceRoot: workspaceInput
               });
-              await refreshDashboard();
             }, "Workspace updated.")
           }
         >
@@ -53,7 +67,6 @@ export function SetupScreen() {
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/setup/runtime", { runtimeId: "ollama" });
-                await refreshDashboard();
               }, "Ollama installed and started.")
             }
           >
@@ -64,7 +77,6 @@ export function SetupScreen() {
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/setup/runtime", { runtimeId: "llamaCpp" });
-                await refreshDashboard();
               }, "llama.cpp installed.")
             }
           >
@@ -88,7 +100,6 @@ export function SetupScreen() {
                   runtimeId: "ollama",
                   modelId: setupModel
                 });
-                await refreshDashboard();
               }, "Ollama model pulled.")
             }
           >
@@ -110,7 +121,6 @@ export function SetupScreen() {
                 await postJson("/api/runtime/llamaCpp/models", {
                   modelId: llamaModel
                 });
-                await refreshDashboard();
               }, "llama.cpp provider updated.")
             }
           >
@@ -121,33 +131,97 @@ export function SetupScreen() {
 
       <article className="panel-card">
         <h3>Remote Phone Access</h3>
-        <p>Tailscale is the supported internet path. Keep DroidAgent on loopback and publish only through Tailscale Serve.</p>
+        <p>Keep DroidAgent on loopback. Use either Tailscale Serve or a named Cloudflare Tunnel when you need phone access away from home.</p>
+        <div className="stack-list">
+          <article className="panel-card compact">
+            <strong>Tailscale</strong>
+            <small>{access?.tailscaleStatus.healthMessage ?? "Checking Tailscale..."}</small>
+            <div className="button-row">
+              <button
+                onClick={() =>
+                  void runAction(async () => {
+                    await postJson("/api/access/tailscale/enable", {});
+                  }, "Tailscale Serve enabled.")
+                }
+              >
+                Enable Tailscale Serve
+              </button>
+              <button
+                className="secondary"
+                disabled={!access?.tailscaleStatus.canonicalUrl}
+                onClick={() =>
+                  void runAction(async () => {
+                    await postJson("/api/access/canonical", { source: "tailscale" });
+                  }, "Tailscale set as canonical.")
+                }
+              >
+                Use Tailscale URL
+              </button>
+            </div>
+          </article>
+
+          <article className="panel-card compact">
+            <strong>Cloudflare Tunnel</strong>
+            <small>{access?.cloudflareStatus.healthMessage ?? "Checking Cloudflare..."}</small>
+            <div className="field-stack">
+              <label>
+                Public hostname
+                <input value={cloudflareHostname} onChange={(event) => setCloudflareHostname(event.target.value)} placeholder="agent.example.com" />
+              </label>
+              <label>
+                Tunnel token
+                <input
+                  type="password"
+                  value={cloudflareToken}
+                  onChange={(event) => setCloudflareToken(event.target.value)}
+                  placeholder={access?.cloudflareStatus.tokenStored ? "Stored in Keychain" : "Paste Cloudflare tunnel token"}
+                />
+              </label>
+              <div className="button-row">
+                <button
+                  disabled={!canEnableCloudflare}
+                  onClick={() =>
+                    void runAction(async () => {
+                      await postJson("/api/access/cloudflare/enable", {
+                        hostname: cloudflareHostname,
+                        tunnelToken: cloudflareToken
+                      });
+                      setCloudflareToken("");
+                    }, "Cloudflare tunnel enabled.")
+                  }
+                >
+                  Enable Cloudflare Tunnel
+                </button>
+                <button
+                  className="secondary"
+                  disabled={!access?.cloudflareStatus.canonicalUrl}
+                  onClick={() =>
+                  void runAction(async () => {
+                    await postJson("/api/access/canonical", { source: "cloudflare" });
+                  }, "Cloudflare set as canonical.")
+                }
+              >
+                  Use Cloudflare URL
+                </button>
+              </div>
+            </div>
+          </article>
+        </div>
         <div className="button-row">
           <button
-            onClick={() =>
-              void runAction(async () => {
-                await postJson("/api/access/tailscale/enable", {});
-                await refreshDashboard();
-              }, "Tailscale Serve enabled.")
-            }
-          >
-            Enable Tailscale Serve
-          </button>
-          <button
-            className="secondary"
+            disabled={!canGeneratePhoneLink}
             onClick={() =>
               void runAction(async () => {
                 const result = await postJson<BootstrapLink>("/api/access/bootstrap", {});
                 setBootstrapLink(result);
-                await refreshDashboard();
               }, "Phone bootstrap link generated.")
             }
           >
             Generate Phone Link
           </button>
         </div>
-        {access ? <pre>{JSON.stringify(access, null, 2)}</pre> : null}
-        {bootstrapLink ? <pre>{bootstrapLink.bootstrapUrl}</pre> : null}
+        {access?.canonicalOrigin ? <small>Canonical URL: {access.canonicalOrigin.origin}</small> : null}
+        {bootstrapLink ? <small>Bootstrap link: {bootstrapLink.bootstrapUrl}</small> : null}
       </article>
 
       <article className="panel-card">

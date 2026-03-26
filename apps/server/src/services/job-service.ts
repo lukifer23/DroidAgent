@@ -8,6 +8,7 @@ import { JobOutputSnapshotSchema, JobRecordSchema, nowIso, type JobRecord } from
 import { baseEnv, paths } from "../env.js";
 import { JOB_MAX_OUTPUT_BYTES, JOB_TIMEOUT_MS, resolveCwdWithinWorkspace, validateCommand } from "../lib/job-policy.js";
 import { appStateService } from "./app-state-service.js";
+import { performanceService } from "./performance-service.js";
 
 interface JobOutputEvent {
   jobId: string;
@@ -101,6 +102,9 @@ export class JobService extends EventEmitter<{
   }
 
   async readJobOutput(jobId: string) {
+    const metric = performanceService.start("server", "job.output.read", {
+      jobId
+    });
     const [stdout, stderr, stdoutBytes, stderrBytes, truncated] = await Promise.all([
       readUtf8(stdoutPath(jobId)),
       readUtf8(stderrPath(jobId)),
@@ -112,7 +116,7 @@ export class JobService extends EventEmitter<{
         .catch(() => false)
     ]);
 
-    return JobOutputSnapshotSchema.parse({
+    const snapshot = JobOutputSnapshotSchema.parse({
       jobId,
       stdout,
       stderr,
@@ -120,16 +124,24 @@ export class JobService extends EventEmitter<{
       stdoutBytes,
       stderrBytes
     });
+    metric.finish({
+      bytes: stdoutBytes + stderrBytes,
+      truncated
+    });
+    return snapshot;
   }
 
   async startJob(command: string, cwd: string, userId?: string) {
+    const startMetric = performanceService.start("server", "job.start", {
+      cwd
+    });
     validateCommand(command);
 
     const settings = await appStateService.getRuntimeSettings();
     if (!settings.workspaceRoot) {
       throw new Error("Workspace root must be configured before running jobs.");
     }
-    const jailedCwd = resolveCwdWithinWorkspace(cwd, settings.workspaceRoot);
+    const jailedCwd = await resolveCwdWithinWorkspace(cwd, settings.workspaceRoot);
 
     const record = await appStateService.createJob(command, jailedCwd);
     const state: MutableJobRecord = { ...record };
@@ -148,6 +160,9 @@ export class JobService extends EventEmitter<{
       env: baseEnv(),
       stdio: ["ignore", "pipe", "pipe"]
     });
+    startMetric.finish({
+      jobId: record.id
+    });
 
     state.status = "running";
     state.startedAt = nowIso();
@@ -160,6 +175,10 @@ export class JobService extends EventEmitter<{
     let outputBytes = 0;
     let truncated = false;
     let finalized = false;
+    let firstOutputRecorded = false;
+    const firstOutputMetric = performanceService.start("server", "job.firstOutput", {
+      jobId: record.id
+    });
 
     const markTruncated = async () => {
       if (truncated) {
@@ -199,6 +218,13 @@ export class JobService extends EventEmitter<{
         return;
       }
 
+      if (!firstOutputRecorded && chunk.length > 0) {
+        firstOutputRecorded = true;
+        firstOutputMetric.finish({
+          stream
+        });
+      }
+
       const bytes = Buffer.byteLength(chunk, "utf8");
       const remaining = JOB_MAX_OUTPUT_BYTES - outputBytes;
       let allowedChunk = chunk;
@@ -232,6 +258,13 @@ export class JobService extends EventEmitter<{
         return;
       }
       finalized = true;
+      if (!firstOutputRecorded) {
+        firstOutputRecorded = true;
+        firstOutputMetric.finish({
+          stream: "none",
+          outcome: "no-output"
+        });
+      }
       if (lastLine) {
         state.lastLine = lastLine;
       }

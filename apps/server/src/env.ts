@@ -8,6 +8,7 @@ export const OPENCLAW_GATEWAY_PORT = Number(process.env.DROIDAGENT_OPENCLAW_PORT
 export const LLAMA_CPP_PORT = Number(process.env.DROIDAGENT_LLAMA_CPP_PORT ?? 8012);
 export const SIGNAL_DAEMON_PORT = Number(process.env.DROIDAGENT_SIGNAL_PORT ?? 8091);
 export const OPENCLAW_PROFILE = process.env.DROIDAGENT_OPENCLAW_PROFILE ?? "droidagent";
+export const TEST_MODE = process.env.DROIDAGENT_TEST_MODE === "1";
 export const OPENCLAW_GATEWAY_URL = `ws://127.0.0.1:${OPENCLAW_GATEWAY_PORT}`;
 export const OPENCLAW_GATEWAY_HTTP_URL = `http://127.0.0.1:${OPENCLAW_GATEWAY_PORT}`;
 export const SIGNAL_DAEMON_URL = `http://127.0.0.1:${SIGNAL_DAEMON_PORT}`;
@@ -30,6 +31,7 @@ export const paths = {
   launchAgentPath: path.join(os.homedir(), "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`),
   launchAgentStdoutPath: path.join(os.homedir(), ".droidagent", "logs", "launch-agent.stdout.log"),
   launchAgentStderrPath: path.join(os.homedir(), ".droidagent", "logs", "launch-agent.stderr.log"),
+  cloudflareLogPath: path.join(os.homedir(), ".droidagent", "logs", "cloudflared.log"),
   openClawStateDir: path.join(os.homedir(), `.openclaw-${OPENCLAW_PROFILE}`),
   openClawConfigPath: path.join(os.homedir(), `.openclaw-${OPENCLAW_PROFILE}`, "openclaw.json"),
   openClawEnvPath: path.join(os.homedir(), `.openclaw-${OPENCLAW_PROFILE}`, ".env"),

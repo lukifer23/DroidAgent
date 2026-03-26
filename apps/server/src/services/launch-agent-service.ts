@@ -5,7 +5,10 @@ import { LaunchAgentStatusSchema, type LaunchAgentStatus } from "@droidagent/sha
 
 import { LAUNCH_AGENT_LABEL, SERVER_PORT, baseEnv, paths } from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
+import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
+
+const LAUNCH_AGENT_STATUS_TTL_MS = 5000;
 
 function escapeXml(value: string): string {
   return value
@@ -18,6 +21,11 @@ function escapeXml(value: string): string {
 
 export class LaunchAgentService {
   private label = LAUNCH_AGENT_LABEL;
+  private readonly statusCache = new TtlCache<LaunchAgentStatus>(LAUNCH_AGENT_STATUS_TTL_MS);
+
+  invalidateStatusCache(): void {
+    this.statusCache.invalidate();
+  }
 
   private domain(): string {
     const uid = process.getuid?.();
@@ -101,49 +109,51 @@ ${envPlist}
   }
 
   async status(): Promise<LaunchAgentStatus> {
-    const installed = fs.existsSync(paths.launchAgentPath);
-    let loaded = false;
-    let running = false;
-    let pid: number | null = null;
-    let lastExitStatus: number | null = null;
-    let health = installed ? "warn" : "warn";
-    let healthMessage = installed ? "LaunchAgent plist is installed but not loaded." : "LaunchAgent is not installed yet.";
+    return await this.statusCache.get(async () => {
+      const installed = fs.existsSync(paths.launchAgentPath);
+      let loaded = false;
+      let running = false;
+      let pid: number | null = null;
+      let lastExitStatus: number | null = null;
+      let health = installed ? "warn" : "warn";
+      let healthMessage = installed ? "LaunchAgent plist is installed but not loaded." : "LaunchAgent is not installed yet.";
 
-    const result = await this.launchctl(["print", this.serviceTarget()], true);
-    const combined = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`;
+      const result = await this.launchctl(["print", this.serviceTarget()], true);
+      const combined = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`;
 
-    if (result && !/could not find service|bad request/i.test(combined)) {
-      loaded = true;
-      const pidMatch = combined.match(/\bpid = (\d+)/);
-      const stateMatch = combined.match(/\bstate = ([^\n]+)/);
-      const exitMatch = combined.match(/\blast exit code = (-?\d+)/i) ?? combined.match(/\blast exit status = (-?\d+)/i);
-      pid = pidMatch ? Number(pidMatch[1]) : null;
-      running = Boolean(pid && pid > 0) || /state = running/i.test(stateMatch?.[0] ?? "");
-      lastExitStatus = exitMatch ? Number(exitMatch[1]) : null;
+      if (result && !/could not find service|bad request/i.test(combined)) {
+        loaded = true;
+        const pidMatch = combined.match(/\bpid = (\d+)/);
+        const stateMatch = combined.match(/\bstate = ([^\n]+)/);
+        const exitMatch = combined.match(/\blast exit code = (-?\d+)/i) ?? combined.match(/\blast exit status = (-?\d+)/i);
+        pid = pidMatch ? Number(pidMatch[1]) : null;
+        running = Boolean(pid && pid > 0) || /state = running/i.test(stateMatch?.[0] ?? "");
+        lastExitStatus = exitMatch ? Number(exitMatch[1]) : null;
 
-      if (running) {
-        health = "ok";
-        healthMessage = `LaunchAgent is running${pid ? ` (pid ${pid})` : ""}.`;
-      } else {
-        health = installed ? "warn" : "warn";
-        healthMessage = installed
-          ? "LaunchAgent is installed but the service is not currently running."
-          : "LaunchAgent is not installed yet.";
+        if (running) {
+          health = "ok";
+          healthMessage = `LaunchAgent is running${pid ? ` (pid ${pid})` : ""}.`;
+        } else {
+          health = installed ? "warn" : "warn";
+          healthMessage = installed
+            ? "LaunchAgent is installed but the service is not currently running."
+            : "LaunchAgent is not installed yet.";
+        }
       }
-    }
 
-    return LaunchAgentStatusSchema.parse({
-      label: this.label,
-      plistPath: paths.launchAgentPath,
-      stdoutPath: paths.launchAgentStdoutPath,
-      stderrPath: paths.launchAgentStderrPath,
-      installed,
-      loaded,
-      running,
-      pid,
-      lastExitStatus,
-      health,
-      healthMessage
+      return LaunchAgentStatusSchema.parse({
+        label: this.label,
+        plistPath: paths.launchAgentPath,
+        stdoutPath: paths.launchAgentStdoutPath,
+        stderrPath: paths.launchAgentStderrPath,
+        installed,
+        loaded,
+        running,
+        pid,
+        lastExitStatus,
+        health,
+        healthMessage
+      });
     });
   }
 
@@ -153,6 +163,7 @@ ${envPlist}
     fs.writeFileSync(paths.launchAgentPath, this.buildPlist(), { encoding: "utf8" });
     await appStateService.updateRuntimeSettings({ launchAgentInstalled: true });
     await appStateService.markSetupStepCompleted("launchAgent");
+    this.invalidateStatusCache();
     return await this.status();
   }
 
@@ -169,6 +180,7 @@ ${envPlist}
     await this.launchctl(["bootstrap", this.domain(), paths.launchAgentPath]);
     await this.launchctl(["kickstart", "-k", this.serviceTarget()]);
     await appStateService.updateRuntimeSettings({ launchAgentInstalled: true });
+    this.invalidateStatusCache();
     return await this.status();
   }
 
@@ -179,6 +191,7 @@ ${envPlist}
     }
     const target = fs.existsSync(paths.launchAgentPath) ? paths.launchAgentPath : this.serviceTarget();
     await this.launchctl(["bootout", this.domain(), target], true);
+    this.invalidateStatusCache();
     return await this.status();
   }
 
@@ -188,6 +201,7 @@ ${envPlist}
       fs.unlinkSync(paths.launchAgentPath);
     }
     await appStateService.updateRuntimeSettings({ launchAgentInstalled: false });
+    this.invalidateStatusCache();
     return await this.status();
   }
 }

@@ -13,6 +13,7 @@ import {
 
 import { LLAMA_CPP_PORT, baseEnv, paths } from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
+import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 import { harnessService } from "./harness-service.js";
 import { keychainService } from "./keychain-service.js";
@@ -21,6 +22,8 @@ import { signalService } from "./signal-service.js";
 
 const HEALTH_CHECK_RETRIES = 3;
 const HEALTH_CHECK_DELAY_MS = 500;
+const RUNTIME_STATUS_TTL_MS = 5000;
+const PROVIDER_PROFILE_TTL_MS = 5000;
 
 interface LlamaModelPreset {
   id: string;
@@ -46,6 +49,13 @@ const LLAMA_CPP_PRESETS: LlamaModelPreset[] = [
 
 export class RuntimeService {
   private llamaCppProcess: ChildProcess | null = null;
+  private readonly runtimeStatusesCache = new TtlCache<RuntimeStatus[]>(RUNTIME_STATUS_TTL_MS);
+  private readonly providerProfilesCache = new TtlCache<ProviderProfile[]>(PROVIDER_PROFILE_TTL_MS);
+
+  invalidateCaches(): void {
+    this.runtimeStatusesCache.invalidate();
+    this.providerProfilesCache.invalidate();
+  }
 
   private async binaryPath(name: string): Promise<string | null> {
     try {
@@ -182,7 +192,9 @@ export class RuntimeService {
   }
 
   async getRuntimeStatuses(): Promise<RuntimeStatus[]> {
-    return await Promise.all([harnessService.health(), this.ollamaStatus(), this.llamaCppStatus()]);
+    return await this.runtimeStatusesCache.get(async () => {
+      return await Promise.all([harnessService.health(), this.ollamaStatus(), this.llamaCppStatus()]);
+    });
   }
 
   async installRuntime(runtimeId: RuntimeId): Promise<void> {
@@ -191,31 +203,37 @@ export class RuntimeService {
     }
     const formula = runtimeId === "ollama" ? "ollama" : "llama.cpp";
     await runCommand("brew", ["install", formula]);
+    this.invalidateCaches();
   }
 
   async startRuntime(runtimeId: RuntimeId): Promise<void> {
     if (runtimeId === "openclaw") {
       await openclawService.startGateway();
+      this.invalidateCaches();
       return;
     }
 
     if (runtimeId === "ollama") {
       await runCommand("brew", ["services", "start", "ollama"]);
       await appStateService.setJsonSetting("ollamaStartedAt", new Date().toISOString());
+      this.invalidateCaches();
       return;
     }
 
     await this.startLlamaCppServer();
+    this.invalidateCaches();
   }
 
   async stopRuntime(runtimeId: RuntimeId): Promise<void> {
     if (runtimeId === "openclaw") {
       await openclawService.stopGateway();
+      this.invalidateCaches();
       return;
     }
 
     if (runtimeId === "ollama") {
       await runCommand("brew", ["services", "stop", "ollama"], { okExitCodes: [0, 1] });
+      this.invalidateCaches();
       return;
     }
 
@@ -223,6 +241,7 @@ export class RuntimeService {
       this.llamaCppProcess.kill("SIGTERM");
       this.llamaCppProcess = null;
     }
+    this.invalidateCaches();
   }
 
   async pullModel(runtimeId: RuntimeId, modelId: string): Promise<void> {
@@ -241,6 +260,7 @@ export class RuntimeService {
         selectedRuntime: "ollama",
         selectedModel: modelId
       });
+      this.invalidateCaches();
       return;
     }
 
@@ -261,54 +281,57 @@ export class RuntimeService {
         selectedRuntime: "llamaCpp",
         selectedModel: preset.hfRepo
       });
+      this.invalidateCaches();
       return;
     }
   }
 
   async listProviderProfiles(): Promise<ProviderProfile[]> {
-    const statuses = await this.getRuntimeStatuses();
-    const settings = await appStateService.getRuntimeSettings();
-    const cloudProviders = await keychainService.listProviderSummaries();
+    return await this.providerProfilesCache.get(async () => {
+      const statuses = await this.getRuntimeStatuses();
+      const settings = await appStateService.getRuntimeSettings();
+      const cloudProviders = await keychainService.listProviderSummaries();
 
-    return [
-      ProviderProfileSchema.parse({
-        id: "ollama-default",
-        provider: "ollama",
-        label: "Ollama",
-        model: settings.ollamaModel,
-        baseUrl: "http://127.0.0.1:11434",
-        enabled: settings.activeProviderId === "ollama-default",
-        toolSupport: true,
-        health: statuses.find((status) => status.id === "ollama")?.health ?? "warn",
-        healthMessage: statuses.find((status) => status.id === "ollama")?.healthMessage ?? "Unavailable"
-      }),
-      ProviderProfileSchema.parse({
-        id: "llamacpp-default",
-        provider: "llamaCpp",
-        label: "llama.cpp",
-        model: settings.llamaCppModel,
-        baseUrl: `http://127.0.0.1:${LLAMA_CPP_PORT}/v1`,
-        enabled: settings.activeProviderId === "llamacpp-default",
-        toolSupport: true,
-        health: statuses.find((status) => status.id === "llamaCpp")?.health ?? "warn",
-        healthMessage: statuses.find((status) => status.id === "llamaCpp")?.healthMessage ?? "Unavailable"
-      }),
-      ...cloudProviders
-        .filter((provider) => provider.stored && provider.defaultModel)
-        .map((provider) =>
-          ProviderProfileSchema.parse({
-            id: provider.id,
-            provider: "cloud",
-            label: provider.label,
-            model: provider.defaultModel ?? "",
-            baseUrl: null,
-            enabled: settings.activeProviderId === provider.id,
-            toolSupport: true,
-            health: provider.health,
-            healthMessage: provider.healthMessage
-          })
-        )
-    ];
+      return [
+        ProviderProfileSchema.parse({
+          id: "ollama-default",
+          provider: "ollama",
+          label: "Ollama",
+          model: settings.ollamaModel,
+          baseUrl: "http://127.0.0.1:11434",
+          enabled: settings.activeProviderId === "ollama-default",
+          toolSupport: true,
+          health: statuses.find((status) => status.id === "ollama")?.health ?? "warn",
+          healthMessage: statuses.find((status) => status.id === "ollama")?.healthMessage ?? "Unavailable"
+        }),
+        ProviderProfileSchema.parse({
+          id: "llamacpp-default",
+          provider: "llamaCpp",
+          label: "llama.cpp",
+          model: settings.llamaCppModel,
+          baseUrl: `http://127.0.0.1:${LLAMA_CPP_PORT}/v1`,
+          enabled: settings.activeProviderId === "llamacpp-default",
+          toolSupport: true,
+          health: statuses.find((status) => status.id === "llamaCpp")?.health ?? "warn",
+          healthMessage: statuses.find((status) => status.id === "llamaCpp")?.healthMessage ?? "Unavailable"
+        }),
+        ...cloudProviders
+          .filter((provider) => provider.stored && provider.defaultModel)
+          .map((provider) =>
+            ProviderProfileSchema.parse({
+              id: provider.id,
+              provider: "cloud",
+              label: provider.label,
+              model: provider.defaultModel ?? "",
+              baseUrl: null,
+              enabled: settings.activeProviderId === provider.id,
+              toolSupport: true,
+              health: provider.health,
+              healthMessage: provider.healthMessage
+            })
+          )
+      ];
+    });
   }
 
   async listModels(runtimeId: RuntimeId) {
@@ -330,6 +353,7 @@ export class RuntimeService {
 
   async installSignalCli(): Promise<string> {
     const runtime = await signalService.installCli();
+    this.invalidateCaches();
     return runtime.cliPath;
   }
 
@@ -369,6 +393,7 @@ export class RuntimeService {
 
     this.llamaCppProcess = child;
     await appStateService.setJsonSetting("llamaCppStartedAt", new Date().toISOString());
+    this.invalidateCaches();
 
     for (let i = 0; i < HEALTH_CHECK_RETRIES; i++) {
       await new Promise((r) => setTimeout(r, HEALTH_CHECK_DELAY_MS * (i + 1)));

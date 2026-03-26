@@ -1,10 +1,13 @@
 import type { ProviderProfile, RuntimeStatus } from "@droidagent/shared";
 
+import { useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { postJson } from "../lib/api";
 
 export function ModelsScreen() {
-  const { dashboard, runAction, refreshDashboard } = useDroidAgentApp();
+  const { runAction } = useDroidAgentApp();
+  const dashboardQuery = useDashboardQuery(true);
+  const dashboard = dashboardQuery.data;
 
   return (
     <section className="stack-list">
@@ -18,7 +21,6 @@ export function ModelsScreen() {
                 onClick={() =>
                   void runAction(async () => {
                     await postJson(`/api/runtime/${runtime.id}/install`, {});
-                    await refreshDashboard();
                   }, `${runtime.label} installed.`)
                 }
               >
@@ -30,7 +32,6 @@ export function ModelsScreen() {
               onClick={() =>
                 void runAction(async () => {
                   await postJson(`/api/runtime/${runtime.id}/start`, {});
-                  await refreshDashboard();
                 }, `${runtime.label} start requested.`)
               }
             >
@@ -41,7 +42,6 @@ export function ModelsScreen() {
               onClick={() =>
                 void runAction(async () => {
                   await postJson(`/api/runtime/${runtime.id}/stop`, {});
-                  await refreshDashboard();
                 }, `${runtime.label} stop requested.`)
               }
             >

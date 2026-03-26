@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
 import { resolveCwdWithinWorkspace, validateCommand } from "./job-policy.js";
 
 describe("validateCommand", () => {
@@ -30,27 +35,44 @@ describe("validateCommand", () => {
 });
 
 describe("resolveCwdWithinWorkspace", () => {
-  const root = "/Users/test/workspace";
+  let tempRoot: string;
+  let workspaceRoot: string;
 
-  it("resolves . to workspace root", () => {
-    expect(resolveCwdWithinWorkspace(".", root)).toBe(root);
+  beforeEach(async () => {
+    tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "droidagent-job-policy-"));
+    workspaceRoot = path.join(tempRoot, "workspace");
+    await fs.mkdir(path.join(workspaceRoot, "project"), { recursive: true });
   });
 
-  it("resolves subdir within workspace", () => {
-    expect(resolveCwdWithinWorkspace("subdir", root)).toBe(
-      "/Users/test/workspace/subdir"
-    );
+  afterEach(async () => {
+    await fs.rm(tempRoot, { recursive: true, force: true });
   });
 
-  it("rejects path escaping workspace", () => {
-    expect(() =>
-      resolveCwdWithinWorkspace("../etc", root)
-    ).toThrow("inside the workspace root");
+  it("resolves . to the real workspace root", async () => {
+    await expect(resolveCwdWithinWorkspace(".", workspaceRoot)).resolves.toBe(await fs.realpath(workspaceRoot));
   });
 
-  it("rejects absolute path outside workspace", () => {
-    expect(() =>
-      resolveCwdWithinWorkspace("/tmp", root)
-    ).toThrow("inside the workspace root");
+  it("resolves a real subdirectory within the workspace", async () => {
+    await expect(resolveCwdWithinWorkspace("project", workspaceRoot)).resolves.toBe(await fs.realpath(path.join(workspaceRoot, "project")));
+  });
+
+  it("rejects missing directories", async () => {
+    await expect(resolveCwdWithinWorkspace("missing", workspaceRoot)).rejects.toThrow(/does not exist/);
+  });
+
+  it("rejects paths escaping the workspace root", async () => {
+    await expect(resolveCwdWithinWorkspace("../etc", workspaceRoot)).rejects.toThrow(/inside the workspace root/);
+  });
+
+  it("rejects absolute paths outside the workspace", async () => {
+    await expect(resolveCwdWithinWorkspace("/tmp", workspaceRoot)).rejects.toThrow(/inside the workspace root/);
+  });
+
+  it("rejects symlinked directories that resolve outside the workspace", async () => {
+    const outside = path.join(tempRoot, "outside");
+    await fs.mkdir(outside, { recursive: true });
+    await fs.symlink(outside, path.join(workspaceRoot, "escape"));
+
+    await expect(resolveCwdWithinWorkspace("escape", workspaceRoot)).rejects.toThrow(/inside the workspace root/);
   });
 });

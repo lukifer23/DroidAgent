@@ -14,7 +14,7 @@
   - Setup, Chat, Files, Jobs, Models, Channels, Settings
   - reconnect-safe streaming, install prompt, Fold-friendly layout
 - `packages/shared`
-  - common schemas for dashboard state, files, jobs, passkeys, access/bootstrap payloads, and WebSocket events
+  - common schemas for dashboard state, files, jobs, passkeys, access/bootstrap payloads, diagnostics telemetry, and WebSocket events
 
 ## Harness boundary
 
@@ -47,9 +47,16 @@
 ## Remote access
 
 - local daily control starts on loopback
-- Tailscale Serve is the supported remote phone path
+- Tailscale Serve and a Cloudflare named tunnel are the supported remote phone paths
 - DroidAgent tracks canonical origin, bootstrap token issuance, and phone-side owner enrollment state
-- after canonical setup, the Tailscale URL is the primary daily-use origin
+- after canonical setup, the selected remote URL becomes the primary daily-use origin
+
+## Context management
+
+- DroidAgent writes OpenClaw compaction policy into the dedicated `droidagent` profile
+- Smart Context Management enables safeguard compaction, pre-compaction memory flush, and provider-aware context pruning
+- Anthropic and OpenRouter Anthropic models use `cache-ttl` pruning
+- local runtimes keep pruning off while still using compaction and memory flush
 
 ## File and job model
 
@@ -58,8 +65,16 @@
 - jobs are owner-submitted shell commands inside the configured workspace jail
 - stdout/stderr are streamed live and persisted under `~/.droidagent/logs/jobs`
 
+## Diagnostics and performance
+
+- the server records rolling in-memory timing samples for HTTP requests, dashboard snapshots, chat relay timing, file operations, and job execution
+- the client records route, chat, reconnect, file, and job timings locally
+- the Settings route surfaces a compact diagnostics card
+- the benchmark scripts write JSON artifacts under `artifacts/perf/`
+
 ## Optional Signal path
 
 - `signal-cli` stays isolated under `~/.droidagent/signal-cli`
 - the PWA remains the primary control surface
 - Signal stays available as an advanced secondary owner ingress, not a required onboarding step
+- the Channels route handles install, registration, QR-based linking, pending-pair resolution, daemon control, and owner test messages

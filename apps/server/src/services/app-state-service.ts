@@ -31,6 +31,8 @@ export interface AccessSettings {
   bootstrapTokenHash: string | null;
   bootstrapTokenIssuedAt: string | null;
   bootstrapTokenExpiresAt: string | null;
+  cloudflareHostname: string | null;
+  cloudflareLastStartedAt: string | null;
 }
 
 export interface RuntimeSettings {
@@ -47,6 +49,8 @@ export interface RuntimeSettings {
   signalPhoneNumber: string | null;
   signalAccountId: string | null;
   signalDeviceName: string | null;
+  signalCliVersion: string | null;
+  signalReceiveMode: "persistent" | "on-start" | "unknown";
   signalRegistrationMode: SignalRegistrationMode;
   signalRegistrationState: SignalRegistrationState;
   signalLinkUri: string | null;
@@ -55,6 +59,8 @@ export interface RuntimeSettings {
   signalDaemonState: SignalDaemonState;
   signalLastError: string | null;
   signalLastStartedAt: string | null;
+  signalCompatibilityWarning: string | null;
+  smartContextManagementEnabled: boolean;
   cloudProviders: CloudProviderPreferences;
 }
 
@@ -63,7 +69,9 @@ const DEFAULT_ACCESS_SETTINGS: AccessSettings = {
   canonicalOrigin: null,
   bootstrapTokenHash: null,
   bootstrapTokenIssuedAt: null,
-  bootstrapTokenExpiresAt: null
+  bootstrapTokenExpiresAt: null,
+  cloudflareHostname: null,
+  cloudflareLastStartedAt: null
 };
 
 export const DEFAULT_CLOUD_PROVIDER_PREFERENCES: CloudProviderPreferences = {
@@ -111,6 +119,8 @@ const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   signalPhoneNumber: null,
   signalAccountId: null,
   signalDeviceName: null,
+  signalCliVersion: null,
+  signalReceiveMode: "persistent",
   signalRegistrationMode: "none",
   signalRegistrationState: "unconfigured",
   signalLinkUri: null,
@@ -119,6 +129,8 @@ const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   signalDaemonState: "stopped",
   signalLastError: null,
   signalLastStartedAt: null,
+  signalCompatibilityWarning: null,
+  smartContextManagementEnabled: true,
   cloudProviders: DEFAULT_CLOUD_PROVIDER_PREFERENCES
 };
 

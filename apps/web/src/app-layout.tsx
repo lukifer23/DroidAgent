@@ -1,7 +1,9 @@
+import { useEffect } from "react";
 import { Bot, FolderTree, Hammer, MessagesSquare, Radio, Settings2 } from "lucide-react";
-import { Link, Outlet } from "@tanstack/react-router";
+import { Link, Outlet, useLocation } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 
+import { useAuthQuery, useDashboardQuery } from "./app-data";
 import { useDroidAgentApp } from "./app-context";
 import { AuthScreen } from "./screens/auth-screen";
 import { postJson } from "./lib/api";
@@ -16,8 +18,16 @@ const navItems = [
 ] as const;
 
 export function AppLayout() {
+  const location = useLocation();
   const queryClient = useQueryClient();
-  const { authQuery, dashboard, notice, errorMessage, isOnline, wsStatus } = useDroidAgentApp();
+  const { notice, errorMessage, isOnline, wsStatus, beginRouteTransition, finishRouteTransition } = useDroidAgentApp();
+  const authQuery = useAuthQuery();
+  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const dashboard = dashboardQuery.data;
+
+  useEffect(() => {
+    finishRouteTransition(location.pathname);
+  }, [finishRouteTransition, location.pathname]);
 
   if (authQuery.isLoading) {
     return <main className="app-shell loading">Loading DroidAgent...</main>;
@@ -91,7 +101,13 @@ export function AppLayout() {
           {navItems.map((item) => {
             const Icon = item.icon;
             return (
-              <Link key={item.to} to={item.to} className="nav-link" activeProps={{ className: "nav-link active" }}>
+              <Link
+                key={item.to}
+                to={item.to}
+                className="nav-link"
+                activeProps={{ className: "nav-link active" }}
+                onClick={() => beginRouteTransition(item.to)}
+              >
                 <Icon size={18} />
                 <span>{item.label}</span>
               </Link>

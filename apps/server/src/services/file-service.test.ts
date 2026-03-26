@@ -68,4 +68,24 @@ describe("FileService", () => {
     await fs.writeFile(path.join(workspaceRoot, "blob.bin"), Buffer.from([0xff, 0xfe, 0xfd]));
     await expect(fileService.readFile("blob.bin")).rejects.toThrow(/UTF-8 text files/);
   });
+
+  it("rejects writes through a symlinked parent that escapes the workspace", async () => {
+    const outside = path.join(path.dirname(workspaceRoot), "outside-write");
+    await fs.mkdir(outside, { recursive: true });
+    await fs.symlink(outside, path.join(workspaceRoot, "escape"));
+
+    await expect(fileService.writeFile("escape/secrets.txt", "nope", null)).rejects.toThrow(/outside the configured workspace root/);
+  });
+
+  it("rejects directory creation through a symlinked parent that escapes the workspace", async () => {
+    const outside = path.join(path.dirname(workspaceRoot), "outside-dir");
+    await fs.mkdir(outside, { recursive: true });
+    await fs.symlink(outside, path.join(workspaceRoot, "escape-dir"));
+
+    await expect(fileService.createDirectory("escape-dir/new-folder")).rejects.toThrow(/outside the configured workspace root/);
+  });
+
+  it("rejects empty directory creation requests", async () => {
+    await expect(fileService.createDirectory("   ")).rejects.toThrow(/directory path is required/i);
+  });
 });

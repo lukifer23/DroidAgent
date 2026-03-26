@@ -10,13 +10,22 @@
   "scripts": {
     "dev": "pnpm --filter @droidagent/shared build && pnpm --parallel --filter @droidagent/server --filter @droidagent/web dev",
     "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "lint": "pnpm -r lint",
+    "typecheck": "pnpm --filter @droidagent/shared build && pnpm -r --filter=!@droidagent/shared typecheck",
+    "test": "pnpm --filter @droidagent/shared build && pnpm -r test",
+    "test:e2e": "pnpm build && playwright test tests/e2e/app.spec.ts",
+    "lint": "pnpm --filter @droidagent/shared build && pnpm -r --filter=!@droidagent/shared lint",
+    "docs:check": "node ./scripts/docs-check.mjs",
+    "doctor": "node ./scripts/doctor.mjs",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm build && pnpm docs:check && pnpm audit --prod",
+    "verify:full": "pnpm verify && pnpm test:e2e",
+    "perf:server": "node ./scripts/perf-server.mjs",
+    "perf:e2e": "node ./scripts/perf-e2e.mjs",
+    "perf:report": "node ./scripts/perf-report.mjs",
     "format": "prettier --write .",
     "bootstrap": "./scripts/bootstrap.sh"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/node": "^24.5.2",
     "prettier": "^3.6.2",
     "typescript": "^5.9.2"

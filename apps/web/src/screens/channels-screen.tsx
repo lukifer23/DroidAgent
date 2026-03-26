@@ -1,20 +1,42 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 
 import type { ChannelStatus } from "@droidagent/shared";
 
+import { useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { postJson } from "../lib/api";
 
 export function ChannelsScreen() {
-  const { dashboard, runAction, refreshDashboard, setNotice } = useDroidAgentApp();
+  const { runAction, setNotice } = useDroidAgentApp();
+  const dashboardQuery = useDashboardQuery(true);
+  const dashboard = dashboardQuery.data;
   const [signalPhone, setSignalPhone] = useState("");
   const [signalCaptcha, setSignalCaptcha] = useState("");
   const [signalVerificationCode, setSignalVerificationCode] = useState("");
   const [signalVerificationPin, setSignalVerificationPin] = useState("");
   const [signalDeviceName, setSignalDeviceName] = useState("DroidAgent");
-  const [pairingCode, setPairingCode] = useState("");
+  const [testTarget, setTestTarget] = useState("");
+  const [testMessage, setTestMessage] = useState("DroidAgent Signal path is healthy.");
+  const [linkQr, setLinkQr] = useState<string | null>(null);
+  const canStartRegistration = signalPhone.trim().length > 0;
+  const canVerifyRegistration = signalVerificationCode.trim().length > 0;
+  const canStartLink = signalDeviceName.trim().length > 0;
+  const canSendTestMessage = testTarget.trim().length > 0 && testMessage.trim().length > 0;
 
   const signal = dashboard?.channelConfig.signal;
+
+  useEffect(() => {
+    if (!signal?.linkUri) {
+      setLinkQr(null);
+      return;
+    }
+
+    void QRCode.toDataURL(signal.linkUri, {
+      margin: 1,
+      width: 320
+    }).then(setLinkQr);
+  }, [signal?.linkUri]);
 
   return (
     <section className="stack-list">
@@ -27,24 +49,22 @@ export function ChannelsScreen() {
 
       <article className="panel-card">
         <h3>Signal Runtime</h3>
-        <p>Signal is optional. The web app stays primary, and Signal remains an advanced owner ingress.</p>
+        <p>Signal stays secondary to the web shell, but this route now owns the full install, link, daemon, and pairing flow.</p>
         <div className="button-row">
           <button
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/channels/signal/install", {});
-                await refreshDashboard();
               }, "signal-cli installed or repaired.")
             }
           >
-            Install or Repair signal-cli
+            Install or Repair
           </button>
           <button
             className="secondary"
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/channels/signal/daemon/start", {});
-                await refreshDashboard();
               }, "Signal daemon started.")
             }
           >
@@ -55,14 +75,21 @@ export function ChannelsScreen() {
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/channels/signal/daemon/stop", {});
-                await refreshDashboard();
               }, "Signal daemon stopped.")
             }
           >
             Stop Daemon
           </button>
         </div>
-        <pre>{JSON.stringify(signal ?? {}, null, 2)}</pre>
+        <div className="stack-list">
+          {(signal?.healthChecks ?? []).map((check) => (
+            <article key={check.id} className="panel-card compact">
+              <strong>{check.label}</strong>
+              <small>{check.message}</small>
+            </article>
+          ))}
+        </div>
+        {signal?.compatibilityWarning ? <small>{signal.compatibilityWarning}</small> : null}
       </article>
 
       <article className="panel-card">
@@ -81,6 +108,7 @@ export function ChannelsScreen() {
         </label>
         <div className="button-row">
           <button
+            disabled={!canStartRegistration}
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/channels/signal/register/start", {
@@ -88,7 +116,6 @@ export function ChannelsScreen() {
                   captcha: signalCaptcha || undefined,
                   autoInstall: true
                 });
-                await refreshDashboard();
               }, "Signal registration started.")
             }
           >
@@ -96,6 +123,7 @@ export function ChannelsScreen() {
           </button>
           <button
             className="secondary"
+            disabled={!canStartRegistration}
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/channels/signal/register/start", {
@@ -104,7 +132,6 @@ export function ChannelsScreen() {
                   captcha: signalCaptcha || undefined,
                   autoInstall: true
                 });
-                await refreshDashboard();
               }, "Voice verification requested.")
             }
           >
@@ -122,13 +149,13 @@ export function ChannelsScreen() {
           </label>
           <button
             className="secondary"
+            disabled={!canVerifyRegistration}
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/channels/signal/register/verify", {
                   verificationCode: signalVerificationCode,
                   pin: signalVerificationPin || undefined
                 });
-                await refreshDashboard();
               }, "Signal account verified.")
             }
           >
@@ -145,13 +172,13 @@ export function ChannelsScreen() {
         </label>
         <div className="button-row">
           <button
+            disabled={!canStartLink}
             onClick={() =>
               void runAction(async () => {
                 const response = await postJson<{ linkUri: string }>("/api/channels/signal/link/start", {
                   deviceName: signalDeviceName
                 });
-                setNotice(`Scan the QR in Signal. Link URI: ${response.linkUri}`);
-                await refreshDashboard();
+                setNotice(`Scan the QR in Signal or use the deep link: ${response.linkUri}`);
               })
             }
           >
@@ -162,32 +189,85 @@ export function ChannelsScreen() {
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/channels/signal/link/cancel", {});
-                await refreshDashboard();
               }, "Signal link flow cancelled.")
             }
           >
             Cancel Link
           </button>
         </div>
-        {signal?.linkUri ? <pre>{signal.linkUri}</pre> : null}
+        {linkQr ? <img className="signal-qr" src={linkQr} alt="Signal device link QR code" /> : null}
+        {signal?.linkUri ? <small>{signal.linkUri}</small> : null}
       </article>
 
       <article className="panel-card">
-        <h3>OpenClaw Pairing</h3>
-        <p>Inbound Signal DMs stay on pairing mode by default. Approve the pairing code after the first contact.</p>
-        <input value={pairingCode} onChange={(event) => setPairingCode(event.target.value)} placeholder="Pairing code" />
+        <h3>Pending Pairings</h3>
+        <p>New Signal senders stay in pairing mode until you explicitly allow them.</p>
+        <div className="stack-list">
+          {(signal?.pendingPairings ?? []).length > 0 ? (
+            signal?.pendingPairings.map((pairing) => (
+              <article key={pairing.code} className="panel-card compact">
+                <strong>{pairing.from}</strong>
+                <small>Code: {pairing.code}</small>
+                {pairing.requestedAt ? <small>Requested {new Date(pairing.requestedAt).toLocaleString()}</small> : null}
+                <div className="button-row">
+                  <button
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/pairing/resolve", {
+                          code: pairing.code,
+                          resolution: "approved"
+                        });
+                      }, "Signal pairing approved.")
+                    }
+                  >
+                    Approve
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await postJson("/api/channels/signal/pairing/resolve", {
+                          code: pairing.code,
+                          resolution: "denied"
+                        });
+                      }, "Signal pairing denied.")
+                    }
+                  >
+                    Deny
+                  </button>
+                </div>
+              </article>
+            ))
+          ) : (
+            <small>No pending Signal pairing requests.</small>
+          )}
+        </div>
+      </article>
+
+      <article className="panel-card">
+        <h3>Send Test Message</h3>
+        <p>Send a direct host-level Signal message to verify the linked account and local daemon path.</p>
+        <label>
+          Target
+          <input value={testTarget} onChange={(event) => setTestTarget(event.target.value)} placeholder="+15555550123" />
+        </label>
+        <label>
+          Message
+          <input value={testMessage} onChange={(event) => setTestMessage(event.target.value)} />
+        </label>
         <div className="button-row">
           <button
+            disabled={!canSendTestMessage}
             onClick={() =>
               void runAction(async () => {
-                await postJson("/api/channels/signal/pairing/approve", {
-                  code: pairingCode
+                await postJson("/api/channels/signal/test-message", {
+                  target: testTarget,
+                  text: testMessage
                 });
-                await refreshDashboard();
-              }, "Signal pairing approved.")
+              }, "Signal test message sent.")
             }
           >
-            Approve Pairing
+            Send Test Message
           </button>
           <button
             className="secondary"
@@ -197,7 +277,6 @@ export function ChannelsScreen() {
                   unregister: false,
                   clearLocalData: true
                 });
-                await refreshDashboard();
               }, "Signal channel disconnected.")
             }
           >

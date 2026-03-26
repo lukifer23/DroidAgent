@@ -5,50 +5,40 @@ import {
   useEffect,
   useEffectEvent,
   useMemo,
+  useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode
 } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { BootstrapState, DashboardState, PasskeySummary, ServerEvent } from "@droidagent/shared";
+import { useQueryClient } from "@tanstack/react-query";
+import type { ServerEvent } from "@droidagent/shared";
 
+import { useAccessQuery, useAuthQuery, useDashboardQuery, usePasskeysQuery, usePerformanceQuery } from "./app-data";
 import { useWebSocket } from "./hooks/use-websocket";
-import { api } from "./lib/api";
-
-interface AuthState {
-  user: { id: string; username: string; displayName: string } | null;
-  hasUser: boolean;
-}
+import { clientPerformance } from "./lib/client-performance";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 }
 
-interface StreamingRun {
-  runId: string;
-  text: string;
-}
-
 interface DroidAgentAppContextValue {
-  authQuery: ReturnType<typeof useQuery<AuthState>>;
-  dashboardQuery: ReturnType<typeof useQuery<DashboardState>>;
-  accessQuery: ReturnType<typeof useQuery<BootstrapState>>;
-  passkeysQuery: ReturnType<typeof useQuery<PasskeySummary[]>>;
-  dashboard: DashboardState | undefined;
-  access: BootstrapState | undefined;
   notice: string | null;
   setNotice: (value: string | null) => void;
   errorMessage: string | null;
   setErrorMessage: (value: string | null) => void;
   isOnline: boolean;
   wsStatus: "disconnected" | "connecting" | "connected";
-  refreshDashboard: () => Promise<void>;
+  refreshQueries: () => Promise<void>;
   runAction: (work: () => Promise<void>, successMessage?: string) => Promise<void>;
   selectedSessionId: string;
   setSelectedSessionId: (sessionId: string) => void;
-  streamingRuns: Record<string, StreamingRun>;
   canInstallApp: boolean;
   installApp: () => Promise<void>;
+  beginRouteTransition: (path: string) => void;
+  finishRouteTransition: (path: string) => void;
+  trackChatSubmit: (sessionId: string) => void;
+  trackJobStart: (jobId: string) => void;
 }
 
 const DroidAgentAppContext = createContext<DroidAgentAppContextValue | null>(null);
@@ -59,8 +49,13 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const [selectedSessionId, setSelectedSessionId] = useState("main");
-  const [streamingRuns, setStreamingRuns] = useState<Record<string, StreamingRun>>({});
   const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
+
+  const routeTransitionRef = useRef<{ path: string; metric: ReturnType<typeof clientPerformance.start> } | null>(null);
+  const pendingChatMetricsRef = useRef<
+    Map<string, { firstToken: ReturnType<typeof clientPerformance.start>; completed: ReturnType<typeof clientPerformance.start> }>
+  >(new Map());
+  const pendingJobMetricsRef = useRef<Map<string, ReturnType<typeof clientPerformance.start>>>(new Map());
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -85,33 +80,12 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const authQuery = useQuery({
-    queryKey: ["auth"],
-    queryFn: () => api<AuthState>("/api/auth/me")
-  });
-
-  const accessQuery = useQuery({
-    queryKey: ["access"],
-    queryFn: () => api<BootstrapState>("/api/access")
-  });
-
-  const dashboardQuery = useQuery({
-    queryKey: ["dashboard"],
-    queryFn: () => api<DashboardState>("/api/dashboard"),
-    enabled: Boolean(authQuery.data?.user)
-  });
-
-  const passkeysQuery = useQuery({
-    queryKey: ["passkeys"],
-    queryFn: () => api<PasskeySummary[]>("/api/auth/passkeys"),
-    enabled: Boolean(authQuery.data?.user)
-  });
-
-  const refreshDashboard = useEffectEvent(async () => {
+  const refreshQueries = useEffectEvent(async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
       queryClient.invalidateQueries({ queryKey: ["access"] }),
-      queryClient.invalidateQueries({ queryKey: ["passkeys"] })
+      queryClient.invalidateQueries({ queryKey: ["passkeys"] }),
+      queryClient.invalidateQueries({ queryKey: ["performance"] })
     ]);
   });
 
@@ -127,38 +101,89 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     }
   });
 
+  const beginRouteTransition = useEffectEvent((path: string) => {
+    routeTransitionRef.current = {
+      path,
+      metric: clientPerformance.start("client.route.switch", {
+        path
+      })
+    };
+  });
+
+  const finishRouteTransition = useEffectEvent((path: string) => {
+    const current = routeTransitionRef.current;
+    if (!current || current.path !== path) {
+      return;
+    }
+
+    current.metric.finish({
+      outcome: "ok"
+    });
+    routeTransitionRef.current = null;
+  });
+
+  const trackChatSubmit = useEffectEvent((sessionId: string) => {
+    pendingChatMetricsRef.current.set(sessionId, {
+      firstToken: clientPerformance.start("client.chat.submit_to_first_token", {
+        sessionId
+      }),
+      completed: clientPerformance.start("client.chat.submit_to_done", {
+        sessionId
+      })
+    });
+  });
+
+  const trackJobStart = useEffectEvent((jobId: string) => {
+    pendingJobMetricsRef.current.set(
+      jobId,
+      clientPerformance.start("client.job.start_to_first_output", {
+        jobId
+      })
+    );
+  });
+
   const handleSocketMessage = useEffectEvent((event: ServerEvent) => {
     if (event.type === "chat.stream.delta") {
-      setStreamingRuns((current) => {
-        const existing = current[event.payload.sessionId];
-        return {
-          ...current,
-          [event.payload.sessionId]: {
-            runId: event.payload.runId,
-            text: `${existing?.runId === event.payload.runId ? existing.text : ""}${event.payload.delta}`
-          }
-        };
+      const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
+      tracked?.firstToken.finish({
+        runId: event.payload.runId
       });
       return;
     }
 
-    if (event.type === "chat.stream.done" || event.type === "chat.history") {
-      setStreamingRuns((current) => {
-        const next = { ...current };
-        const sessionId = event.type === "chat.history" ? event.payload.sessionId : event.payload.sessionId;
-        delete next[sessionId];
-        return next;
+    if (event.type === "chat.stream.done") {
+      const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
+      tracked?.completed.finish({
+        runId: event.payload.runId,
+        outcome: "done"
       });
+      pendingChatMetricsRef.current.delete(event.payload.sessionId);
       return;
     }
 
     if (event.type === "chat.stream.error") {
-      setErrorMessage(event.payload.message);
-      setStreamingRuns((current) => {
-        const next = { ...current };
-        delete next[event.payload.sessionId];
-        return next;
+      const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
+      tracked?.firstToken.finish({
+        runId: event.payload.runId,
+        outcome: "error"
       });
+      tracked?.completed.finish({
+        runId: event.payload.runId,
+        outcome: "error"
+      });
+      pendingChatMetricsRef.current.delete(event.payload.sessionId);
+      setErrorMessage(event.payload.message);
+      return;
+    }
+
+    if (event.type === "job.output") {
+      const tracked = pendingJobMetricsRef.current.get(event.payload.jobId);
+      if (tracked) {
+        tracked.finish({
+          stream: event.payload.stream
+        });
+        pendingJobMetricsRef.current.delete(event.payload.jobId);
+      }
       return;
     }
 
@@ -167,17 +192,37 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     }
   });
 
+  const authQuery = useAuthQuery();
+  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  usePasskeysQuery(Boolean(authQuery.data?.user));
+  useAccessQuery();
+  usePerformanceQuery(Boolean(authQuery.data?.user));
+
   const { status: wsStatus } = useWebSocket({
     enabled: Boolean(authQuery.data?.user),
     onMessage: handleSocketMessage
   });
 
+  const authReadyRecordedRef = useRef(false);
+  const dashboardReadyRecordedRef = useRef(false);
+
   useEffect(() => {
-    if (authQuery.data?.user) {
-      void queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      void queryClient.invalidateQueries({ queryKey: ["passkeys"] });
+    if (authQuery.isSuccess && !authReadyRecordedRef.current) {
+      authReadyRecordedRef.current = true;
+      clientPerformance.record("client.auth.ready", performance.now(), {
+        hasUser: Boolean(authQuery.data?.user)
+      });
     }
-  }, [authQuery.data?.user, queryClient]);
+  }, [authQuery.data?.user, authQuery.isSuccess]);
+
+  useEffect(() => {
+    if (dashboardQuery.isSuccess && !dashboardReadyRecordedRef.current) {
+      dashboardReadyRecordedRef.current = true;
+      clientPerformance.record("client.dashboard.ready", performance.now(), {
+        sessions: dashboardQuery.data?.sessions.length ?? 0
+      });
+    }
+  }, [dashboardQuery.data?.sessions.length, dashboardQuery.isSuccess]);
 
   useEffect(() => {
     const sessions = dashboardQuery.data?.sessions ?? [];
@@ -203,40 +248,36 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<DroidAgentAppContextValue>(
     () => ({
-      authQuery,
-      dashboardQuery,
-      accessQuery,
-      passkeysQuery,
-      dashboard: dashboardQuery.data,
-      access: accessQuery.data,
       notice,
       setNotice,
       errorMessage,
       setErrorMessage,
       isOnline,
       wsStatus,
-      refreshDashboard,
+      refreshQueries,
       runAction,
       selectedSessionId,
       setSelectedSessionId,
-      streamingRuns,
       canInstallApp: Boolean(installPromptEvent),
-      installApp
+      installApp,
+      beginRouteTransition,
+      finishRouteTransition,
+      trackChatSubmit,
+      trackJobStart
     }),
     [
-      accessQuery,
-      authQuery,
-      dashboardQuery,
+      beginRouteTransition,
       errorMessage,
+      finishRouteTransition,
       installApp,
       installPromptEvent,
       isOnline,
       notice,
-      passkeysQuery,
-      refreshDashboard,
+      refreshQueries,
       runAction,
       selectedSessionId,
-      streamingRuns,
+      trackChatSubmit,
+      trackJobStart,
       wsStatus
     ]
   );
@@ -250,4 +291,12 @@ export function useDroidAgentApp() {
     throw new Error("useDroidAgentApp must be used within DroidAgentAppProvider.");
   }
   return context;
+}
+
+export function useClientPerformanceSnapshot() {
+  return useSyncExternalStore(
+    (listener) => clientPerformance.subscribe(listener),
+    () => clientPerformance.snapshot(),
+    () => clientPerformance.snapshot()
+  );
 }

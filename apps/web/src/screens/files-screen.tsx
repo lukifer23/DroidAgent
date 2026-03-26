@@ -1,20 +1,28 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
-import type { FileContent, WorkspaceEntry } from "@droidagent/shared";
+import type { FileContent, FileConflictResponse, WorkspaceEntry } from "@droidagent/shared";
 
+import { useAuthQuery, useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
-import { api, postJson, putJson } from "../lib/api";
+import { clientPerformance } from "../lib/client-performance";
+import { ApiError, api, postJson, putJson } from "../lib/api";
 
 export function FilesScreen() {
   const queryClient = useQueryClient();
-  const { authQuery, dashboard, runAction, refreshDashboard } = useDroidAgentApp();
+  const { runAction, setErrorMessage, setNotice } = useDroidAgentApp();
+  const authQuery = useAuthQuery();
+  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const dashboard = dashboardQuery.data;
   const [directoryPath, setDirectoryPath] = useState(".");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [editorValue, setEditorValue] = useState("");
   const [loadedFile, setLoadedFile] = useState<FileContent | null>(null);
   const [dirty, setDirty] = useState(false);
   const [newDirectoryName, setNewDirectoryName] = useState("");
+  const [conflict, setConflict] = useState<FileConflictResponse | null>(null);
+  const trimmedNewDirectoryName = newDirectoryName.trim();
+  const [fileOpenMetric, setFileOpenMetric] = useState<ReturnType<typeof clientPerformance.start> | null>(null);
 
   const filesQuery = useQuery({
     queryKey: ["files", directoryPath],
@@ -32,8 +40,14 @@ export function FilesScreen() {
     if (!dirty && fileQuery.data) {
       setEditorValue(fileQuery.data.content);
       setLoadedFile(fileQuery.data);
+      setConflict(null);
+      fileOpenMetric?.finish({
+        path: fileQuery.data.path,
+        outcome: "ok"
+      });
+      setFileOpenMetric(null);
     }
-  }, [dirty, fileQuery.data]);
+  }, [dirty, fileOpenMetric, fileQuery.data]);
 
   useEffect(() => {
     if (!dirty) {
@@ -51,6 +65,46 @@ export function FilesScreen() {
     };
   }, [dirty]);
 
+  async function saveFile(expectedModifiedAt: string | null): Promise<boolean> {
+    if (!loadedFile) {
+      return false;
+    }
+
+    const saveMetric = clientPerformance.start("client.file.save", {
+      path: loadedFile.path
+    });
+
+    try {
+      const saved = await putJson<FileContent>("/api/files/content", {
+        path: loadedFile.path,
+        content: editorValue,
+        expectedModifiedAt
+      });
+      saveMetric.finish({
+        outcome: "ok"
+      });
+      setLoadedFile(saved);
+      setEditorValue(saved.content);
+      setDirty(false);
+      setConflict(null);
+      queryClient.setQueryData(["file", loadedFile.path], saved);
+      await queryClient.invalidateQueries({ queryKey: ["files", directoryPath] });
+      return true;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409 && error.payload) {
+        saveMetric.finish({
+          outcome: "conflict"
+        });
+        setConflict(error.payload as FileConflictResponse);
+        return false;
+      }
+      saveMetric.finish({
+        outcome: "error"
+      });
+      throw error;
+    }
+  }
+
   return (
     <section className="files-panel">
       <div className="toolbar">
@@ -62,9 +116,10 @@ export function FilesScreen() {
         <input value={newDirectoryName} onChange={(event) => setNewDirectoryName(event.target.value)} placeholder="new-folder" />
         <button
           className="secondary"
+          disabled={!trimmedNewDirectoryName}
           onClick={() =>
             void runAction(async () => {
-              const nextPath = directoryPath === "." ? newDirectoryName : `${directoryPath}/${newDirectoryName}`;
+              const nextPath = directoryPath === "." ? trimmedNewDirectoryName : `${directoryPath}/${trimmedNewDirectoryName}`;
               await postJson("/api/files/directory", { path: nextPath });
               setNewDirectoryName("");
               await queryClient.invalidateQueries({ queryKey: ["files", directoryPath] });
@@ -88,6 +143,11 @@ export function FilesScreen() {
                   setDirty(false);
                   return;
                 }
+                setFileOpenMetric(
+                  clientPerformance.start("client.file.open", {
+                    path: entry.path
+                  })
+                );
                 setSelectedFile(entry.path);
                 setDirty(false);
               }}
@@ -121,24 +181,22 @@ export function FilesScreen() {
                   >
                     Revert
                   </button>
-                  <button
-                    onClick={() =>
-                      void runAction(async () => {
-                        const saved = await putJson<FileContent>("/api/files/content", {
-                          path: loadedFile.path,
-                          content: editorValue,
-                          expectedModifiedAt: loadedFile.modifiedAt
-                        });
-                        setLoadedFile(saved);
-                        setEditorValue(saved.content);
-                        setDirty(false);
-                        queryClient.setQueryData(["file", loadedFile.path], saved);
-                        await queryClient.invalidateQueries({ queryKey: ["files", directoryPath] });
-                        await refreshDashboard();
-                      }, "File saved.")
-                    }
-                  >
-                    Save
+                    <button
+                      onClick={() =>
+                        void (async () => {
+                          setErrorMessage(null);
+                          try {
+                            const saved = await saveFile(conflict?.currentModifiedAt ?? loadedFile.modifiedAt);
+                            if (saved) {
+                              setNotice(conflict ? "Remote copy overwritten." : "File saved.");
+                            }
+                          } catch (error) {
+                            setErrorMessage(error instanceof Error ? error.message : "File save failed.");
+                          }
+                        })()
+                      }
+                    >
+                    {conflict ? "Overwrite Remote Copy" : "Save"}
                   </button>
                 </div>
               </div>
@@ -152,9 +210,50 @@ export function FilesScreen() {
               />
               {dirty ? <small>Unsaved changes</small> : null}
               {loadedFile.truncated ? <small>Large file preview truncated to the editable ceiling.</small> : null}
+              {conflict ? (
+                <article className="panel-card compact conflict-card">
+                  <strong>Remote file changed on disk</strong>
+                  <small>The copy on disk was modified at {new Date(conflict.currentModifiedAt).toLocaleString()}.</small>
+                  <div className="button-row">
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        void runAction(async () => {
+                          const refreshed = await fileQuery.refetch();
+                          if (refreshed.data) {
+                            setLoadedFile(refreshed.data);
+                            setEditorValue(refreshed.data.content);
+                            setDirty(false);
+                            setConflict(null);
+                          }
+                        }, "Reloaded remote file.")
+                      }
+                    >
+                      Reload Remote Copy
+                    </button>
+                    <button
+                      onClick={() =>
+                        void (async () => {
+                          setErrorMessage(null);
+                          try {
+                            const saved = await saveFile(conflict.currentModifiedAt);
+                            if (saved) {
+                              setNotice("Remote copy overwritten.");
+                            }
+                          } catch (error) {
+                            setErrorMessage(error instanceof Error ? error.message : "File overwrite failed.");
+                          }
+                        })()
+                      }
+                    >
+                      Overwrite Anyway
+                    </button>
+                  </div>
+                </article>
+              ) : null}
             </>
           ) : (
-            <pre className="viewer-panel">Select a text file to open it.</pre>
+            <div className="viewer-panel">Select a text file to open it.</div>
           )}
         </div>
       </div>

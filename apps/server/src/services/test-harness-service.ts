@@ -1,0 +1,270 @@
+import { randomUUID } from "node:crypto";
+
+import {
+  ChannelConfigSummarySchema,
+  ChannelStatusSchema,
+  ChatMessageSchema,
+  RuntimeStatusSchema,
+  SessionSummarySchema,
+  nowIso,
+  type ApprovalRecord,
+  type ChannelConfigSummary,
+  type ChannelStatus,
+  type ChatMessage,
+  type RuntimeStatus,
+  type SessionSummary
+} from "@droidagent/shared";
+
+import { appStateService } from "./app-state-service.js";
+import type { HarnessAdapter, HarnessRuntimeModelConfig, StreamRelayCallbacks } from "./harness-service.js";
+
+const STREAM_CHUNK_INTERVAL_MS = 24;
+
+interface ActiveRun {
+  timer: ReturnType<typeof setTimeout> | null;
+  aborted: boolean;
+}
+
+function chunkText(input: string, size = 14): string[] {
+  const parts: string[] = [];
+  for (let index = 0; index < input.length; index += size) {
+    parts.push(input.slice(index, index + size));
+  }
+  return parts.length > 0 ? parts : [input];
+}
+
+function cloneMessages(messages: ChatMessage[]): ChatMessage[] {
+  return messages.map((message) => ChatMessageSchema.parse({ ...message }));
+}
+
+export class TestHarnessService implements HarnessAdapter {
+  private readonly sessions = new Map<string, ChatMessage[]>();
+  private readonly activeRuns = new Map<string, ActiveRun>();
+
+  constructor() {
+    this.reset();
+  }
+
+  reset(): void {
+    for (const activeRun of this.activeRuns.values()) {
+      if (activeRun.timer) {
+        clearTimeout(activeRun.timer);
+      }
+    }
+    this.activeRuns.clear();
+    this.sessions.clear();
+
+    const seededMessage = ChatMessageSchema.parse({
+      id: randomUUID(),
+      sessionId: "main",
+      role: "assistant",
+      text: "DroidAgent test harness is ready.",
+      createdAt: nowIso(),
+      status: "complete",
+      source: "openclaw"
+    });
+    this.sessions.set("main", [seededMessage]);
+  }
+
+  async health(): Promise<RuntimeStatus> {
+    return RuntimeStatusSchema.parse({
+      id: "openclaw",
+      label: "OpenClaw Test Harness",
+      state: "running",
+      enabled: true,
+      installMethod: "bundledNpm",
+      detectedVersion: "test-harness",
+      binaryPath: null,
+      health: "ok",
+      healthMessage: "Deterministic harness is serving test sessions.",
+      endpoint: null,
+      installed: true,
+      lastStartedAt: nowIso(),
+      metadata: {
+        testMode: true
+      }
+    });
+  }
+
+  private ensureSession(sessionKey: string): ChatMessage[] {
+    const existing = this.sessions.get(sessionKey);
+    if (existing) {
+      return existing;
+    }
+
+    const seeded = [
+      ChatMessageSchema.parse({
+        id: randomUUID(),
+        sessionId: sessionKey,
+        role: "assistant",
+        text: `Session ${sessionKey} is ready.`,
+        createdAt: nowIso(),
+        status: "complete",
+        source: "openclaw"
+      })
+    ];
+    this.sessions.set(sessionKey, seeded);
+    return seeded;
+  }
+
+  async listSessions(): Promise<SessionSummary[]> {
+    return [...this.sessions.entries()]
+      .map(([sessionId, messages]) => {
+        const lastMessage = messages.at(-1);
+        return SessionSummarySchema.parse({
+          id: sessionId,
+          title: sessionId === "main" ? "Main" : sessionId,
+          scope: "main",
+          updatedAt: lastMessage?.createdAt ?? nowIso(),
+          unreadCount: 0,
+          lastMessagePreview: lastMessage?.text ?? ""
+        });
+      })
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  async loadHistory(sessionKey: string): Promise<ChatMessage[]> {
+    return cloneMessages(this.ensureSession(sessionKey));
+  }
+
+  async sendMessage(sessionKey: string, message: string, relay: StreamRelayCallbacks): Promise<{ runId: string }> {
+    await this.abortMessage(sessionKey);
+
+    const session = this.ensureSession(sessionKey);
+    session.push(
+      ChatMessageSchema.parse({
+        id: randomUUID(),
+        sessionId: sessionKey,
+        role: "user",
+        text: message,
+        createdAt: nowIso(),
+        status: "complete",
+        source: "web"
+      })
+    );
+
+    const runId = randomUUID();
+    const responseText = `Test harness reply: ${message}`;
+    const chunks = chunkText(responseText);
+    const activeRun: ActiveRun = {
+      timer: null,
+      aborted: false
+    };
+    this.activeRuns.set(sessionKey, activeRun);
+
+    const streamNext = async (index: number) => {
+      const current = this.activeRuns.get(sessionKey);
+      if (!current || current.aborted) {
+        return;
+      }
+
+      if (index >= chunks.length) {
+        session.push(
+          ChatMessageSchema.parse({
+            id: randomUUID(),
+            sessionId: sessionKey,
+            role: "assistant",
+            text: responseText,
+            createdAt: nowIso(),
+            status: "complete",
+            source: "openclaw"
+          })
+        );
+        this.activeRuns.delete(sessionKey);
+        await relay.onDone();
+        return;
+      }
+
+      await relay.onDelta(chunks[index]!);
+      current.timer = setTimeout(() => {
+        void streamNext(index + 1);
+      }, STREAM_CHUNK_INTERVAL_MS);
+    };
+
+    activeRun.timer = setTimeout(() => {
+      void streamNext(0);
+    }, 0);
+    return { runId };
+  }
+
+  async abortMessage(sessionKey: string): Promise<void> {
+    const active = this.activeRuns.get(sessionKey);
+    if (!active) {
+      return;
+    }
+
+    active.aborted = true;
+    if (active.timer) {
+      clearTimeout(active.timer);
+    }
+    this.activeRuns.delete(sessionKey);
+  }
+
+  async listApprovals(): Promise<ApprovalRecord[]> {
+    return [];
+  }
+
+  async resolveApproval(): Promise<void> {
+    return;
+  }
+
+  async listChannels(): Promise<{ statuses: ChannelStatus[]; config: ChannelConfigSummary }> {
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    return {
+      statuses: [
+        ChannelStatusSchema.parse({
+          id: "web",
+          label: "Web/PWA",
+          enabled: true,
+          configured: true,
+          health: "ok",
+          healthMessage: "Primary DroidAgent interface.",
+          metadata: {}
+        }),
+        ChannelStatusSchema.parse({
+          id: "signal",
+          label: "Signal",
+          enabled: runtimeSettings.signalRegistrationState === "registered",
+          configured: runtimeSettings.signalRegistrationState === "registered",
+          health: runtimeSettings.signalRegistrationState === "registered" ? "ok" : "warn",
+          healthMessage:
+            runtimeSettings.signalRegistrationState === "registered"
+              ? "Signal is configured."
+              : "Signal is not configured in the deterministic test harness.",
+          metadata: {}
+        })
+      ],
+      config: ChannelConfigSummarySchema.parse({
+        signal: {
+          installed: false,
+          binaryPath: null,
+          javaHome: null,
+          accountId: null,
+          phoneNumber: null,
+          deviceName: null,
+          cliVersion: null,
+          registrationMode: "none",
+          registrationState: runtimeSettings.signalRegistrationState,
+          daemonState: "stopped",
+          daemonUrl: null,
+          receiveMode: "persistent",
+          dmPolicy: "pairing",
+          allowGroups: false,
+          channelConfigured: false,
+          pendingPairings: [],
+          linkUri: null,
+          lastError: null,
+          lastStartedAt: null,
+          compatibilityWarning: null,
+          healthChecks: []
+        }
+      })
+    };
+  }
+
+  async configureRuntimeModel(_config: HarnessRuntimeModelConfig): Promise<void> {
+    return;
+  }
+}
+
+export const testHarnessService = new TestHarnessService();

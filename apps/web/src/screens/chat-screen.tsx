@@ -3,20 +3,23 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import type { ChatMessage } from "@droidagent/shared";
 
+import { useAuthQuery, useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { api, postJson } from "../lib/api";
+import { useStreamingRuns } from "../lib/chat-stream-store";
 
 export function ChatScreen() {
   const queryClient = useQueryClient();
   const {
-    authQuery,
-    dashboard,
     selectedSessionId,
     setSelectedSessionId,
-    streamingRuns,
-    runAction,
-    refreshDashboard
+    trackChatSubmit,
+    runAction
   } = useDroidAgentApp();
+  const authQuery = useAuthQuery();
+  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const dashboard = dashboardQuery.data;
+  const streamingRuns = useStreamingRuns();
   const [chatInput, setChatInput] = useState("");
 
   const sessions = dashboard?.sessions ?? [];
@@ -50,11 +53,11 @@ export function ChatScreen() {
       optimisticMessage
     ]);
 
+    trackChatSubmit(selectedSessionId);
     await postJson(`/api/sessions/${encodeURIComponent(selectedSessionId)}/messages`, {
       text: chatInput
     });
     setChatInput("");
-    await refreshDashboard();
   }
 
   return (
@@ -92,7 +95,6 @@ export function ChatScreen() {
                           await postJson(`/api/approvals/${approval.id}`, {
                             resolution: "approved"
                           });
-                          await refreshDashboard();
                         }, "Approval granted.")
                       }
                     >
@@ -105,7 +107,6 @@ export function ChatScreen() {
                           await postJson(`/api/approvals/${approval.id}`, {
                             resolution: "denied"
                           });
-                          await refreshDashboard();
                         }, "Approval denied.")
                       }
                     >
@@ -153,7 +154,6 @@ export function ChatScreen() {
               onClick={() =>
                 void runAction(async () => {
                   await postJson(`/api/sessions/${encodeURIComponent(selectedSessionId)}/abort`, {});
-                  await refreshDashboard();
                 }, "Run aborted.")
               }
             >

@@ -7,6 +7,7 @@ import {
 } from "@droidagent/shared";
 
 import { CommandError, runCommand } from "../lib/process.js";
+import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 
 interface CloudProviderDefinition {
@@ -16,6 +17,7 @@ interface CloudProviderDefinition {
 }
 
 const KEYCHAIN_ACCOUNT = "droidagent-owner";
+const PROVIDER_SUMMARIES_TTL_MS = 10000;
 
 export const CLOUD_PROVIDER_DEFINITIONS: CloudProviderDefinition[] = [
   { id: "openai", label: "OpenAI", envVar: "OPENAI_API_KEY" },
@@ -29,6 +31,10 @@ export const CLOUD_PROVIDER_DEFINITIONS: CloudProviderDefinition[] = [
 
 function serviceName(providerId: CloudProviderId): string {
   return `droidagent.provider.${providerId}`;
+}
+
+function namedServiceName(key: string): string {
+  return `droidagent.secret.${key}`;
 }
 
 function definitionFor(providerId: CloudProviderId): CloudProviderDefinition {
@@ -47,7 +53,21 @@ async function findGenericPassword(providerId: CloudProviderId): Promise<{ exitC
   );
 }
 
+async function findNamedGenericPassword(key: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  return await runCommand(
+    "security",
+    ["find-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", namedServiceName(key), "-w"],
+    { okExitCodes: [0, 44] }
+  );
+}
+
 export class KeychainService {
+  private readonly providerSummariesCache = new TtlCache<CloudProviderSummary[]>(PROVIDER_SUMMARIES_TTL_MS);
+
+  invalidateProviderSummaries(): void {
+    this.providerSummariesCache.invalidate();
+  }
+
   providerDefinitions(): readonly CloudProviderDefinition[] {
     return CLOUD_PROVIDER_DEFINITIONS;
   }
@@ -84,12 +104,52 @@ export class KeychainService {
     await appStateService.updateCloudProviderPreference(providerId, {
       lastUpdatedAt: nowIso()
     });
+    this.invalidateProviderSummaries();
   }
 
   async deleteProviderSecret(providerId: CloudProviderId): Promise<void> {
     await runCommand(
       "security",
       ["delete-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", serviceName(providerId)],
+      { okExitCodes: [0, 44] }
+    );
+    this.invalidateProviderSummaries();
+  }
+
+  async hasNamedSecret(key: string): Promise<boolean> {
+    const result = await findNamedGenericPassword(key);
+    return result.exitCode === 0;
+  }
+
+  async getNamedSecret(key: string): Promise<string | null> {
+    const result = await findNamedGenericPassword(key);
+    if (result.exitCode === 44) {
+      return null;
+    }
+    return result.stdout.trimEnd() || null;
+  }
+
+  async setNamedSecret(key: string, secret: string): Promise<void> {
+    if (!secret.trim()) {
+      throw new Error("Secret cannot be empty.");
+    }
+
+    await runCommand("security", [
+      "add-generic-password",
+      "-a",
+      KEYCHAIN_ACCOUNT,
+      "-s",
+      namedServiceName(key),
+      "-w",
+      secret,
+      "-U"
+    ]);
+  }
+
+  async deleteNamedSecret(key: string): Promise<void> {
+    await runCommand(
+      "security",
+      ["delete-generic-password", "-a", KEYCHAIN_ACCOUNT, "-s", namedServiceName(key)],
       { okExitCodes: [0, 44] }
     );
   }
@@ -106,26 +166,28 @@ export class KeychainService {
   }
 
   async listProviderSummaries(): Promise<CloudProviderSummary[]> {
-    const runtimeSettings = await appStateService.getRuntimeSettings();
+    return await this.providerSummariesCache.get(async () => {
+      const runtimeSettings = await appStateService.getRuntimeSettings();
 
-    return await Promise.all(
-      CLOUD_PROVIDER_DEFINITIONS.map(async (provider) => {
-        const secret = await this.getProviderSecret(provider.id);
-        const preference = runtimeSettings.cloudProviders[provider.id];
+      return await Promise.all(
+        CLOUD_PROVIDER_DEFINITIONS.map(async (provider) => {
+          const secret = await this.getProviderSecret(provider.id);
+          const preference = runtimeSettings.cloudProviders[provider.id];
 
-        return CloudProviderSummarySchema.parse({
-          id: provider.id,
-          label: provider.label,
-          envVar: provider.envVar,
-          stored: Boolean(secret),
-          active: runtimeSettings.activeProviderId === provider.id,
-          defaultModel: preference.defaultModel,
-          health: secret ? "ok" : "warn",
-          healthMessage: secret ? "Stored in the macOS login keychain." : "No API key stored in Keychain yet.",
-          lastUpdatedAt: preference.lastUpdatedAt
-        });
-      })
-    );
+          return CloudProviderSummarySchema.parse({
+            id: provider.id,
+            label: provider.label,
+            envVar: provider.envVar,
+            stored: Boolean(secret),
+            active: runtimeSettings.activeProviderId === provider.id,
+            defaultModel: preference.defaultModel,
+            health: secret ? "ok" : "warn",
+            healthMessage: secret ? "Stored in the macOS login keychain." : "No API key stored in Keychain yet.",
+            lastUpdatedAt: preference.lastUpdatedAt
+          });
+        })
+      );
+    });
   }
 
   async updateProviderModel(providerId: CloudProviderId, defaultModel: string): Promise<void> {
@@ -138,6 +200,7 @@ export class KeychainService {
       defaultModel,
       lastUpdatedAt: nowIso()
     });
+    this.invalidateProviderSummaries();
   }
 
   providerDefinition(providerId: CloudProviderId): CloudProviderDefinition {
@@ -163,6 +226,7 @@ export class KeychainService {
         }
       })
     );
+    this.invalidateProviderSummaries();
   }
 }
 

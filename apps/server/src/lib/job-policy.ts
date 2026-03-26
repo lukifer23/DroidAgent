@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 
 export const JOB_TIMEOUT_MS = 1000 * 60 * 5;
@@ -37,17 +38,27 @@ export function validateCommand(command: string): void {
   }
 }
 
-export function resolveCwdWithinWorkspace(cwd: string, workspaceRoot: string): string {
+export async function resolveCwdWithinWorkspace(cwd: string, workspaceRoot: string): Promise<string> {
   const expanded = cwd.startsWith("~/")
     ? path.join(process.env.HOME ?? "", cwd.slice(2))
     : cwd.startsWith("~")
       ? process.env.HOME ?? cwd
       : cwd;
   const resolved = path.resolve(workspaceRoot, expanded);
-  const normalizedRoot = path.resolve(workspaceRoot);
-  const relative = path.relative(normalizedRoot, resolved);
+  const normalizedRoot = await fs.realpath(path.resolve(workspaceRoot)).catch(() => path.resolve(workspaceRoot));
+  const realResolved = await fs.realpath(resolved).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") {
+      throw new Error("Working directory does not exist inside the workspace root.");
+    }
+    throw error;
+  });
+  const stat = await fs.stat(realResolved);
+  if (!stat.isDirectory()) {
+    throw new Error("Working directory must be a directory inside the workspace root.");
+  }
+  const relative = path.relative(normalizedRoot, realResolved);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("Working directory must be inside the workspace root.");
   }
-  return resolved;
+  return realResolved;
 }

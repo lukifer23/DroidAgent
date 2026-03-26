@@ -5,8 +5,11 @@ import {
   type StartupDiagnostic
 } from "@droidagent/shared";
 
+const STARTUP_DIAGNOSTICS_TTL_MS = 5000;
+
 import { accessService } from "./access-service.js";
 import { appStateService } from "./app-state-service.js";
+import { cloudflareRemoteAccessProvider } from "./remote-access-service.js";
 import { keychainService } from "./keychain-service.js";
 import { openclawService } from "./openclaw-service.js";
 import { runtimeService } from "./runtime-service.js";
@@ -14,7 +17,14 @@ import { signalService } from "./signal-service.js";
 
 export class StartupService {
   private restorePromise: Promise<StartupDiagnostic[]> | null = null;
+  private diagnosticsPromise: Promise<StartupDiagnostic[]> | null = null;
   private diagnostics: StartupDiagnostic[] = [];
+  private diagnosticsRefreshedAt = 0;
+
+  invalidate(): void {
+    this.diagnostics = [];
+    this.diagnosticsRefreshedAt = 0;
+  }
 
   async restore(): Promise<StartupDiagnostic[]> {
     if (this.restorePromise) {
@@ -24,6 +34,7 @@ export class StartupService {
     this.restorePromise = this.runRestore();
     try {
       this.diagnostics = await this.restorePromise;
+      this.diagnosticsRefreshedAt = Date.now();
       return this.diagnostics;
     } finally {
       this.restorePromise = null;
@@ -31,17 +42,39 @@ export class StartupService {
   }
 
   async getDiagnostics(): Promise<StartupDiagnostic[]> {
-    if (this.diagnostics.length > 0) {
+    if (
+      this.diagnostics.length > 0 &&
+      Date.now() - this.diagnosticsRefreshedAt < STARTUP_DIAGNOSTICS_TTL_MS
+    ) {
       return this.diagnostics;
     }
-    return await this.runRestore(false);
+    if (this.restorePromise) {
+      return await this.restorePromise;
+    }
+    if (this.diagnosticsPromise) {
+      return await this.diagnosticsPromise;
+    }
+
+    this.diagnosticsPromise = this.runRestore(false)
+      .then((diagnostics) => {
+        this.diagnostics = diagnostics;
+        this.diagnosticsRefreshedAt = Date.now();
+        return diagnostics;
+      })
+      .finally(() => {
+        this.diagnosticsPromise = null;
+      });
+
+    return await this.diagnosticsPromise;
   }
 
   private async runRestore(applyChanges = true): Promise<StartupDiagnostic[]> {
     const diagnostics: StartupDiagnostic[] = [];
-    const [runtimeSettings, tailscale, runtimes, cloudProviders] = await Promise.all([
+    const [runtimeSettings, accessSettings, tailscale, cloudflare, runtimes, cloudProviders] = await Promise.all([
       appStateService.getRuntimeSettings(),
+      appStateService.getAccessSettings(),
       accessService.getTailscaleStatus(),
+      accessService.getCloudflareStatus(),
       runtimeService.getRuntimeStatuses(),
       keychainService.listProviderSummaries()
     ]);
@@ -55,6 +88,32 @@ export class StartupService {
         message: tailscale.healthMessage
       })
     );
+
+    try {
+      if (applyChanges && accessSettings.cloudflareHostname && cloudflare.tokenStored) {
+        await cloudflareRemoteAccessProvider.start();
+      }
+      const refreshedCloudflare = await accessService.getCloudflareStatus();
+      diagnostics.push(
+        StartupDiagnosticSchema.parse({
+          id: "cloudflare",
+          health: refreshedCloudflare.running ? "ok" : refreshedCloudflare.configured ? "warn" : "warn",
+          blocking: false,
+          action: refreshedCloudflare.configured ? null : "Configure a named Cloudflare tunnel only if you want a public remote path in addition to Tailscale.",
+          message: refreshedCloudflare.healthMessage
+        })
+      );
+    } catch (error) {
+      diagnostics.push(
+        StartupDiagnosticSchema.parse({
+          id: "cloudflare",
+          health: "error",
+          blocking: false,
+          action: "Repair the Cloudflare tunnel token or hostname from Settings.",
+          message: error instanceof Error ? error.message : "Cloudflare tunnel restore failed."
+        })
+      );
+    }
 
     try {
       await openclawService.ensureConfigured();
@@ -137,17 +196,21 @@ export class StartupService {
 
     try {
       await signalService.refreshState();
-      if (applyChanges && runtimeSettings.signalRegistrationState === "registered") {
+      const refreshedRuntimeSettings = await appStateService.getRuntimeSettings();
+      if (applyChanges && refreshedRuntimeSettings.signalRegistrationState === "registered") {
         await signalService.startDaemon();
       }
       diagnostics.push(
         StartupDiagnosticSchema.parse({
           id: "signal",
-          health: runtimeSettings.signalRegistrationState === "registered" ? "ok" : "warn",
+          health: refreshedRuntimeSettings.signalRegistrationState === "registered" ? "ok" : "warn",
           blocking: false,
-          action: runtimeSettings.signalRegistrationState === "registered" ? null : "Configure Signal only if you need the secondary owner ingress.",
+          action:
+            refreshedRuntimeSettings.signalRegistrationState === "registered"
+              ? null
+              : "Configure Signal only if you need the secondary owner ingress.",
           message:
-            runtimeSettings.signalRegistrationState === "registered"
+            refreshedRuntimeSettings.signalRegistrationState === "registered"
               ? "Signal account is registered and eligible for daemon restore."
               : "Signal is optional and not fully configured on this host."
         })

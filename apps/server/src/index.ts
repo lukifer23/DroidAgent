@@ -8,6 +8,7 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { WebSocketServer } from "ws";
 
+import { db, schema } from "./db/index.js";
 import { accessService } from "./services/access-service.js";
 import { authService } from "./services/auth-service.js";
 import { dashboardService } from "./services/dashboard-service.js";
@@ -20,8 +21,11 @@ import { openclawService } from "./services/openclaw-service.js";
 import { runtimeService } from "./services/runtime-service.js";
 import { appStateService } from "./services/app-state-service.js";
 import { signalService } from "./services/signal-service.js";
+import { startupService } from "./services/startup-service.js";
+import { testHarnessService } from "./services/test-harness-service.js";
 import { websocketHub } from "./websocket-hub.js";
-import { SERVER_PORT, ensureAppDirs, paths } from "./env.js";
+import { SERVER_PORT, TEST_MODE, ensureAppDirs, paths } from "./env.js";
+import { performanceService } from "./services/performance-service.js";
 
 ensureAppDirs();
 
@@ -54,6 +58,22 @@ app.onError((error, c) => {
 app.use("/api/*", async (c, next) => {
   c.set("user", await authService.getCurrentUser(c));
   await next();
+});
+
+app.use("/api/*", async (c, next) => {
+  const metric = performanceService.start("server", `http.${c.req.method.toLowerCase()}.${c.req.path}`, {
+    method: c.req.method,
+    path: c.req.path
+  });
+
+  try {
+    await next();
+  } finally {
+    const sample = metric.finish({
+      status: c.res.status
+    });
+    c.header("server-timing", `app;dur=${sample.durationMs.toFixed(2)}`);
+  }
 });
 
 async function requireUser(c: Context<{ Variables: AppVariables }>) {
@@ -103,6 +123,76 @@ function expandHomePath(input: string): string {
     return path.join(process.env.HOME ?? "", input.slice(2));
   }
   return input;
+}
+
+function withMeasuredStreamRelay(
+  transport: "http" | "ws",
+  sessionId: string,
+  relay: {
+    onDelta(delta: string): void | Promise<void>;
+    onDone(): void | Promise<void>;
+    onError(message: string): void | Promise<void>;
+  }
+) {
+  const enqueueMetric = performanceService.start("server", "chat.send.enqueue", {
+    transport,
+    sessionId
+  });
+  const firstDeltaMetric = performanceService.start("server", "chat.stream.firstDeltaRelay", {
+    transport,
+    sessionId
+  });
+  const streamMetric = performanceService.start("server", "chat.stream.completeRelay", {
+    transport,
+    sessionId
+  });
+  let firstDeltaRecorded = false;
+  let finished = false;
+
+  return {
+    markAccepted() {
+      enqueueMetric.finish();
+    },
+    relay: {
+      onDelta: async (delta: string) => {
+        if (!firstDeltaRecorded) {
+          firstDeltaRecorded = true;
+          firstDeltaMetric.finish();
+        }
+        await relay.onDelta(delta);
+      },
+      onDone: async () => {
+        if (!firstDeltaRecorded) {
+          firstDeltaRecorded = true;
+          firstDeltaMetric.finish({
+            outcome: "no-delta"
+          });
+        }
+        if (!finished) {
+          finished = true;
+          streamMetric.finish({
+            outcome: "done"
+          });
+        }
+        await relay.onDone();
+      },
+      onError: async (message: string) => {
+        if (!firstDeltaRecorded) {
+          firstDeltaRecorded = true;
+          firstDeltaMetric.finish({
+            outcome: "no-delta"
+          });
+        }
+        if (!finished) {
+          finished = true;
+          streamMetric.finish({
+            outcome: "error"
+          });
+        }
+        await relay.onError(message);
+      }
+    }
+  };
 }
 
 app.get("/api/health", async (c) => {
@@ -203,8 +293,42 @@ app.post("/api/access/tailscale/enable", async (c) => {
   const gate = await requireOwnerOrLocalBootstrap(c);
   if (gate) return gate;
   const result = await accessService.enableTailscaleServe();
-  await websocketHub.refreshAll();
+  await websocketHub.publishAccessUpdated();
+  await websocketHub.publishSetupUpdated();
   return c.json(result);
+});
+
+app.post("/api/access/cloudflare/enable", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const gate = await requireOwnerOrLocalBootstrap(c);
+  if (gate) return gate;
+  const body = (await c.req.json()) as { hostname: string; tunnelToken: string };
+  const result = await accessService.enableCloudflareTunnel(body);
+  await websocketHub.publishAccessUpdated();
+  return c.json(result);
+});
+
+app.post("/api/access/cloudflare/stop", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const gate = await requireOwnerOrLocalBootstrap(c);
+  if (gate) return gate;
+  const result = await accessService.stopCloudflareTunnel();
+  await websocketHub.publishAccessUpdated();
+  return c.json(result);
+});
+
+app.post("/api/access/canonical", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const gate = await requireOwnerOrLocalBootstrap(c);
+  if (gate) return gate;
+  const body = (await c.req.json()) as { source: "tailscale" | "cloudflare" };
+  const canonicalOrigin = await accessService.setCanonicalSource(body.source);
+  await websocketHub.publishAccessUpdated();
+  await websocketHub.publishSetupUpdated();
+  return c.json({ canonicalOrigin });
 });
 
 app.post("/api/access/bootstrap", async (c) => {
@@ -212,7 +336,9 @@ app.post("/api/access/bootstrap", async (c) => {
   if (blocked) return blocked;
   const gate = await requireOwnerOrLocalBootstrap(c);
   if (gate) return gate;
-  return c.json(await accessService.createBootstrapToken());
+  const result = await accessService.createBootstrapToken();
+  await websocketHub.publishAccessUpdated();
+  return c.json(result);
 });
 
 app.post("/api/access/bootstrap/consume", async (c) => {
@@ -220,6 +346,7 @@ app.post("/api/access/bootstrap/consume", async (c) => {
   if (blocked) return blocked;
   const body = (await c.req.json()) as { token: string };
   await accessService.consumeBootstrapToken(body.token);
+  await websocketHub.publishAccessUpdated();
   return c.json({ ok: true });
 });
 
@@ -227,6 +354,12 @@ app.get("/api/dashboard", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   return c.json(await dashboardService.getDashboardState());
+});
+
+app.get("/api/diagnostics/performance", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(performanceService.serverSnapshot());
 });
 
 app.get("/api/setup", async (c) => {
@@ -249,7 +382,7 @@ app.post("/api/setup/workspace", async (c) => {
   const state = await appStateService.markSetupStepCompleted("workspace", {
     workspaceRoot
   });
-  await websocketHub.refreshAll();
+  await websocketHub.publishSetupUpdated();
   return c.json(state);
 });
 
@@ -267,7 +400,9 @@ app.post("/api/setup/runtime", async (c) => {
   const state = await appStateService.markSetupStepCompleted("runtime", {
     selectedRuntime: body.runtimeId
   });
-  await websocketHub.refreshAll();
+  await websocketHub.publishSetupUpdated();
+  await websocketHub.publishRuntimeUpdated();
+  await websocketHub.publishProvidersUpdated();
   return c.json(state);
 });
 
@@ -280,7 +415,10 @@ app.post("/api/setup/model", async (c) => {
   await runtimeService.pullModel(body.runtimeId, body.modelId);
   await openclawService.startGateway();
   const state = await appStateService.markSetupStepCompleted("providerRegistration", {});
-  await websocketHub.refreshAll();
+  await websocketHub.publishSetupUpdated();
+  await websocketHub.publishRuntimeUpdated();
+  await websocketHub.publishProvidersUpdated();
+  await websocketHub.publishContextUpdated();
   return c.json(state);
 });
 
@@ -311,7 +449,8 @@ app.post("/api/setup/signal", async (c) => {
   const state = await appStateService.updateSetupState({
     signalEnabled: true
   });
-  await websocketHub.refreshAll();
+  await websocketHub.publishSetupUpdated();
+  await websocketHub.publishChannelUpdated();
   return c.json(state);
 });
 
@@ -327,7 +466,8 @@ app.post("/api/runtime/:runtimeId/install", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await runtimeService.installRuntime(c.req.param("runtimeId") as "ollama" | "llamaCpp" | "openclaw");
-  await websocketHub.refreshAll();
+  await websocketHub.publishRuntimeUpdated();
+  await websocketHub.publishProvidersUpdated();
   return c.json({ ok: true });
 });
 
@@ -337,7 +477,8 @@ app.post("/api/runtime/:runtimeId/start", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await runtimeService.startRuntime(c.req.param("runtimeId") as "ollama" | "llamaCpp" | "openclaw");
-  await websocketHub.refreshAll();
+  await websocketHub.publishRuntimeUpdated();
+  await websocketHub.publishProvidersUpdated();
   return c.json({ ok: true });
 });
 
@@ -347,7 +488,8 @@ app.post("/api/runtime/:runtimeId/stop", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await runtimeService.stopRuntime(c.req.param("runtimeId") as "ollama" | "llamaCpp" | "openclaw");
-  await websocketHub.refreshAll();
+  await websocketHub.publishRuntimeUpdated();
+  await websocketHub.publishProvidersUpdated();
   return c.json({ ok: true });
 });
 
@@ -358,8 +500,21 @@ app.post("/api/runtime/:runtimeId/models", async (c) => {
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { modelId: string };
   await runtimeService.pullModel(c.req.param("runtimeId") as "ollama" | "llamaCpp", body.modelId);
-  await websocketHub.refreshAll();
+  await websocketHub.publishRuntimeUpdated();
+  await websocketHub.publishProvidersUpdated();
+  await websocketHub.publishContextUpdated();
   return c.json({ ok: true });
+});
+
+app.post("/api/runtime/context-management", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = (await c.req.json()) as { enabled: boolean };
+  const status = await openclawService.setSmartContextManagement(body.enabled);
+  await websocketHub.publishContextUpdated();
+  return c.json(status);
 });
 
 app.get("/api/providers", async (c) => {
@@ -390,7 +545,10 @@ app.post("/api/providers/secrets", async (c) => {
   }
   await appStateService.markSetupStepCompleted("cloudProviders");
   await runtimeService.startRuntime("openclaw");
-  await websocketHub.refreshAll();
+  runtimeService.invalidateCaches();
+  await websocketHub.publishSetupUpdated();
+  await websocketHub.publishRuntimeUpdated();
+  await websocketHub.publishProvidersUpdated();
   return c.json(await keychainService.listProviderSummaries());
 });
 
@@ -421,7 +579,10 @@ app.delete("/api/providers/secrets/:providerId", async (c) => {
   }
 
   await runtimeService.startRuntime("openclaw");
-  await websocketHub.refreshAll();
+  runtimeService.invalidateCaches();
+  await websocketHub.publishRuntimeUpdated();
+  await websocketHub.publishProvidersUpdated();
+  await websocketHub.publishContextUpdated();
   return c.json(await keychainService.listProviderSummaries());
 });
 
@@ -450,7 +611,10 @@ app.post("/api/providers/:providerId/select", async (c) => {
   await appStateService.markSetupStepCompleted("cloudProviders", {
     selectedModel: modelId
   });
-  await websocketHub.refreshAll();
+  runtimeService.invalidateCaches();
+  await websocketHub.publishSetupUpdated();
+  await websocketHub.publishProvidersUpdated();
+  await websocketHub.publishContextUpdated();
   return c.json(await runtimeService.listProviderProfiles());
 });
 
@@ -467,7 +631,7 @@ app.post("/api/channels/signal/install", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await signalService.installCli();
-  await websocketHub.refreshAll();
+  await websocketHub.publishChannelUpdated();
   return c.json(await harnessService.listChannels());
 });
 
@@ -505,7 +669,7 @@ app.post("/api/channels/signal/register/start", async (c) => {
     signalRegistrationRequest.autoInstall = body.autoInstall;
   }
   await signalService.startRegistration(signalRegistrationRequest);
-  await websocketHub.refreshAll();
+  await websocketHub.publishChannelUpdated();
   return c.json(await harnessService.listChannels());
 });
 
@@ -516,7 +680,8 @@ app.post("/api/channels/signal/register/verify", async (c) => {
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { verificationCode: string; pin?: string };
   await signalService.verifyRegistration(body);
-  await websocketHub.refreshAll();
+  await websocketHub.publishChannelUpdated();
+  await websocketHub.publishSetupUpdated();
   return c.json(await harnessService.listChannels());
 });
 
@@ -527,7 +692,7 @@ app.post("/api/channels/signal/link/start", async (c) => {
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { deviceName?: string };
   const result = await signalService.startLink(body.deviceName?.trim() || "DroidAgent");
-  await websocketHub.refreshAll();
+  await websocketHub.publishChannelUpdated();
   return c.json(result);
 });
 
@@ -537,7 +702,7 @@ app.post("/api/channels/signal/link/cancel", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await signalService.cancelLink();
-  await websocketHub.refreshAll();
+  await websocketHub.publishChannelUpdated();
   return c.json(await harnessService.listChannels());
 });
 
@@ -547,7 +712,7 @@ app.post("/api/channels/signal/daemon/start", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await signalService.startDaemon();
-  await websocketHub.refreshAll();
+  await websocketHub.publishChannelUpdated();
   return c.json(await harnessService.listChannels());
 });
 
@@ -557,7 +722,7 @@ app.post("/api/channels/signal/daemon/stop", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   await signalService.stopDaemon();
-  await websocketHub.refreshAll();
+  await websocketHub.publishChannelUpdated();
   return c.json(await harnessService.listChannels());
 });
 
@@ -581,8 +746,20 @@ app.post("/api/channels/signal/disconnect", async (c) => {
     disconnectRequest.clearLocalData = body.clearLocalData;
   }
   await signalService.disconnect(disconnectRequest);
-  await websocketHub.refreshAll();
+  await websocketHub.publishChannelUpdated();
+  await websocketHub.publishSetupUpdated();
   return c.json(await harnessService.listChannels());
+});
+
+app.post("/api/channels/signal/pairing/resolve", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = (await c.req.json()) as { code: string; resolution: "approved" | "denied" };
+  await openclawService.resolveSignalPairing(body.code, body.resolution);
+  await websocketHub.publishChannelUpdated();
+  return c.json({ ok: true });
 });
 
 app.post("/api/channels/signal/pairing/approve", async (c) => {
@@ -592,7 +769,17 @@ app.post("/api/channels/signal/pairing/approve", async (c) => {
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { code: string };
   await openclawService.approveSignalPairing(body.code);
-  await websocketHub.refreshAll();
+  await websocketHub.publishChannelUpdated();
+  return c.json({ ok: true });
+});
+
+app.post("/api/channels/signal/test-message", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = (await c.req.json()) as { target: string; text: string };
+  await signalService.sendTestMessage(body);
   return c.json({ ok: true });
 });
 
@@ -608,7 +795,8 @@ app.post("/api/service/launch-agent/install", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const status = await launchAgentService.install();
-  await websocketHub.refreshAll();
+  await websocketHub.publishLaunchAgentUpdated();
+  await websocketHub.publishSetupUpdated();
   return c.json(status);
 });
 
@@ -618,7 +806,7 @@ app.post("/api/service/launch-agent/start", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const status = await launchAgentService.start();
-  await websocketHub.refreshAll();
+  await websocketHub.publishLaunchAgentUpdated();
   return c.json(status);
 });
 
@@ -628,7 +816,7 @@ app.post("/api/service/launch-agent/stop", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const status = await launchAgentService.stop();
-  await websocketHub.refreshAll();
+  await websocketHub.publishLaunchAgentUpdated();
   return c.json(status);
 });
 
@@ -638,7 +826,7 @@ app.post("/api/service/launch-agent/uninstall", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const status = await launchAgentService.uninstall();
-  await websocketHub.refreshAll();
+  await websocketHub.publishLaunchAgentUpdated();
   return c.json(status);
 });
 
@@ -661,21 +849,25 @@ app.post("/api/sessions/:sessionId/messages", async (c) => {
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { text: string };
   const sessionId = c.req.param("sessionId");
-  const run = await harnessService.sendMessage(sessionId, body.text, {
+  let runId = "";
+  const measuredRelay = withMeasuredStreamRelay("http", sessionId, {
     onDelta: async (delta) => {
-      websocketHub.publishChatDelta(sessionId, run.runId, delta);
+      websocketHub.publishChatDelta(sessionId, runId, delta);
     },
     onDone: async () => {
-      websocketHub.publishChatDone(sessionId, run.runId);
+      websocketHub.publishChatDone(sessionId, runId);
       await websocketHub.pushChatHistory(sessionId);
-      await websocketHub.refreshAll();
+      await websocketHub.publishSessionsUpdated();
     },
     onError: async (message) => {
-      websocketHub.publishChatError(sessionId, run.runId, message);
+      websocketHub.publishChatError(sessionId, runId, message);
       await websocketHub.pushChatHistory(sessionId);
-      await websocketHub.refreshAll();
+      await websocketHub.publishSessionsUpdated();
     }
   });
+  const run = await harnessService.sendMessage(sessionId, body.text, measuredRelay.relay);
+  runId = run.runId;
+  measuredRelay.markAccepted();
   return c.json({ ok: true, runId: run.runId }, 202);
 });
 
@@ -687,7 +879,7 @@ app.post("/api/sessions/:sessionId/abort", async (c) => {
   const sessionId = c.req.param("sessionId");
   await harnessService.abortMessage(sessionId);
   await websocketHub.pushChatHistory(sessionId);
-  await websocketHub.refreshAll();
+  await websocketHub.publishSessionsUpdated();
   return c.json({ ok: true });
 });
 
@@ -703,8 +895,9 @@ app.post("/api/approvals/:approvalId", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { resolution: "approved" | "denied" };
-  await harnessService.resolveApproval(c.req.param("approvalId"), body.resolution);
-  await websocketHub.refreshAll();
+  const approvalId = c.req.param("approvalId");
+  await harnessService.resolveApproval(approvalId, body.resolution);
+  await websocketHub.publishApprovalsUpdated();
   return c.json({ ok: true });
 });
 
@@ -732,7 +925,6 @@ app.put("/api/files/content", async (c) => {
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { path: string; content: string; expectedModifiedAt: string | null };
   const saved = await fileService.writeFile(body.path, body.content, body.expectedModifiedAt ?? null);
-  await websocketHub.refreshAll();
   return c.json(saved);
 });
 
@@ -766,7 +958,6 @@ app.post("/api/jobs", async (c) => {
   const user = c.get("user");
   const body = (await c.req.json()) as { command: string; cwd: string };
   const jobId = await jobService.startJob(body.command, body.cwd ?? ".", user?.id);
-  await websocketHub.refreshAll();
   return c.json({ jobId });
 });
 
@@ -776,13 +967,83 @@ app.get("/api/models/:runtimeId", async (c) => {
   return c.json(await runtimeService.listModels(c.req.param("runtimeId") as "ollama" | "llamaCpp" | "openclaw"));
 });
 
-if (fs.existsSync(paths.webDistDir)) {
-  app.use("/*", serveStatic({ root: paths.webDistDir }));
+if (TEST_MODE) {
+  app.post("/api/testing/e2e/reset", async (c) => {
+    const unauthorized = await requireUser(c);
+    if (unauthorized) return unauthorized;
+
+    testHarnessService.reset();
+    performanceService.reset();
+    await db.delete(schema.jobs);
+
+    await Promise.all([
+      fs.promises.rm(paths.jobsLogsDir, { recursive: true, force: true }),
+      fs.promises.rm(path.join(paths.logsDir, "jobs-audit.log"), { force: true })
+    ]);
+    await fs.promises.mkdir(paths.jobsLogsDir, { recursive: true });
+
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    if (runtimeSettings.workspaceRoot) {
+      await fs.promises.rm(runtimeSettings.workspaceRoot, { recursive: true, force: true });
+      await fs.promises.mkdir(runtimeSettings.workspaceRoot, { recursive: true });
+      await Promise.all([
+        fs.promises.writeFile(path.join(runtimeSettings.workspaceRoot, "notes.txt"), "first pass", "utf8"),
+        fs.promises.writeFile(path.join(runtimeSettings.workspaceRoot, "README.md"), "# DroidAgent E2E Workspace\n", "utf8")
+      ]);
+    }
+
+    await websocketHub.refreshAll();
+    return c.json({ ok: true });
+  });
 }
 
-void openclawService.ensureConfigured().catch((error) => {
-  console.error("Failed to seed OpenClaw configuration", error);
-});
+if (fs.existsSync(paths.webDistDir)) {
+  app.use("/*", serveStatic({ root: paths.webDistDir }));
+
+  const indexHtmlPath = path.join(paths.webDistDir, "index.html");
+  const indexHtml = fs.existsSync(indexHtmlPath) ? fs.readFileSync(indexHtmlPath, "utf8") : null;
+
+  app.get("*", (c) => {
+    const pathname = new URL(c.req.url).pathname;
+    if (!indexHtml) {
+      return c.notFound();
+    }
+    if (pathname.startsWith("/api/") || pathname === "/api" || pathname === "/ws") {
+      return c.notFound();
+    }
+    if (path.extname(pathname)) {
+      return c.notFound();
+    }
+    return c.html(indexHtml);
+  });
+}
+
+if (!TEST_MODE) {
+  void openclawService.ensureConfigured().catch((error) => {
+    console.error("Failed to seed OpenClaw configuration", error);
+  });
+}
+
+void (async () => {
+  try {
+    if (TEST_MODE) {
+      await startupService.getDiagnostics();
+    } else {
+      await startupService.restore();
+    }
+
+    await Promise.all([
+      accessService.getBootstrapState(),
+      accessService.getAccessSnapshot(),
+      runtimeService.getRuntimeStatuses(),
+      runtimeService.listProviderProfiles(),
+      keychainService.listProviderSummaries(),
+      dashboardService.getDashboardState()
+    ]);
+  } catch (error) {
+    console.error("Failed to warm DroidAgent caches", error);
+  }
+})();
 
 const server = serve(
   {

@@ -1,18 +1,47 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { startRegistration, type PublicKeyCredentialCreationOptionsJSON as BrowserRegistrationOptions } from "@simplewebauthn/browser";
 import { useQueryClient } from "@tanstack/react-query";
 
-import type { BootstrapLink, CloudProviderSummary } from "@droidagent/shared";
+import type { BootstrapLink, CloudProviderSummary, PerformanceSnapshot } from "@droidagent/shared";
 
-import { useDroidAgentApp } from "../app-context";
+import { useAccessQuery, useDashboardQuery, usePasskeysQuery, usePerformanceQuery } from "../app-data";
+import { useClientPerformanceSnapshot, useDroidAgentApp } from "../app-context";
 import { api, postJson } from "../lib/api";
+
+function metricDescription(snapshot: PerformanceSnapshot | undefined, name: string, label: string): string {
+  const metric = snapshot?.metrics.find((entry) => entry.name === name);
+  if (!metric) {
+    return `${label}: no samples yet`;
+  }
+
+  const p95 = metric.summary.p95DurationMs ?? metric.summary.lastDurationMs;
+  const last = metric.summary.lastDurationMs;
+  return `${label}: p95 ${p95 ?? 0} ms • last ${last ?? 0} ms`;
+}
 
 export function SettingsScreen() {
   const queryClient = useQueryClient();
-  const { dashboard, access, passkeysQuery, canInstallApp, installApp, runAction, refreshDashboard } = useDroidAgentApp();
+  const { canInstallApp, installApp, runAction } = useDroidAgentApp();
+  const dashboardQuery = useDashboardQuery(true);
+  const accessQuery = useAccessQuery();
+  const passkeysQuery = usePasskeysQuery(true);
+  const performanceQuery = usePerformanceQuery(true);
+  const clientPerformanceSnapshot = useClientPerformanceSnapshot();
+  const dashboard = dashboardQuery.data;
+  const access = accessQuery.data;
   const [providerApiKeys, setProviderApiKeys] = useState<Record<string, string>>({});
   const [providerModels, setProviderModels] = useState<Record<string, string>>({});
   const [bootstrapLink, setBootstrapLink] = useState<BootstrapLink | null>(null);
+  const [cloudflareHostname, setCloudflareHostname] = useState(access?.cloudflareStatus.hostname ?? "");
+  const [cloudflareToken, setCloudflareToken] = useState("");
+  const canEnableCloudflare = cloudflareHostname.trim().length > 0 && (cloudflareToken.trim().length > 0 || Boolean(access?.cloudflareStatus.tokenStored));
+  const canGeneratePhoneLink = Boolean(access?.canonicalOrigin);
+
+  useEffect(() => {
+    if (access?.cloudflareStatus.hostname) {
+      setCloudflareHostname(access.cloudflareStatus.hostname);
+    }
+  }, [access?.cloudflareStatus.hostname]);
 
   async function handleAddPasskey() {
     const options = await postJson<PublicKeyCredentialCreationOptionsJSON>("/api/auth/passkeys/register/options", {});
@@ -34,13 +63,12 @@ export function SettingsScreen() {
       <article className="panel-card">
         <h3>LaunchAgent</h3>
         <p>{dashboard?.launchAgent.healthMessage}</p>
-        <pre>{JSON.stringify(dashboard?.launchAgent ?? {}, null, 2)}</pre>
+        <small>{dashboard?.launchAgent.plistPath}</small>
         <div className="button-row">
           <button
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/service/launch-agent/install", {});
-                await refreshDashboard();
               }, "LaunchAgent plist installed.")
             }
           >
@@ -51,7 +79,6 @@ export function SettingsScreen() {
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/service/launch-agent/start", {});
-                await refreshDashboard();
               }, "LaunchAgent start requested.")
             }
           >
@@ -62,7 +89,6 @@ export function SettingsScreen() {
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/service/launch-agent/stop", {});
-                await refreshDashboard();
               }, "LaunchAgent stop requested.")
             }
           >
@@ -73,7 +99,6 @@ export function SettingsScreen() {
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/service/launch-agent/uninstall", {});
-                await refreshDashboard();
               }, "LaunchAgent removed.")
             }
           >
@@ -136,7 +161,6 @@ export function SettingsScreen() {
                           defaultModel
                         });
                         setProviderApiKeys((current) => ({ ...current, [provider.id]: "" }));
-                        await refreshDashboard();
                       }, `${provider.label} key stored in Keychain.`)
                     }
                   >
@@ -149,7 +173,6 @@ export function SettingsScreen() {
                         await postJson(`/api/providers/${provider.id}/select`, {
                           modelId: defaultModel
                         });
-                        await refreshDashboard();
                       }, `${provider.label} activated.`)
                     }
                   >
@@ -160,7 +183,6 @@ export function SettingsScreen() {
                     onClick={() =>
                       void runAction(async () => {
                         await api(`/api/providers/secrets/${provider.id}`, { method: "DELETE" });
-                        await refreshDashboard();
                       }, `${provider.label} secret removed.`)
                     }
                   >
@@ -175,33 +197,127 @@ export function SettingsScreen() {
 
       <article className="panel-card">
         <h3>Remote Access</h3>
-        <p>Private-network-first by design. Daily use stays on the canonical Tailscale URL after bootstrap.</p>
+        <p>Private-first by default. Daily use stays on whichever canonical remote URL you choose.</p>
+        <div className="stack-list">
+          <article className="panel-card compact">
+            <strong>Tailscale</strong>
+            <small>{access?.tailscaleStatus.healthMessage ?? "Checking Tailscale..."}</small>
+            <div className="button-row">
+              <button
+                onClick={() =>
+                  void runAction(async () => {
+                    await postJson("/api/access/tailscale/enable", {});
+                  }, "Tailscale Serve enabled.")
+                }
+              >
+                Enable
+              </button>
+              <button
+                className="secondary"
+                disabled={!access?.tailscaleStatus.canonicalUrl}
+                onClick={() =>
+                  void runAction(async () => {
+                    await postJson("/api/access/canonical", { source: "tailscale" });
+                  }, "Tailscale set as canonical.")
+                }
+              >
+                Make Canonical
+              </button>
+            </div>
+          </article>
+          <article className="panel-card compact">
+            <strong>Cloudflare Tunnel</strong>
+            <small>{access?.cloudflareStatus.healthMessage ?? "Checking Cloudflare..."}</small>
+            <div className="field-stack">
+              <label>
+                Public hostname
+                <input value={cloudflareHostname} onChange={(event) => setCloudflareHostname(event.target.value)} placeholder="agent.example.com" />
+              </label>
+              <label>
+                Tunnel token
+                <input
+                  type="password"
+                  value={cloudflareToken}
+                  onChange={(event) => setCloudflareToken(event.target.value)}
+                  placeholder={access?.cloudflareStatus.tokenStored ? "Stored in Keychain" : "Paste Cloudflare tunnel token"}
+                />
+              </label>
+              <div className="button-row">
+                <button
+                  disabled={!canEnableCloudflare}
+                  onClick={() =>
+                    void runAction(async () => {
+                      await postJson("/api/access/cloudflare/enable", {
+                        hostname: cloudflareHostname,
+                        tunnelToken: cloudflareToken
+                      });
+                      setCloudflareToken("");
+                    }, "Cloudflare tunnel enabled.")
+                  }
+                >
+                  Enable
+                </button>
+                <button
+                  className="secondary"
+                  disabled={!access?.cloudflareStatus.canonicalUrl}
+                  onClick={() =>
+                    void runAction(async () => {
+                      await postJson("/api/access/canonical", { source: "cloudflare" });
+                    }, "Cloudflare set as canonical.")
+                  }
+                >
+                  Make Canonical
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() =>
+                    void runAction(async () => {
+                      await postJson("/api/access/cloudflare/stop", {});
+                    }, "Cloudflare tunnel stopped.")
+                  }
+                >
+                  Stop
+                </button>
+              </div>
+            </div>
+          </article>
+        </div>
         <div className="button-row">
           <button
-            onClick={() =>
-              void runAction(async () => {
-                await postJson("/api/access/tailscale/enable", {});
-                await refreshDashboard();
-              }, "Tailscale Serve enabled.")
-            }
-          >
-            Enable Tailscale Serve
-          </button>
-          <button
-            className="secondary"
+            disabled={!canGeneratePhoneLink}
             onClick={() =>
               void runAction(async () => {
                 const link = await postJson<BootstrapLink>("/api/access/bootstrap", {});
                 setBootstrapLink(link);
-                await refreshDashboard();
               }, "Phone bootstrap link generated.")
             }
           >
             Generate Phone Link
           </button>
         </div>
-        {access ? <pre>{JSON.stringify(access, null, 2)}</pre> : null}
-        {bootstrapLink ? <pre>{bootstrapLink.bootstrapUrl}</pre> : null}
+        {access?.canonicalOrigin ? <small>Canonical URL: {access.canonicalOrigin.origin}</small> : null}
+        {bootstrapLink ? <small>Bootstrap link: {bootstrapLink.bootstrapUrl}</small> : null}
+      </article>
+
+      <article className="panel-card">
+        <h3>Smart Context Management</h3>
+        <p>Let DroidAgent configure OpenClaw compaction, pruning, and pre-compaction memory flush with safe defaults.</p>
+        <div className="button-row">
+          <button
+            onClick={() =>
+              void runAction(async () => {
+                await postJson("/api/runtime/context-management", {
+                  enabled: !dashboard?.contextManagement.enabled
+                });
+              }, dashboard?.contextManagement.enabled ? "Smart context management disabled." : "Smart context management enabled.")
+            }
+          >
+            {dashboard?.contextManagement.enabled ? "Disable" : "Enable"}
+          </button>
+        </div>
+        <small>
+          Compaction: {dashboard?.contextManagement.compactionMode ?? "unknown"} • Pruning: {dashboard?.contextManagement.pruningMode ?? "unknown"} • Memory flush: {dashboard?.contextManagement.memoryFlushEnabled ? "on" : "off"}
+        </small>
       </article>
 
       <article className="panel-card">
@@ -210,6 +326,30 @@ export function SettingsScreen() {
         <button disabled={!canInstallApp} onClick={() => void runAction(installApp, "Install prompt opened.")}>
           Install App
         </button>
+      </article>
+
+      <article className="panel-card">
+        <h3>Performance Diagnostics</h3>
+        <p>Recent local UI timings and server timings stay advisory for this pass. Use them to spot regressions before you trust a baseline.</p>
+        <div className="stack-list">
+          <article className="panel-card compact">
+            <strong>Client</strong>
+            <small>{metricDescription(clientPerformanceSnapshot, "client.route.switch", "Route switch")}</small>
+            <small>{metricDescription(clientPerformanceSnapshot, "client.chat.submit_to_first_token", "Chat to first token")}</small>
+            <small>{metricDescription(clientPerformanceSnapshot, "client.chat.submit_to_done", "Chat to done")}</small>
+            <small>{metricDescription(clientPerformanceSnapshot, "client.ws.reconnect_to_resync", "Reconnect to resync")}</small>
+            <small>{metricDescription(clientPerformanceSnapshot, "client.file.save", "File save")}</small>
+            <small>{metricDescription(clientPerformanceSnapshot, "client.job.start_to_first_output", "Job to first output")}</small>
+          </article>
+          <article className="panel-card compact">
+            <strong>Server</strong>
+            <small>{metricDescription(performanceQuery.data, "http.get./api/access", "GET /api/access")}</small>
+            <small>{metricDescription(performanceQuery.data, "http.get./api/dashboard", "GET /api/dashboard")}</small>
+            <small>{metricDescription(performanceQuery.data, "chat.stream.firstDeltaRelay", "Relay to first delta")}</small>
+            <small>{metricDescription(performanceQuery.data, "file.write", "File write")}</small>
+            <small>{metricDescription(performanceQuery.data, "job.firstOutput", "Job first output")}</small>
+          </article>
+        </div>
       </article>
     </section>
   );

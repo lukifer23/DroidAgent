@@ -2,9 +2,17 @@ import { WebSocketServer, type WebSocket } from "ws";
 
 import { ClientCommandSchema, ServerEventSchema } from "@droidagent/shared";
 
+import { accessService } from "./services/access-service.js";
+import { appStateService } from "./services/app-state-service.js";
 import { dashboardService } from "./services/dashboard-service.js";
 import { harnessService } from "./services/harness-service.js";
 import { jobService } from "./services/job-service.js";
+import { keychainService } from "./services/keychain-service.js";
+import { launchAgentService } from "./services/launch-agent-service.js";
+import { openclawService } from "./services/openclaw-service.js";
+import { performanceService } from "./services/performance-service.js";
+import { runtimeService } from "./services/runtime-service.js";
+import { startupService } from "./services/startup-service.js";
 
 function send(ws: WebSocket, payload: unknown): void {
   ws.send(JSON.stringify(payload));
@@ -36,6 +44,7 @@ export class WebsocketHub {
     });
 
     jobService.on("updated", (job) => {
+      dashboardService.invalidate();
       this.broadcast(
         ServerEventSchema.parse({
           type: "job.updated",
@@ -46,11 +55,136 @@ export class WebsocketHub {
   }
 
   async refreshAll(): Promise<void> {
+    dashboardService.invalidate();
+    startupService.invalidate();
     const state = await dashboardService.getDashboardState();
     this.broadcast(
       ServerEventSchema.parse({
         type: "dashboard.state",
         payload: state
+      })
+    );
+  }
+
+  async publishSetupUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    startupService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "setup.updated",
+        payload: await appStateService.getSetupState()
+      })
+    );
+  }
+
+  async publishAccessUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    startupService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "access.updated",
+        payload: await accessService.getBootstrapState()
+      })
+    );
+  }
+
+  async publishRuntimeUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    startupService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "runtime.updated",
+        payload: await runtimeService.getRuntimeStatuses()
+      })
+    );
+  }
+
+  async publishProvidersUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    startupService.invalidate();
+    const [providers, cloudProviders] = await Promise.all([
+      runtimeService.listProviderProfiles(),
+      keychainService.listProviderSummaries()
+    ]);
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "providers.updated",
+        payload: {
+          providers,
+          cloudProviders
+        }
+      })
+    );
+  }
+
+  async publishChannelUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    startupService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "channel.updated",
+        payload: await harnessService.listChannels()
+      })
+    );
+  }
+
+  async publishLaunchAgentUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    startupService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "launchAgent.updated",
+        payload: await launchAgentService.status()
+      })
+    );
+  }
+
+  async publishContextUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    startupService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "context.updated",
+        payload: await openclawService.contextManagementStatus()
+      })
+    );
+  }
+
+  async publishPerformanceUpdated(): Promise<void> {
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "performance.updated",
+        payload: performanceService.serverSnapshot()
+      })
+    );
+  }
+
+  async publishSessionsUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "sessions.updated",
+        payload: await harnessService.listSessions()
+      })
+    );
+  }
+
+  publishApprovalUpdated(approval: Awaited<ReturnType<typeof harnessService.listApprovals>>[number]): void {
+    dashboardService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "approval.updated",
+        payload: approval
+      })
+    );
+  }
+
+  async publishApprovalsUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "approvals.updated",
+        payload: await harnessService.listApprovals()
       })
     );
   }
@@ -146,34 +280,80 @@ export class WebsocketHub {
 
       if (command.type === "chat.send") {
         const { sessionId, text } = command.payload;
+        const enqueueMetric = performanceService.start("server", "chat.send.enqueue", {
+          transport: "ws",
+          sessionId
+        });
+        const firstDeltaMetric = performanceService.start("server", "chat.stream.firstDeltaRelay", {
+          transport: "ws",
+          sessionId
+        });
+        const streamMetric = performanceService.start("server", "chat.stream.completeRelay", {
+          transport: "ws",
+          sessionId
+        });
+        let firstDeltaRecorded = false;
+        let finished = false;
+        let runId = "";
+
         const run = await harnessService.sendMessage(sessionId, text, {
           onDelta: async (delta) => {
-            this.publishChatDelta(sessionId, run.runId, delta);
+            if (!firstDeltaRecorded) {
+              firstDeltaRecorded = true;
+              firstDeltaMetric.finish();
+            }
+            this.publishChatDelta(sessionId, runId, delta);
           },
           onDone: async () => {
-            this.publishChatDone(sessionId, run.runId);
+            if (!firstDeltaRecorded) {
+              firstDeltaRecorded = true;
+              firstDeltaMetric.finish({
+                outcome: "no-delta"
+              });
+            }
+            if (!finished) {
+              finished = true;
+              streamMetric.finish({
+                outcome: "done"
+              });
+            }
+            this.publishChatDone(sessionId, runId);
             await this.pushChatHistory(sessionId);
-            await this.refreshAll();
+            await this.publishSessionsUpdated();
           },
           onError: async (message) => {
-            this.publishChatError(sessionId, run.runId, message);
+            if (!firstDeltaRecorded) {
+              firstDeltaRecorded = true;
+              firstDeltaMetric.finish({
+                outcome: "no-delta"
+              });
+            }
+            if (!finished) {
+              finished = true;
+              streamMetric.finish({
+                outcome: "error"
+              });
+            }
+            this.publishChatError(sessionId, runId, message);
             await this.pushChatHistory(sessionId);
-            await this.refreshAll();
+            await this.publishSessionsUpdated();
           }
         });
+        runId = run.runId;
+        enqueueMetric.finish();
         return;
       }
 
       if (command.type === "chat.abort") {
         await harnessService.abortMessage(command.payload.sessionId);
         await this.pushChatHistory(command.payload.sessionId);
-        await this.refreshAll();
+        await this.publishSessionsUpdated();
         return;
       }
 
       if (command.type === "approval.resolve") {
         await harnessService.resolveApproval(command.payload.approvalId, command.payload.resolution);
-        await this.refreshAll();
+        await this.publishApprovalsUpdated();
         return;
       }
 
