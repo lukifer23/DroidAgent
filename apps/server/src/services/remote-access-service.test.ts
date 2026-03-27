@@ -193,4 +193,24 @@ describe("TailscaleRemoteAccessProvider", () => {
     userspaceSpy.mockRestore();
     fallbackSpy.mockRestore();
   });
+
+  it("surfaces the tailnet serve enable URL instead of hanging when Serve is disabled", async () => {
+    const serveDisabledError = new CommandError("tailscale serve --bg --https=443 4318 timed out", "", "", null);
+    Object.assign(serveDisabledError as { stdout: string; stderr: string; exitCode: number | null }, {
+      stdout: "Serve is not enabled on your tailnet.\nTo enable, visit:\n\nhttps://login.tailscale.com/f/serve?node=test-node\n",
+      stderr: "",
+      exitCode: null
+    });
+    const userspaceSpy = vi
+      .spyOn(tailscaleRemoteAccessProvider as never, "ensureUserspaceDaemon" as never)
+      .mockResolvedValue("/tmp/droidagent-tailscaled.sock");
+
+    runCommandMock.mockRejectedValueOnce(serveDisabledError);
+
+    await expect(tailscaleRemoteAccessProvider.enableServe()).rejects.toThrow(
+      "Tailscale Serve is disabled for this tailnet. Enable it here first: https://login.tailscale.com/f/serve?node=test-node"
+    );
+
+    userspaceSpy.mockRestore();
+  });
 });

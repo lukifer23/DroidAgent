@@ -69,6 +69,11 @@ function extractServeUrl(raw: unknown): string | null {
   return strings.find((value) => /^https:\/\/.+\.ts\.net\/?$/i.test(value.trim())) ?? null;
 }
 
+function extractTailscaleServeEnableUrl(output: string): string | null {
+  const match = output.match(/https:\/\/login\.tailscale\.com\/f\/serve\?[^\s]+/i);
+  return match?.[0] ?? null;
+}
+
 async function healthcheck(url: string): Promise<boolean> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 2000);
@@ -165,12 +170,29 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
     );
   }
 
-  private async runTailscale(args: string[], socketPath?: string | null, okExitCodes?: number[]) {
+  private async runTailscale(
+    args: string[],
+    socketPath?: string | null,
+    options: {
+      okExitCodes?: number[];
+      timeoutMs?: number;
+    } = {}
+  ) {
     const socketArgs = socketPath ? ["--socket", socketPath] : [];
+    const commandOptions: {
+      okExitCodes?: number[];
+      timeoutMs?: number;
+    } = {};
+    if (options.okExitCodes) {
+      commandOptions.okExitCodes = options.okExitCodes;
+    }
+    if (typeof options.timeoutMs === "number") {
+      commandOptions.timeoutMs = options.timeoutMs;
+    }
     return await runCommand(
       "tailscale",
       [...socketArgs, ...args],
-      okExitCodes ? { okExitCodes } : {}
+      commandOptions
     );
   }
 
@@ -187,7 +209,7 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
     socketPath: string | null;
   }> {
     const statusOutput = await this.runTailscale(["status", "--json"], params.socketPath);
-    const serveOutput = await this.runTailscale(["serve", "status", "--json"], params.socketPath, [0, 1]);
+    const serveOutput = await this.runTailscale(["serve", "status", "--json"], params.socketPath, { okExitCodes: [0, 1] });
     return {
       version: params.version,
       statusRaw: safeJsonParse(statusOutput.stdout),
@@ -342,7 +364,28 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
 
   async enableServe(): Promise<void> {
     const socketPath = this.activeSocketPath ?? (await this.ensureUserspaceDaemon());
-    await this.runTailscale(["serve", "--bg", "--https=443", String(SERVER_PORT)], socketPath);
+    try {
+      await this.runTailscale(["serve", "--bg", "--https=443", String(SERVER_PORT)], socketPath, {
+        timeoutMs: 5_000
+      });
+    } catch (error) {
+      if (error instanceof CommandError) {
+        const combined = `${error.stdout}\n${error.stderr}`;
+        if (combined.includes("Serve is not enabled on your tailnet.")) {
+          const enableUrl = extractTailscaleServeEnableUrl(combined);
+          throw new Error(
+            enableUrl
+              ? `Tailscale Serve is disabled for this tailnet. Enable it here first: ${enableUrl}`
+              : "Tailscale Serve is disabled for this tailnet. Enable it in the Tailscale admin console first."
+          );
+        }
+
+        if (error.message.includes("timed out")) {
+          throw new Error("Timed out while enabling Tailscale Serve. Check tailnet policy and local Tailscale health, then try again.");
+        }
+      }
+      throw error;
+    }
     this.invalidateStatus();
   }
 

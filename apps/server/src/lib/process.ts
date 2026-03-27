@@ -27,6 +27,7 @@ export async function runCommand(
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     okExitCodes?: number[];
+    timeoutMs?: number;
   } = {}
 ): Promise<CommandResult> {
   const child = spawn(command, args, {
@@ -48,8 +49,24 @@ export async function runCommand(
     stderr += chunk;
   });
 
+  let timedOut = false;
+  const timeout =
+    options.timeoutMs && options.timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true;
+          child.kill("SIGTERM");
+        }, options.timeoutMs)
+      : null;
+
   const [exitCode] = (await once(child, "close")) as [number];
+  if (timeout) {
+    clearTimeout(timeout);
+  }
   const okExitCodes = options.okExitCodes ?? [0];
+
+  if (timedOut) {
+    throw new CommandError(`${command} ${args.join(" ")} timed out`, stdout, stderr, exitCode);
+  }
 
   if (!okExitCodes.includes(exitCode)) {
     throw new CommandError(`${command} ${args.join(" ")} failed`, stdout, stderr, exitCode);
@@ -57,4 +74,3 @@ export async function runCommand(
 
   return { stdout, stderr, exitCode };
 }
-
