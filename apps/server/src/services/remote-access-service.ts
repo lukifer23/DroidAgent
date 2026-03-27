@@ -10,7 +10,7 @@ import {
   type TailscaleStatus
 } from "@droidagent/shared";
 
-import { SERVER_PORT, baseEnv, paths } from "../env.js";
+import { SERVER_PORT, baseEnv, ensureAppDirs, paths } from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
 import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
@@ -89,6 +89,10 @@ function appendCloudflareLog(chunk: Buffer | string): void {
   fs.appendFileSync(paths.cloudflareLogPath, chunk);
 }
 
+function appendTailscaleLog(chunk: Buffer | string): void {
+  fs.appendFileSync(paths.tailscaleLogPath, chunk);
+}
+
 function normalizeCloudflareHostname(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) {
@@ -121,6 +125,8 @@ export interface RemoteAccessProvider<TStatus> {
 }
 
 export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<TailscaleStatus> {
+  private process: ChildProcess | null = null;
+  private activeSocketPath: string | null = null;
   private readonly statusCache = new TtlCache<TailscaleStatus>(REMOTE_STATUS_TTL_MS);
 
   invalidateStatus(): void {
@@ -136,18 +142,139 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
     }
   }
 
+  private async daemonBinaryPath(): Promise<string | null> {
+    try {
+      const result = await runCommand("which", ["tailscaled"]);
+      return result.stdout.trim().split("\n")[0] || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private isUserspaceFallbackError(error: unknown): boolean {
+    if (!(error instanceof CommandError)) {
+      return false;
+    }
+
+    const combined = `${error.message}\n${error.stdout}\n${error.stderr}`.toLowerCase();
+    return (
+      combined.includes("failed to connect to local tailscale service") ||
+      combined.includes("requires root") ||
+      combined.includes("no such file") ||
+      combined.includes("connection refused")
+    );
+  }
+
+  private async runTailscale(args: string[], socketPath?: string | null, okExitCodes?: number[]) {
+    const socketArgs = socketPath ? ["--socket", socketPath] : [];
+    return await runCommand(
+      "tailscale",
+      [...socketArgs, ...args],
+      okExitCodes ? { okExitCodes } : {}
+    );
+  }
+
+  private async readRawStatusWithSocket(params: {
+    version: string | null;
+    socketPath: string | null;
+    mode: "system" | "userspace";
+  }): Promise<{
+    version: string | null;
+    statusRaw: unknown;
+    serveRaw: unknown;
+    running: boolean;
+    mode: "system" | "userspace";
+    socketPath: string | null;
+  }> {
+    const statusOutput = await this.runTailscale(["status", "--json"], params.socketPath);
+    const serveOutput = await this.runTailscale(["serve", "status", "--json"], params.socketPath, [0, 1]);
+    return {
+      version: params.version,
+      statusRaw: safeJsonParse(statusOutput.stdout),
+      serveRaw: safeJsonParse(serveOutput.stdout),
+      running: true,
+      mode: params.mode,
+      socketPath: params.socketPath
+    };
+  }
+
+  private async ensureUserspaceDaemon(): Promise<string | null> {
+    ensureAppDirs();
+    const daemonPath = await this.daemonBinaryPath();
+    if (!daemonPath) {
+      return null;
+    }
+
+    if (this.process && this.process.exitCode === null && fs.existsSync(paths.tailscaleSocketPath)) {
+      return paths.tailscaleSocketPath;
+    }
+
+    try {
+      await this.runTailscale(["status", "--json"], paths.tailscaleSocketPath);
+      return paths.tailscaleSocketPath;
+    } catch {
+      // start a local userspace daemon below
+    }
+
+    fs.rmSync(paths.tailscaleSocketPath, { force: true });
+
+    this.process = spawn(
+      daemonPath,
+      [
+        "--tun=userspace-networking",
+        "--socket",
+        paths.tailscaleSocketPath,
+        "--state",
+        paths.tailscaleStatePath,
+        "--statedir",
+        paths.tailscaleDir
+      ],
+      {
+        env: baseEnv(),
+        stdio: ["ignore", "pipe", "pipe"]
+      }
+    );
+
+    this.process.stdout?.on("data", appendTailscaleLog);
+    this.process.stderr?.on("data", appendTailscaleLog);
+    this.process.on("exit", () => {
+      this.process = null;
+      this.invalidateStatus();
+    });
+
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const currentProcess = this.process;
+      if (!currentProcess || currentProcess.exitCode !== null) {
+        return null;
+      }
+
+      try {
+        await this.runTailscale(["status", "--json"], paths.tailscaleSocketPath);
+        return paths.tailscaleSocketPath;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+
+    return null;
+  }
+
   private async readRawStatus(): Promise<{
     version: string | null;
     statusRaw: unknown;
     serveRaw: unknown;
     running: boolean;
+    mode: "system" | "userspace";
+    socketPath: string | null;
   }> {
     if (!(await this.hasBinary())) {
       return {
         version: null,
         statusRaw: null,
         serveRaw: null,
-        running: false
+        running: false,
+        mode: "system",
+        socketPath: null
       };
     }
 
@@ -159,29 +286,63 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
     }
 
     try {
-      const statusOutput = await runCommand("tailscale", ["status", "--json"]);
-      const serveOutput = await runCommand("tailscale", ["serve", "status", "--json"], { okExitCodes: [0, 1] });
-      return {
+      return await this.readRawStatusWithSocket({
         version,
-        statusRaw: safeJsonParse(statusOutput.stdout),
-        serveRaw: safeJsonParse(serveOutput.stdout),
-        running: true
-      };
+        socketPath: null,
+        mode: "system"
+      });
     } catch (error) {
-      if (error instanceof CommandError) {
+      if (!this.isUserspaceFallbackError(error)) {
+        if (error instanceof CommandError) {
+          return {
+            version,
+            statusRaw: safeJsonParse(error.stdout),
+            serveRaw: null,
+            running: false,
+            mode: "system",
+            socketPath: null
+          };
+        }
+        throw error;
+      }
+
+      const socketPath = await this.ensureUserspaceDaemon();
+      if (!socketPath) {
         return {
           version,
-          statusRaw: safeJsonParse(error.stdout),
+          statusRaw: null,
           serveRaw: null,
-          running: false
+          running: false,
+          mode: "userspace",
+          socketPath: null
         };
       }
-      throw error;
+
+      try {
+        return await this.readRawStatusWithSocket({
+          version,
+          socketPath,
+          mode: "userspace"
+        });
+      } catch (userspaceError) {
+        if (userspaceError instanceof CommandError) {
+          return {
+            version,
+            statusRaw: safeJsonParse(userspaceError.stdout),
+            serveRaw: null,
+            running: false,
+            mode: "userspace",
+            socketPath
+          };
+        }
+        throw userspaceError;
+      }
     }
   }
 
   async enableServe(): Promise<void> {
-    await runCommand("tailscale", ["serve", "--bg", "--https=443", String(SERVER_PORT)]);
+    const socketPath = this.activeSocketPath ?? (await this.ensureUserspaceDaemon());
+    await this.runTailscale(["serve", "--bg", "--https=443", String(SERVER_PORT)], socketPath);
     this.invalidateStatus();
   }
 
@@ -206,7 +367,8 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
         });
       }
 
-      const { version, statusRaw, serveRaw, running } = await this.readRawStatus();
+      const { version, statusRaw, serveRaw, running, mode, socketPath } = await this.readRawStatus();
+      this.activeSocketPath = mode === "userspace" ? socketPath : null;
       const status = (statusRaw ?? {}) as Record<string, unknown>;
       const self = (status.Self ?? {}) as Record<string, unknown>;
       const currentTailnet = (status.CurrentTailnet ?? {}) as Record<string, unknown>;
@@ -225,15 +387,18 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
       const serveUrl = extractServeUrl(serveRaw) ?? (dnsName ? `https://${dnsName}` : null);
       const httpsEnabled = Boolean(serveTarget && serveUrl);
 
+      const daemonLabel = mode === "userspace" ? "Tailscale userspace daemon" : "Tailscale";
       const healthMessage = !running
-        ? "Tailscale is installed but not currently running."
+        ? mode === "userspace"
+          ? "Tailscale userspace daemon is not responding yet."
+          : "Tailscale is installed but not currently running."
         : !authenticated
-          ? "Tailscale is running but this device is not authenticated into a tailnet."
+          ? `${daemonLabel} is running but this device is not authenticated into a tailnet.`
           : !magicDnsEnabled
-            ? "Tailscale is connected, but MagicDNS is not available for a stable HTTPS host."
+            ? `${daemonLabel} is connected, but MagicDNS is not available for a stable HTTPS host.`
             : httpsEnabled
-              ? `Tailscale Serve is exposing DroidAgent at ${serveUrl}.`
-              : "Tailscale is connected, but Serve is not yet exposing DroidAgent.";
+              ? `${daemonLabel} Serve is exposing DroidAgent at ${serveUrl}.`
+              : `${daemonLabel} is connected, but Serve is not yet exposing DroidAgent.`;
 
       return TailscaleStatusSchema.parse({
         installed: true,

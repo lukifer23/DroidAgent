@@ -4,7 +4,7 @@ import { performance } from "node:perf_hooks";
 
 import { expect, test } from "@playwright/test";
 
-import { gotoSignedIn } from "../e2e/support";
+import { readE2EState, resetE2EState, signInSeededOwner } from "../e2e/support";
 
 const artifactDir = path.resolve(process.cwd(), "artifacts", "perf");
 
@@ -12,8 +12,12 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   const projectName = testInfo.project.name;
   const metrics = [];
 
+  await signInSeededOwner(page.context());
+  await resetE2EState(page);
+  const state = await readE2EState();
+
   const loadStart = performance.now();
-  await gotoSignedIn(page, "/chat");
+  await page.goto(new URL("/chat", state.baseUrl).toString());
   await expect(page.getByRole("heading", { name: "Operator Console" })).toBeVisible();
   metrics.push({
     name: "initial_load_ms",
@@ -33,10 +37,18 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
 
   const prompt = `perf-${projectName}`;
   const assistantMessages = page.locator(".chat-thread .message-card.assistant p");
+  const sendButton = page.getByRole("button", { name: "Send" });
   await page.getByPlaceholder("Send a message to the current OpenClaw session...").fill(prompt);
+  await expect(sendButton).toBeEnabled();
   const sendStart = performance.now();
-  await page.getByRole("button", { name: "Send" }).click();
-  await expect(assistantMessages.filter({ hasText: /^Test harness reply:/ }).last()).toBeVisible();
+  await sendButton.click();
+  await page.waitForFunction(() => {
+    const assistantParagraphs = [...document.querySelectorAll<HTMLElement>(".chat-thread .message-card.assistant p")];
+    return assistantParagraphs.some((element) => {
+      const text = element.textContent?.trim() ?? "";
+      return text.startsWith("Test harness");
+    });
+  });
   metrics.push({
     name: "chat_first_token_ms",
     durationMs: Number((performance.now() - sendStart).toFixed(2))

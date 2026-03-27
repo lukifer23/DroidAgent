@@ -11,10 +11,11 @@ import {
   type ReactNode
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { ServerEvent } from "@droidagent/shared";
+import type { ChatMessage, ClientCommand, ServerEvent, WorkspaceEntry } from "@droidagent/shared";
 
 import { useAccessQuery, useAuthQuery, useDashboardQuery, usePasskeysQuery, usePerformanceQuery } from "./app-data";
 import { useWebSocket } from "./hooks/use-websocket";
+import { api } from "./lib/api";
 import { clientPerformance } from "./lib/client-performance";
 
 interface BeforeInstallPromptEvent extends Event {
@@ -33,6 +34,7 @@ interface DroidAgentAppContextValue {
   runAction: (work: () => Promise<void>, successMessage?: string) => Promise<void>;
   selectedSessionId: string;
   setSelectedSessionId: (sessionId: string) => void;
+  sendRealtimeCommand: (command: ClientCommand) => boolean;
   canInstallApp: boolean;
   installApp: () => Promise<void>;
   beginRouteTransition: (path: string) => void;
@@ -198,7 +200,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   useAccessQuery();
   usePerformanceQuery(Boolean(authQuery.data?.user));
 
-  const { status: wsStatus } = useWebSocket({
+  const { status: wsStatus, send: sendRealtimeCommand } = useWebSocket({
     enabled: Boolean(authQuery.data?.user),
     onMessage: handleSocketMessage
   });
@@ -237,6 +239,31 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     });
   }, [dashboardQuery.data?.sessions, selectedSessionId]);
 
+  useEffect(() => {
+    if (!authQuery.data?.user) {
+      return;
+    }
+
+    const sessions = dashboardQuery.data?.sessions ?? [];
+    const workspaceRoot = dashboardQuery.data?.setup.workspaceRoot;
+    const targetSessionId = sessions.some((session) => session.id === selectedSessionId)
+      ? selectedSessionId
+      : sessions[0]?.id;
+    if (targetSessionId) {
+      void queryClient.prefetchQuery({
+        queryKey: ["sessions", targetSessionId, "messages"],
+        queryFn: () => api<ChatMessage[]>(`/api/sessions/${encodeURIComponent(targetSessionId)}/messages`)
+      });
+    }
+
+    if (workspaceRoot) {
+      void queryClient.prefetchQuery({
+        queryKey: ["files", "."],
+        queryFn: () => api<WorkspaceEntry[]>("/api/files?path=.")
+      });
+    }
+  }, [authQuery.data?.user, dashboardQuery.data?.sessions, dashboardQuery.data?.setup.workspaceRoot, queryClient, selectedSessionId]);
+
   const installApp = useEffectEvent(async () => {
     if (!installPromptEvent) {
       return;
@@ -258,6 +285,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       runAction,
       selectedSessionId,
       setSelectedSessionId,
+      sendRealtimeCommand,
       canInstallApp: Boolean(installPromptEvent),
       installApp,
       beginRouteTransition,
@@ -276,6 +304,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       refreshQueries,
       runAction,
       selectedSessionId,
+      sendRealtimeCommand,
       trackChatSubmit,
       trackJobStart,
       wsStatus

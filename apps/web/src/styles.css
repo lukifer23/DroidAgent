@@ -30,6 +30,7 @@ body {
     radial-gradient(circle at top right, rgba(237, 106, 90, 0.18), transparent 28%),
     linear-gradient(180deg, #111315, #0a0d10 65%);
   color: var(--text);
+  overflow-x: hidden;
 }
 
 a,
@@ -121,6 +122,9 @@ pre {
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
   animation: panel-enter var(--motion-slow) var(--motion-ease);
+  backface-visibility: hidden;
+  transform: translateZ(0);
+  will-change: transform, opacity;
 }
 
 .hero-card {
@@ -233,6 +237,14 @@ small {
   min-height: 0;
 }
 
+.route-frame {
+  animation: route-enter var(--motion-fast) var(--motion-ease);
+  backface-visibility: hidden;
+  contain: layout paint;
+  transform: translateZ(0);
+  will-change: transform, opacity;
+}
+
 .setup-grid {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
@@ -240,6 +252,7 @@ small {
 .panel-card {
   border-radius: 24px;
   padding: 1.1rem;
+  contain: layout paint;
   transition:
     transform var(--motion-fast) var(--motion-ease),
     border-color var(--motion-base) var(--motion-ease),
@@ -317,6 +330,9 @@ small {
   text-align: left;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
+  backface-visibility: hidden;
+  transform: translateZ(0);
+  will-change: transform, background-color, border-color;
   transition:
     transform var(--motion-fast) var(--motion-ease),
     background-color var(--motion-base) var(--motion-ease),
@@ -337,6 +353,9 @@ small {
   border-radius: 22px;
   padding: 1rem 1.1rem;
   border: 1px solid var(--border);
+  backface-visibility: hidden;
+  transform: translateZ(0);
+  will-change: transform, opacity;
   transition:
     transform var(--motion-fast) var(--motion-ease),
     border-color var(--motion-base) var(--motion-ease),
@@ -367,6 +386,15 @@ small {
 .composer {
   grid-template-columns: 1fr auto;
   align-items: end;
+}
+
+.composer-status {
+  grid-column: 1 / -1;
+  margin: -0.2rem 0 0;
+}
+
+.composer textarea:disabled {
+  opacity: 0.72;
 }
 
 .split-panel {
@@ -422,6 +450,9 @@ small {
   border: 1px solid var(--border);
   background: rgba(17, 19, 21, 0.92);
   backdrop-filter: blur(24px);
+  backface-visibility: hidden;
+  transform: translateZ(0);
+  will-change: transform, opacity;
 }
 
 .nav-link,
@@ -458,6 +489,35 @@ label {
 
 .job-output-grid {
   gap: 1rem;
+}
+
+.meta-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-bottom: 0.9rem;
+}
+
+.meta-chip {
+  display: inline-grid;
+  gap: 0.12rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  min-width: 0;
+}
+
+.meta-chip strong {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+
+.meta-chip span {
+  color: var(--text);
+  font-size: 0.92rem;
 }
 
 .message-card.streaming {
@@ -511,6 +571,18 @@ button:hover:not(:disabled),
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes route-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
   }
 }
 

@@ -26,6 +26,10 @@ export class StartupService {
     this.diagnosticsRefreshedAt = 0;
   }
 
+  peekDiagnostics(): StartupDiagnostic[] {
+    return this.diagnostics;
+  }
+
   async restore(): Promise<StartupDiagnostic[]> {
     if (this.restorePromise) {
       return await this.restorePromise;

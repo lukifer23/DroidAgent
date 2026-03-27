@@ -18,7 +18,7 @@ const SERVER_PORT = Number(process.env.DROIDAGENT_E2E_PORT ?? 4418);
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(thisDir, "..", "..", "..", "..");
 const artifactDir = path.join(repoRoot, "artifacts", "e2e");
-const statePath = path.join(artifactDir, "state.json");
+const statePath = path.join(artifactDir, `state-${SERVER_PORT}.json`);
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");

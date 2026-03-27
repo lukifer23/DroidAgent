@@ -11,7 +11,15 @@ import {
   type RuntimeStatus
 } from "@droidagent/shared";
 
-import { LLAMA_CPP_PORT, baseEnv, paths } from "../env.js";
+import {
+  LLAMA_CPP_BATCH_SIZE,
+  LLAMA_CPP_FLASH_ATTN,
+  LLAMA_CPP_GPU_LAYERS,
+  LLAMA_CPP_PORT,
+  LLAMA_CPP_UBATCH_SIZE,
+  baseEnv,
+  paths
+} from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
 import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
@@ -51,6 +59,7 @@ export class RuntimeService {
   private llamaCppProcess: ChildProcess | null = null;
   private readonly runtimeStatusesCache = new TtlCache<RuntimeStatus[]>(RUNTIME_STATUS_TTL_MS);
   private readonly providerProfilesCache = new TtlCache<ProviderProfile[]>(PROVIDER_PROFILE_TTL_MS);
+  private readonly hostAccelerationCache = new TtlCache<Record<string, string | number | boolean>>(60_000);
 
   invalidateCaches(): void {
     this.runtimeStatusesCache.invalidate();
@@ -75,8 +84,50 @@ export class RuntimeService {
     return (await response.json()) as T;
   }
 
+  private async hostAccelerationMetadata(): Promise<Record<string, string | number | boolean>> {
+    return await this.hostAccelerationCache.get(async () => {
+      try {
+        const result = await runCommand("system_profiler", ["SPDisplaysDataType"]);
+        const gpuModel = result.stdout.match(/Chipset Model:\s+(.+)/)?.[1]?.trim() ?? null;
+        const metalSupport = result.stdout.match(/Metal Support:\s+(.+)/)?.[1]?.trim() ?? null;
+        const metadata: Record<string, string | number | boolean> = {
+          accelerationBackend: metalSupport ? "metal" : "cpu"
+        };
+        if (gpuModel) {
+          metadata.gpuModel = gpuModel;
+        }
+        if (metalSupport) {
+          metadata.metalSupport = metalSupport;
+        }
+        return metadata;
+      } catch {
+        return {};
+      }
+    });
+  }
+
+  private async ollamaProcessorMetadata(): Promise<Record<string, string | number | boolean>> {
+    try {
+      const result = await runCommand("ollama", ["ps"]);
+      const lines = result.stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+      if (lines.length < 2) {
+        return {};
+      }
+
+      const columns = lines[1]!.split(/\s{2,}/);
+      const processor = columns[3];
+      return processor ? { activeProcessor: processor } : {};
+    } catch {
+      return {};
+    }
+  }
+
   private async ollamaStatus(): Promise<RuntimeStatus> {
     const binaryPath = await this.binaryPath("ollama");
+    const hostAcceleration = await this.hostAccelerationMetadata();
     if (!binaryPath) {
       return RuntimeStatusSchema.parse({
         id: "ollama",
@@ -91,12 +142,13 @@ export class RuntimeService {
         endpoint: "http://127.0.0.1:11434",
         installed: false,
         lastStartedAt: null,
-        metadata: {}
+        metadata: hostAcceleration
       });
     }
 
     try {
       const tags = await this.fetchJson<{ models?: Array<{ name: string }> }>("http://127.0.0.1:11434/api/tags");
+      const ollamaProcessor = await this.ollamaProcessorMetadata();
       return RuntimeStatusSchema.parse({
         id: "ollama",
         label: "Ollama",
@@ -106,12 +158,14 @@ export class RuntimeService {
         detectedVersion: (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
         binaryPath,
         health: "ok",
-        healthMessage: `Ollama is serving ${tags.models?.length ?? 0} model(s).`,
+        healthMessage: `Ollama is serving ${tags.models?.length ?? 0} model(s)${hostAcceleration.accelerationBackend === "metal" ? " with Metal available." : "."}`,
         endpoint: "http://127.0.0.1:11434",
         installed: true,
         lastStartedAt: await appStateService.getJsonSetting<string | null>("ollamaStartedAt", null),
         metadata: {
-          models: tags.models?.length ?? 0
+          models: tags.models?.length ?? 0,
+          ...hostAcceleration,
+          ...ollamaProcessor
         }
       });
     } catch {
@@ -128,13 +182,21 @@ export class RuntimeService {
         endpoint: "http://127.0.0.1:11434",
         installed: true,
         lastStartedAt: await appStateService.getJsonSetting<string | null>("ollamaStartedAt", null),
-        metadata: {}
+        metadata: hostAcceleration
       });
     }
   }
 
   private async llamaCppStatus(): Promise<RuntimeStatus> {
     const binaryPath = await this.binaryPath("llama-server");
+    const hostAcceleration = await this.hostAccelerationMetadata();
+    const llamaMetadata = {
+      ...hostAcceleration,
+      gpuLayers: LLAMA_CPP_GPU_LAYERS,
+      flashAttention: LLAMA_CPP_FLASH_ATTN,
+      batchSize: LLAMA_CPP_BATCH_SIZE,
+      ubatchSize: LLAMA_CPP_UBATCH_SIZE
+    };
     if (!binaryPath) {
       return RuntimeStatusSchema.parse({
         id: "llamaCpp",
@@ -149,7 +211,7 @@ export class RuntimeService {
         endpoint: `http://127.0.0.1:${LLAMA_CPP_PORT}/v1`,
         installed: false,
         lastStartedAt: null,
-        metadata: {}
+        metadata: llamaMetadata
       });
     }
 
@@ -164,12 +226,13 @@ export class RuntimeService {
         detectedVersion: (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
         binaryPath,
         health: "ok",
-        healthMessage: `llama.cpp is serving ${models.data?.length ?? 0} model(s).`,
+        healthMessage: `llama.cpp is serving ${models.data?.length ?? 0} model(s) with ${hostAcceleration.accelerationBackend === "metal" ? "Metal acceleration" : "CPU execution"}.`,
         endpoint: `http://127.0.0.1:${LLAMA_CPP_PORT}/v1`,
         installed: true,
         lastStartedAt: await appStateService.getJsonSetting<string | null>("llamaCppStartedAt", null),
         metadata: {
-          models: models.data?.length ?? 0
+          models: models.data?.length ?? 0,
+          ...llamaMetadata
         }
       });
     } catch {
@@ -182,11 +245,11 @@ export class RuntimeService {
         detectedVersion: (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
         binaryPath,
         health: "warn",
-        healthMessage: "llama.cpp is installed but its local server is not running.",
+        healthMessage: `llama.cpp is installed but its local server is not running. It will launch with ${hostAcceleration.accelerationBackend === "metal" ? "Metal acceleration" : "CPU execution"} defaults.`,
         endpoint: `http://127.0.0.1:${LLAMA_CPP_PORT}/v1`,
         installed: true,
         lastStartedAt: await appStateService.getJsonSetting<string | null>("llamaCppStartedAt", null),
-        metadata: {}
+        metadata: llamaMetadata
       });
     }
   }
@@ -371,7 +434,24 @@ export class RuntimeService {
     const logPath = path.join(paths.logsDir, "llama-cpp.log");
     const child = spawn(
       binaryPath,
-      ["-hf", settings.llamaCppModel, "--host", "127.0.0.1", "--port", String(LLAMA_CPP_PORT)],
+      [
+        "-hf",
+        settings.llamaCppModel,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(LLAMA_CPP_PORT),
+        "--ctx-size",
+        String(settings.llamaCppContextWindow),
+        "--n-gpu-layers",
+        String(LLAMA_CPP_GPU_LAYERS),
+        "--flash-attn",
+        LLAMA_CPP_FLASH_ATTN,
+        "--batch-size",
+        String(Math.min(settings.llamaCppContextWindow, LLAMA_CPP_BATCH_SIZE)),
+        "--ubatch-size",
+        String(Math.min(settings.llamaCppContextWindow, LLAMA_CPP_UBATCH_SIZE))
+      ],
       {
         env: baseEnv(),
         stdio: ["ignore", "pipe", "pipe"]

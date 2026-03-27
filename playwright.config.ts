@@ -29,7 +29,7 @@ export default defineConfig({
     }
   ],
   webServer: {
-    command: "node apps/server/dist/testing/e2e-server.js",
+    command: "node ./scripts/cleanup-e2e-server.mjs && node apps/server/dist/testing/e2e-server.js",
     url: "http://127.0.0.1:4418",
     reuseExistingServer: false,
     timeout: 120000

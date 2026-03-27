@@ -8,7 +8,10 @@ import { spawn } from "node:child_process";
 
 const repoRoot = process.cwd();
 const artifactDir = path.join(repoRoot, "artifacts", "perf");
-const e2eStatePath = path.join(repoRoot, "artifacts", "e2e", "state.json");
+
+function resolveE2EStatePath(port) {
+  return path.join(repoRoot, "artifacts", "e2e", `state-${port}.json`);
+}
 
 function average(values) {
   return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
@@ -45,8 +48,9 @@ async function ensureHarnessServer() {
     };
   }
 
-  await fs.rm(e2eStatePath, { force: true }).catch(() => undefined);
   const harnessPort = process.env.DROIDAGENT_PERF_PORT ?? String(4420);
+  const e2eStatePath = resolveE2EStatePath(harnessPort);
+  await fs.rm(e2eStatePath, { force: true }).catch(() => undefined);
   const child = spawn("node", [path.join(repoRoot, "apps", "server", "dist", "testing", "e2e-server.js")], {
     cwd: repoRoot,
     stdio: "inherit",
@@ -141,6 +145,14 @@ async function main() {
   const harness = await ensureHarnessServer();
 
   try {
+    await Promise.all([
+      requestText(new URL("/api/access", harness.baseUrl)),
+      requestText(
+        new URL("/api/dashboard", harness.baseUrl),
+        harness.sessionToken ? { Cookie: `droidagent_session=${harness.sessionToken}` } : {}
+      )
+    ]);
+
     const [accessMetric, dashboardMetric] = await Promise.all([
       measureEndpoint(harness.baseUrl, harness.sessionToken, "/api/access", 20),
       measureEndpoint(harness.baseUrl, harness.sessionToken, "/api/dashboard", 20, true)

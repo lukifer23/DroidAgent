@@ -2,13 +2,14 @@ import { useEffect, useState } from "react";
 
 import type { BootstrapLink } from "@droidagent/shared";
 
-import { useAccessQuery, useDashboardQuery } from "../app-data";
+import { useAccessQuery, useDashboardQuery, useStartupDiagnosticsQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { postJson } from "../lib/api";
 
 export function SetupScreen() {
   const { runAction } = useDroidAgentApp();
   const dashboardQuery = useDashboardQuery(true);
+  const startupDiagnosticsQuery = useStartupDiagnosticsQuery(true);
   const accessQuery = useAccessQuery();
   const dashboard = dashboardQuery.data;
   const access = accessQuery.data;
@@ -227,7 +228,7 @@ export function SetupScreen() {
       <article className="panel-card">
         <h3>Startup Diagnostics</h3>
         <div className="stack-list">
-          {(dashboard?.startupDiagnostics ?? []).map((diagnostic) => (
+          {(startupDiagnosticsQuery.data ?? dashboard?.startupDiagnostics ?? []).map((diagnostic) => (
             <article key={diagnostic.id} className="panel-card compact">
               <strong>{diagnostic.id}</strong>
               <small>{diagnostic.message}</small>

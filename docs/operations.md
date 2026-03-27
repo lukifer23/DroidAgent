@@ -22,6 +22,7 @@ node apps/server/dist/index.js
 - OpenClaw gateway log: `~/.droidagent/logs/openclaw.log`
 - llama.cpp log: `~/.droidagent/logs/llama-cpp.log`
 - Signal daemon log: `~/.droidagent/logs/signal-daemon.log`
+- Tailscale userspace log: `~/.droidagent/logs/tailscaled.log`
 - Cloudflare tunnel log: `~/.droidagent/logs/cloudflared.log`
 - LaunchAgent stdout: `~/.droidagent/logs/launch-agent.stdout.log`
 - LaunchAgent stderr: `~/.droidagent/logs/launch-agent.stderr.log`
@@ -53,6 +54,7 @@ pnpm perf:report
 
 - Keep DroidAgent on loopback.
 - Use Tailscale Serve when you want private tailnet-only phone access.
+- If the normal macOS Tailscale daemon is unavailable, DroidAgent can start a userspace `tailscaled` process under `~/.droidagent/tailscale` and operate against its socket instead.
 - Use a Cloudflare named tunnel when you want a stable public hostname.
 - Use the canonical remote URL for daily access after phone bootstrap.
 - Generate a new bootstrap link only after the canonical remote URL is healthy.

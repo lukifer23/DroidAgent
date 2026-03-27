@@ -31,7 +31,6 @@ export class DashboardService {
         const [
           setup,
           access,
-          startupDiagnostics,
           runtimes,
           providers,
           cloudProviders,
@@ -44,7 +43,6 @@ export class DashboardService {
         ] = await Promise.all([
           appStateService.getSetupState(),
           accessService.getAccessSnapshot(),
-          startupService.getDiagnostics(),
           runtimeService.getRuntimeStatuses(),
           runtimeService.listProviderProfiles(),
           keychainService.listProviderSummaries(),
@@ -63,7 +61,7 @@ export class DashboardService {
           cloudflareStatus: access.cloudflareStatus,
           serveStatus: access.serveStatus,
           bootstrapRequired: access.bootstrapRequired,
-          startupDiagnostics,
+          startupDiagnostics: startupService.peekDiagnostics(),
           runtimes,
           providers,
           cloudProviders,

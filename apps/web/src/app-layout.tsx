@@ -94,7 +94,9 @@ export function AppLayout() {
 
       <section className="main-layout routed-layout">
         <div className="content-panel">
-          <Outlet />
+          <div key={location.pathname} className="route-frame">
+            <Outlet />
+          </div>
         </div>
 
         <nav className="bottom-nav">

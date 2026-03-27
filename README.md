@@ -48,6 +48,7 @@ Then open `http://127.0.0.1:4318`.
 - Ollama is the default local runtime path
 - llama.cpp remains the advanced local runtime path
 - supported remote paths are Tailscale Serve and a Cloudflare named tunnel only
+- Tailscale may run through the system daemon or a DroidAgent-managed userspace daemon on macOS when the system daemon is unavailable
 - Signal stays optional and secondary to the web shell
 - Smart Context Management is on by default
 
@@ -75,3 +76,4 @@ Then open `http://127.0.0.1:4318`.
 - Owner jobs run inside the configured workspace jail and persist replayable stdout and stderr logs.
 - Browser acceptance now runs against a real server-backed Playwright harness; route interception and fake websocket replacement are no longer the primary test path.
 - Performance reporting is advisory in this pass. `verify:full` enforces correctness; the perf scripts produce artifacts under `artifacts/perf/`.
+- The current live acceptance target is `web/PWA + owner passkey + Tailscale remote + Ollama local runtime`.

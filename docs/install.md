@@ -45,14 +45,18 @@ Run `pnpm doctor` after bootstrap when you want a non-mutating environment check
 9. Optionally install and start the LaunchAgent.
 10. Optionally configure Signal from the Channels route.
 
+The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailscale remote + Ollama local runtime`.
+
 ## Remote phone bootstrap
 
 1. Open DroidAgent on localhost on the Mac.
 2. Enable either Tailscale Serve or a Cloudflare named tunnel from Setup or Settings.
-3. Set the healthy remote URL as canonical.
-4. Generate the one-time phone bootstrap link after the chosen canonical URL is healthy.
-5. Open that link on the phone and complete owner-passkey enrollment.
-6. Use the canonical remote URL for daily phone access.
+3. If the standard Tailscale daemon is not available on macOS, DroidAgent can fall back to a userspace `tailscaled` process under `~/.droidagent/tailscale`.
+4. Authenticate the chosen remote provider before generating a phone link.
+5. Set the healthy remote URL as canonical.
+6. Generate the one-time phone bootstrap link after the chosen canonical URL is healthy.
+7. Open that link on the phone and complete owner-passkey enrollment.
+8. Use the canonical remote URL for daily phone access.
 
 ## Manual setup
 
@@ -74,6 +78,6 @@ Then open `http://127.0.0.1:4318`.
 | Homebrew not found | Install from https://brew.sh |
 | Build failed | Run `pnpm build` manually |
 | Docs or command drift | Run `pnpm docs:check` |
-| Tailscale URL unavailable | Install/sign in to Tailscale and enable Serve from the PWA |
+| Tailscale URL unavailable | Install/sign in to Tailscale, or let DroidAgent start the userspace daemon, then enable Serve from the PWA |
 | Cloudflare URL unavailable | Verify the named tunnel hostname and token, then re-enable the tunnel before generating a new phone link |
 | Server did not become ready | Check `~/.droidagent/logs` |

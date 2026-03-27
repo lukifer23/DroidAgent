@@ -6,6 +6,10 @@ import { fileURLToPath } from "node:url";
 export const SERVER_PORT = Number(process.env.DROIDAGENT_PORT ?? 4318);
 export const OPENCLAW_GATEWAY_PORT = Number(process.env.DROIDAGENT_OPENCLAW_PORT ?? 18789);
 export const LLAMA_CPP_PORT = Number(process.env.DROIDAGENT_LLAMA_CPP_PORT ?? 8012);
+export const LLAMA_CPP_GPU_LAYERS = Number(process.env.DROIDAGENT_LLAMA_CPP_GPU_LAYERS ?? 999);
+export const LLAMA_CPP_BATCH_SIZE = Number(process.env.DROIDAGENT_LLAMA_CPP_BATCH_SIZE ?? 1024);
+export const LLAMA_CPP_UBATCH_SIZE = Number(process.env.DROIDAGENT_LLAMA_CPP_UBATCH_SIZE ?? 512);
+export const LLAMA_CPP_FLASH_ATTN = process.env.DROIDAGENT_LLAMA_CPP_FLASH_ATTN ?? "auto";
 export const SIGNAL_DAEMON_PORT = Number(process.env.DROIDAGENT_SIGNAL_PORT ?? 8091);
 export const OPENCLAW_PROFILE = process.env.DROIDAGENT_OPENCLAW_PROFILE ?? "droidagent";
 export const TEST_MODE = process.env.DROIDAGENT_TEST_MODE === "1";
@@ -32,6 +36,10 @@ export const paths = {
   launchAgentStdoutPath: path.join(os.homedir(), ".droidagent", "logs", "launch-agent.stdout.log"),
   launchAgentStderrPath: path.join(os.homedir(), ".droidagent", "logs", "launch-agent.stderr.log"),
   cloudflareLogPath: path.join(os.homedir(), ".droidagent", "logs", "cloudflared.log"),
+  tailscaleDir: path.join(os.homedir(), ".droidagent", "tailscale"),
+  tailscaleSocketPath: path.join(os.homedir(), ".droidagent", "tailscale", "tailscaled.sock"),
+  tailscaleStatePath: path.join(os.homedir(), ".droidagent", "tailscale", "tailscaled.state"),
+  tailscaleLogPath: path.join(os.homedir(), ".droidagent", "logs", "tailscaled.log"),
   openClawStateDir: path.join(os.homedir(), `.openclaw-${OPENCLAW_PROFILE}`),
   openClawConfigPath: path.join(os.homedir(), `.openclaw-${OPENCLAW_PROFILE}`, "openclaw.json"),
   openClawEnvPath: path.join(os.homedir(), `.openclaw-${OPENCLAW_PROFILE}`, ".env"),
@@ -42,7 +50,7 @@ export const paths = {
 };
 
 export function ensureAppDirs(): void {
-  for (const dir of [paths.appDir, paths.logsDir, paths.jobsLogsDir, paths.tempDir, paths.uploadsDir, paths.stateDir, paths.signalCliConfigDir]) {
+  for (const dir of [paths.appDir, paths.logsDir, paths.jobsLogsDir, paths.tempDir, paths.uploadsDir, paths.stateDir, paths.signalCliConfigDir, paths.tailscaleDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }

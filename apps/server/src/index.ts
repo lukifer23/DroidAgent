@@ -350,6 +350,12 @@ app.post("/api/access/bootstrap/consume", async (c) => {
   return c.json({ ok: true });
 });
 
+app.get("/api/setup/diagnostics", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await startupService.getDiagnostics());
+});
+
 app.get("/api/dashboard", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;

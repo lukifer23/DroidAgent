@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 
 const baseUrl = process.env.DROIDAGENT_BASE_URL ?? "http://127.0.0.1:4318";
 const appDir = path.join(os.homedir(), ".droidagent");
+const repoRoot = process.cwd();
 const requiredDirs = [
   appDir,
   path.join(appDir, "logs"),
@@ -31,6 +32,24 @@ async function checkPath(targetPath) {
   }
 }
 
+async function fetchJsonWithTimeout(url, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      payload: response.ok ? await response.json() : null
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function main() {
   const checks = [];
   const add = (label, status, detail) => {
@@ -41,7 +60,15 @@ async function main() {
   add("pnpm", commandVersion("pnpm", ["-v"]) ? "ok" : "warn", commandVersion("pnpm", ["-v"]) ?? "pnpm not found");
   add("Homebrew", commandVersion("brew", ["--version"]) ? "ok" : "warn", commandVersion("brew", ["--version"])?.split("\n")[0] ?? "brew not found");
 
-  for (const binary of ["openclaw", "ollama", "tailscale", "cloudflared", "signal-cli"]) {
+  const bundledOpenclawPath = path.join(repoRoot, "apps", "server", "node_modules", ".bin", "openclaw");
+  const openclawVersion = commandVersion("openclaw") ?? commandVersion(bundledOpenclawPath);
+  add(
+    "openclaw",
+    openclawVersion ? "ok" : "warn",
+    openclawVersion ? `${openclawVersion} (${commandVersion("openclaw") ? "PATH" : "bundled"})` : "openclaw not found"
+  );
+
+  for (const binary of ["ollama", "tailscale", "cloudflared", "signal-cli"]) {
     const version = commandVersion(binary);
     add(binary, version ? "ok" : "warn", version ?? `${binary} not found in PATH`);
   }
@@ -51,16 +78,91 @@ async function main() {
   }
 
   try {
-    const response = await fetch(`${baseUrl}/api/health`);
+    const response = await fetchJsonWithTimeout(`${baseUrl}/api/health`);
     add("Server health", response.ok ? "ok" : "warn", `${baseUrl}/api/health -> ${response.status}`);
+    if (response.ok && response.payload) {
+      const health = response.payload;
+      add(
+        "LaunchAgent",
+        health.launchAgent?.running ? "ok" : health.launchAgent?.installed ? "warn" : "warn",
+        health.launchAgent?.healthMessage ?? "LaunchAgent status unavailable"
+      );
+      add(
+        "Passkey bootstrap",
+        health.setup?.passkeyConfigured ? "ok" : "warn",
+        health.setup?.passkeyConfigured ? "Owner passkey enrolled" : "Owner passkey is not enrolled yet"
+      );
+      add(
+        "Selected runtime",
+        health.setup?.selectedRuntime ? "ok" : "warn",
+        health.setup?.selectedRuntime ?? "No runtime selected"
+      );
+
+      for (const runtime of health.runtimeSummary ?? []) {
+        const metadata = runtime.metadata ?? {};
+        const accelerationParts = [
+          metadata.accelerationBackend ? `backend=${metadata.accelerationBackend}` : null,
+          metadata.gpuModel ? `gpu=${metadata.gpuModel}` : null,
+          metadata.activeProcessor ? `processor=${metadata.activeProcessor}` : null,
+          metadata.flashAttention ? `flash=${metadata.flashAttention}` : null,
+          metadata.gpuLayers ? `gpuLayers=${metadata.gpuLayers}` : null
+        ].filter(Boolean);
+        add(
+          `Runtime:${runtime.label}`,
+          runtime.health === "ok" ? "ok" : "warn",
+          accelerationParts.length > 0
+            ? `${runtime.healthMessage} (${accelerationParts.join(", ")})`
+            : runtime.healthMessage
+        );
+      }
+
+      const signal = health.channels?.config?.signal;
+      if (signal) {
+        add(
+          "Signal",
+          signal.channelConfigured ? "ok" : "warn",
+          signal.channelConfigured ? "Signal channel configured" : signal.healthChecks?.find((entry) => entry.id === "account")?.message ?? "Signal not configured"
+        );
+      }
+    }
   } catch {
     add("Server health", "warn", `No response from ${baseUrl}`);
+  }
+
+  try {
+    const response = await fetchJsonWithTimeout(`${baseUrl}/api/access`);
+    if (response.ok && response.payload) {
+      const access = response.payload;
+      add(
+        "Access mode",
+        access.serveStatus?.enabled ? "ok" : "warn",
+        access.canonicalOrigin?.origin
+          ? `${access.accessMode} -> ${access.canonicalOrigin.origin}`
+          : `${access.accessMode} -> no canonical remote URL yet`
+      );
+      add(
+        "Tailscale",
+        access.tailscaleStatus?.httpsEnabled ? "ok" : "warn",
+        access.tailscaleStatus?.healthMessage ?? "Tailscale status unavailable"
+      );
+      add(
+        "Cloudflare",
+        access.cloudflareStatus?.running ? "ok" : access.cloudflareStatus?.configured ? "warn" : "warn",
+        access.cloudflareStatus?.healthMessage ?? "Cloudflare status unavailable"
+      );
+    } else {
+      add("Access mode", "warn", `${baseUrl}/api/access -> ${response.status}`);
+    }
+  } catch {
+    add("Access mode", "warn", `No response from ${baseUrl}/api/access`);
   }
 
   console.log("DroidAgent doctor");
   for (const check of checks) {
     console.log(`[${check.status.toUpperCase()}] ${check.label}: ${check.detail}`);
   }
+
+  process.exit(0);
 }
 
 void main().catch((error) => {

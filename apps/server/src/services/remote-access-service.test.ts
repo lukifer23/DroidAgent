@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getAccessSettings, updateAccessSettings, getNamedSecret, hasNamedSecret, setNamedSecret, spawnMock } = vi.hoisted(() => ({
+const { getAccessSettings, updateAccessSettings, getNamedSecret, hasNamedSecret, setNamedSecret, spawnMock, runCommandMock } = vi.hoisted(() => ({
   getAccessSettings: vi.fn(),
   updateAccessSettings: vi.fn(),
   getNamedSecret: vi.fn(),
   hasNamedSecret: vi.fn(),
+  runCommandMock: vi.fn(),
   spawnMock: vi.fn(),
   setNamedSecret: vi.fn()
 }));
@@ -34,10 +35,11 @@ vi.mock("../lib/process.js", () => ({
     stderr = "";
     exitCode: number | null = 1;
   },
-  runCommand: vi.fn()
+  runCommand: runCommandMock
 }));
 
-import { cloudflareRemoteAccessProvider } from "./remote-access-service.js";
+import { CommandError } from "../lib/process.js";
+import { cloudflareRemoteAccessProvider, tailscaleRemoteAccessProvider } from "./remote-access-service.js";
 
 describe("CloudflareRemoteAccessProvider", () => {
   beforeEach(() => {
@@ -49,7 +51,10 @@ describe("CloudflareRemoteAccessProvider", () => {
     getNamedSecret.mockResolvedValue(null);
     hasNamedSecret.mockResolvedValue(false);
     setNamedSecret.mockResolvedValue(undefined);
+    runCommandMock.mockReset();
     spawnMock.mockReset();
+    tailscaleRemoteAccessProvider.invalidateStatus();
+    cloudflareRemoteAccessProvider.invalidateStatus();
   });
 
   it("normalizes the hostname, reuses the stored token, and restarts the tunnel", async () => {
@@ -135,5 +140,57 @@ describe("CloudflareRemoteAccessProvider", () => {
 
     binarySpy.mockRestore();
     fetchSpy.mockRestore();
+  });
+});
+
+describe("TailscaleRemoteAccessProvider", () => {
+  beforeEach(() => {
+    runCommandMock.mockReset();
+    spawnMock.mockReset();
+    tailscaleRemoteAccessProvider.invalidateStatus();
+    Object.assign(tailscaleRemoteAccessProvider as never, {
+      process: null,
+      activeSocketPath: null
+    });
+  });
+
+  it("falls back to a userspace daemon when the system daemon requires root", async () => {
+    const systemError = new CommandError("tailscale status --json failed", "", "failed to connect to local Tailscale service", 1);
+    const statusJson = JSON.stringify({
+      BackendState: "NeedsLogin",
+      Self: {
+        HostName: "droidagent-mac"
+      },
+      CurrentTailnet: {}
+    });
+    const hasBinarySpy = vi.spyOn(tailscaleRemoteAccessProvider as never, "hasBinary" as never).mockResolvedValue(true);
+    const userspaceSpy = vi
+      .spyOn(tailscaleRemoteAccessProvider as never, "ensureUserspaceDaemon" as never)
+      .mockResolvedValue("/tmp/droidagent-tailscaled.sock");
+    const fallbackSpy = vi
+      .spyOn(tailscaleRemoteAccessProvider as never, "isUserspaceFallbackError" as never)
+      .mockReturnValue(true);
+
+    runCommandMock
+      .mockResolvedValueOnce({ stdout: "1.96.3\n", stderr: "", exitCode: 0 })
+      .mockRejectedValueOnce(systemError)
+      .mockResolvedValueOnce({ stdout: statusJson, stderr: "", exitCode: 0 })
+      .mockResolvedValueOnce({ stdout: "{}", stderr: "", exitCode: 0 });
+
+    const status = await tailscaleRemoteAccessProvider.getStatus();
+
+    expect(runCommandMock).toHaveBeenCalledWith(
+      "tailscale",
+      ["--socket", "/tmp/droidagent-tailscaled.sock", "status", "--json"],
+      expect.any(Object)
+    );
+    expect(status.installed).toBe(true);
+    expect(status.running).toBe(true);
+    expect(status.authenticated).toBe(false);
+    expect(status.healthMessage).toContain("userspace daemon");
+
+    hasBinarySpy.mockRestore();
+    userspaceSpy.mockRestore();
+    fallbackSpy.mockRestore();
   });
 });

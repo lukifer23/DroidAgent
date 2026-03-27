@@ -10,7 +10,8 @@ export interface E2EState {
   sampleFilePath: string;
 }
 
-const statePath = path.resolve(process.cwd(), "artifacts", "e2e", "state.json");
+const e2ePort = process.env.DROIDAGENT_E2E_PORT ?? "4418";
+const statePath = path.resolve(process.cwd(), "artifacts", "e2e", `state-${e2ePort}.json`);
 
 export async function readE2EState(): Promise<E2EState> {
   return JSON.parse(await fs.readFile(statePath, "utf8")) as E2EState;

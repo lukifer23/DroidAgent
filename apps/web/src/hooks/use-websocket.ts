@@ -270,6 +270,17 @@ export function useWebSocket(options: UseWebSocketOptions) {
           payload.type === "approvals.updated"
         ) {
           queryClient.setQueryData<DashboardState | undefined>(["dashboard"], (current) => updateDashboardState(current, payload));
+          if (
+            payload.type === "setup.updated" ||
+            payload.type === "access.updated" ||
+            payload.type === "runtime.updated" ||
+            payload.type === "providers.updated" ||
+            payload.type === "channel.updated" ||
+            payload.type === "launchAgent.updated" ||
+            payload.type === "context.updated"
+          ) {
+            void queryClient.invalidateQueries({ queryKey: ["startupDiagnostics"] });
+          }
         }
         if (payload.type === "error") {
           queryClient.setQueryData(["lastError"], payload.payload.message);

@@ -7,12 +7,17 @@
   "engines": {
     "node": ">=22.16.0"
   },
+  "pnpm": {
+    "overrides": {
+      "minimatch@10.2.4>brace-expansion": "5.0.5"
+    }
+  },
   "scripts": {
     "dev": "pnpm --filter @droidagent/shared build && pnpm --parallel --filter @droidagent/server --filter @droidagent/web dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm --filter @droidagent/shared build && pnpm -r --filter=!@droidagent/shared typecheck",
     "test": "pnpm --filter @droidagent/shared build && pnpm -r test",
-    "test:e2e": "pnpm build && playwright test tests/e2e/app.spec.ts",
+    "test:e2e": "pnpm build && DROIDAGENT_E2E_PORT=4418 node ./scripts/cleanup-e2e-server.mjs && playwright test tests/e2e/app.spec.ts",
     "lint": "pnpm --filter @droidagent/shared build && pnpm -r --filter=!@droidagent/shared lint",
     "docs:check": "node ./scripts/docs-check.mjs",
     "doctor": "node ./scripts/doctor.mjs",

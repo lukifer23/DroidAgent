@@ -10,22 +10,26 @@ import {
 import { useAuthQuery, useDashboardQuery } from "./app-data";
 import { DroidAgentAppProvider } from "./app-context";
 import { AppLayout } from "./app-layout";
+import { ChatScreen } from "./screens/chat-screen";
+import { FilesScreen } from "./screens/files-screen";
+import { SettingsScreen } from "./screens/settings-screen";
 
 const loadSetupScreen = () => import("./screens/setup-screen");
-const loadChatScreen = () => import("./screens/chat-screen");
-const loadFilesScreen = () => import("./screens/files-screen");
 const loadJobsScreen = () => import("./screens/jobs-screen");
 const loadModelsScreen = () => import("./screens/models-screen");
 const loadChannelsScreen = () => import("./screens/channels-screen");
-const loadSettingsScreen = () => import("./screens/settings-screen");
 
 const SetupScreen = lazy(async () => ({ default: (await loadSetupScreen()).SetupScreen }));
-const ChatScreen = lazy(async () => ({ default: (await loadChatScreen()).ChatScreen }));
-const FilesScreen = lazy(async () => ({ default: (await loadFilesScreen()).FilesScreen }));
 const JobsScreen = lazy(async () => ({ default: (await loadJobsScreen()).JobsScreen }));
 const ModelsScreen = lazy(async () => ({ default: (await loadModelsScreen()).ModelsScreen }));
 const ChannelsScreen = lazy(async () => ({ default: (await loadChannelsScreen()).ChannelsScreen }));
-const SettingsScreen = lazy(async () => ({ default: (await loadSettingsScreen()).SettingsScreen }));
+const preloadScreens = () =>
+  Promise.all([
+    loadSetupScreen(),
+    loadJobsScreen(),
+    loadModelsScreen(),
+    loadChannelsScreen()
+  ]);
 
 function withLazyScreen(Component: ComponentType) {
   return function LazyScreen() {
@@ -46,28 +50,33 @@ function IndexRedirect() {
 
 function IdleRoutePreloader() {
   useEffect(() => {
+    let didPreload = false;
+    let idleHandle: number | null = null;
+    let frameHandle: number | null = null;
+
     const preload = () => {
-      void Promise.all([
-        loadSetupScreen(),
-        loadChatScreen(),
-        loadFilesScreen(),
-        loadJobsScreen(),
-        loadModelsScreen(),
-        loadChannelsScreen(),
-        loadSettingsScreen()
-      ]);
+      if (didPreload) {
+        return;
+      }
+      didPreload = true;
+      void preloadScreens();
     };
 
+    frameHandle = window.requestAnimationFrame(() => {
+      preload();
+    });
+
     if (typeof window !== "undefined" && "requestIdleCallback" in window) {
-      const idleHandle = window.requestIdleCallback(preload, { timeout: 2500 });
-      return () => {
-        window.cancelIdleCallback(idleHandle);
-      };
+      idleHandle = window.requestIdleCallback(preload, { timeout: 150 });
     }
 
-    const timeout = globalThis.setTimeout(preload, 400);
     return () => {
-      globalThis.clearTimeout(timeout);
+      if (idleHandle !== null && typeof window !== "undefined" && "cancelIdleCallback" in window) {
+        window.cancelIdleCallback(idleHandle);
+      }
+      if (frameHandle !== null) {
+        window.cancelAnimationFrame(frameHandle);
+      }
     };
   }, []);
 

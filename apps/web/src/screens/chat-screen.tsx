@@ -13,8 +13,10 @@ export function ChatScreen() {
   const {
     selectedSessionId,
     setSelectedSessionId,
+    sendRealtimeCommand,
     trackChatSubmit,
-    runAction
+    runAction,
+    wsStatus
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
@@ -24,17 +26,20 @@ export function ChatScreen() {
 
   const sessions = dashboard?.sessions ?? [];
   const streaming = streamingRuns[selectedSessionId];
+  const transportReady = wsStatus === "connected" && Boolean(selectedSessionId);
 
   const messagesQuery = useQuery({
     queryKey: ["sessions", selectedSessionId, "messages"],
     queryFn: () => api<ChatMessage[]>(`/api/sessions/${encodeURIComponent(selectedSessionId)}/messages`),
-    enabled: Boolean(authQuery.data?.user && selectedSessionId)
+    enabled: Boolean(authQuery.data?.user && selectedSessionId),
+    staleTime: 15_000
   });
 
   const messages = useMemo(() => messagesQuery.data ?? [], [messagesQuery.data]);
 
   async function handleSendChat() {
-    if (!chatInput.trim()) {
+    const nextMessage = chatInput.trim();
+    if (!nextMessage || !selectedSessionId) {
       return;
     }
 
@@ -42,7 +47,7 @@ export function ChatScreen() {
       id: `optimistic-${Date.now()}`,
       sessionId: selectedSessionId,
       role: "user",
-      text: chatInput.trim(),
+      text: nextMessage,
       createdAt: new Date().toISOString(),
       status: "complete",
       source: "web"
@@ -54,9 +59,20 @@ export function ChatScreen() {
     ]);
 
     trackChatSubmit(selectedSessionId);
-    await postJson(`/api/sessions/${encodeURIComponent(selectedSessionId)}/messages`, {
-      text: chatInput
-    });
+    const sentLive =
+      transportReady &&
+      sendRealtimeCommand({
+        type: "chat.send",
+        payload: {
+          sessionId: selectedSessionId,
+          text: nextMessage
+        }
+      });
+    if (!sentLive) {
+      await postJson(`/api/sessions/${encodeURIComponent(selectedSessionId)}/messages`, {
+        text: nextMessage
+      });
+    }
     setChatInput("");
   }
 
@@ -144,16 +160,32 @@ export function ChatScreen() {
           value={chatInput}
           onChange={(event) => setChatInput(event.target.value)}
           placeholder="Send a message to the current OpenClaw session..."
+          disabled={!selectedSessionId}
         />
+        <small className="composer-status">
+          {transportReady ? "Live connection ready." : "Live connection is reconnecting before the next run can start."}
+        </small>
         <div className="button-row">
-          <button type="submit">Send</button>
+          <button type="submit" disabled={!transportReady || !chatInput.trim()}>
+            Send
+          </button>
           {streaming ? (
             <button
               type="button"
               className="secondary"
               onClick={() =>
                 void runAction(async () => {
-                  await postJson(`/api/sessions/${encodeURIComponent(selectedSessionId)}/abort`, {});
+                  const aborted =
+                    wsStatus === "connected" &&
+                    sendRealtimeCommand({
+                      type: "chat.abort",
+                      payload: {
+                        sessionId: selectedSessionId
+                      }
+                    });
+                  if (!aborted) {
+                    await postJson(`/api/sessions/${encodeURIComponent(selectedSessionId)}/abort`, {});
+                  }
                 }, "Run aborted.")
               }
             >

@@ -21,10 +21,16 @@
 ## Tailscale flow
 
 1. Install and sign in to Tailscale on the Mac.
-2. From Setup or Settings, enable Tailscale Serve.
-3. Set the Tailscale URL as canonical.
-4. Generate the one-time phone bootstrap link.
-5. Open that link on the phone and enroll the passkey.
+2. If the normal Tailscale daemon is unavailable on macOS, let DroidAgent start its userspace fallback daemon.
+3. From Setup or Settings, enable Tailscale Serve.
+4. Set the Tailscale URL as canonical.
+5. Generate the one-time phone bootstrap link.
+6. Open that link on the phone and enroll the passkey.
+
+Notes:
+- DroidAgent keeps the app itself on loopback and only exposes the canonical remote URL through Tailscale Serve.
+- The userspace fallback stores its state under `~/.droidagent/tailscale` and writes logs to `~/.droidagent/logs/tailscaled.log`.
+- If the userspace daemon starts but is not authenticated yet, run the Tailscale login flow before expecting a canonical URL.
 
 ## Cloudflare flow
 

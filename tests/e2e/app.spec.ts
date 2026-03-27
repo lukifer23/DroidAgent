@@ -27,9 +27,11 @@ test("streams chat replies through the real websocket path", async ({ page }, te
   const assistantReply = page.locator(".chat-thread .message-card.assistant p").filter({
     hasText: new RegExp(`^Test harness reply: ${prompt}$`)
   });
+  const sendButton = page.getByRole("button", { name: "Send" });
 
   await page.getByPlaceholder("Send a message to the current OpenClaw session...").fill(prompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
 
   await expect(page.locator(".message-card.user p").filter({ hasText: new RegExp(`^${prompt}$`) })).toBeVisible();
   await expect(assistantReply.last()).toBeVisible();
@@ -81,7 +83,9 @@ test("reconnects after a temporary offline period", async ({ page }) => {
   });
   await expect(reconnectBanner).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Operator Console" })).toBeVisible();
+  const sendButton = page.getByRole("button", { name: "Send" });
   await page.getByPlaceholder("Send a message to the current OpenClaw session...").fill(prompt);
-  await page.getByRole("button", { name: "Send" }).click();
+  await expect(sendButton).toBeEnabled();
+  await sendButton.click();
   await expect(assistantReply.last()).toBeVisible();
 });
