@@ -73,7 +73,7 @@ describe("OpenClaw context management policy", () => {
 
     runtimeSettings = {
       activeProviderId: "anthropic",
-      ollamaModel: "gpt-oss:20b",
+      ollamaModel: "qwen3.5:4b",
       llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
       llamaCppContextWindow: 8192,
       smartContextManagementEnabled: true,

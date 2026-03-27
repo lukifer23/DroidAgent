@@ -3,10 +3,21 @@ import { z } from "zod";
 export const RuntimeIdSchema = z.enum(["openclaw", "ollama", "llamaCpp"]);
 export type RuntimeId = z.infer<typeof RuntimeIdSchema>;
 
-export const RuntimeInstallMethodSchema = z.enum(["brew", "bundledNpm", "external"]);
+export const RuntimeInstallMethodSchema = z.enum([
+  "brew",
+  "bundledNpm",
+  "external",
+]);
 export type RuntimeInstallMethod = z.infer<typeof RuntimeInstallMethodSchema>;
 
-export const RuntimeStateSchema = z.enum(["missing", "installed", "starting", "running", "stopped", "error"]);
+export const RuntimeStateSchema = z.enum([
+  "missing",
+  "installed",
+  "starting",
+  "running",
+  "stopped",
+  "error",
+]);
 export type RuntimeState = z.infer<typeof RuntimeStateSchema>;
 
 export const ChannelIdSchema = z.enum(["web", "signal"]);
@@ -25,7 +36,7 @@ export const CloudProviderIdSchema = z.enum([
   "gemini",
   "groq",
   "together",
-  "xai"
+  "xai",
 ]);
 export type CloudProviderId = z.infer<typeof CloudProviderIdSchema>;
 
@@ -40,27 +51,47 @@ export const SetupStepIdSchema = z.enum([
   "cloudProviders",
   "remoteAccess",
   "signal",
-  "launchAgent"
+  "launchAgent",
 ]);
 export type SetupStepId = z.infer<typeof SetupStepIdSchema>;
 
-export const SignalRegistrationModeSchema = z.enum(["none", "register", "link"]);
-export type SignalRegistrationMode = z.infer<typeof SignalRegistrationModeSchema>;
+export const SignalRegistrationModeSchema = z.enum([
+  "none",
+  "register",
+  "link",
+]);
+export type SignalRegistrationMode = z.infer<
+  typeof SignalRegistrationModeSchema
+>;
 
 export const SignalRegistrationStateSchema = z.enum([
   "unconfigured",
   "awaitingVerification",
   "awaitingLink",
   "registered",
-  "error"
+  "error",
 ]);
-export type SignalRegistrationState = z.infer<typeof SignalRegistrationStateSchema>;
+export type SignalRegistrationState = z.infer<
+  typeof SignalRegistrationStateSchema
+>;
 
-export const SignalDaemonStateSchema = z.enum(["stopped", "starting", "running", "error"]);
+export const SignalDaemonStateSchema = z.enum([
+  "stopped",
+  "starting",
+  "running",
+  "error",
+]);
 export type SignalDaemonState = z.infer<typeof SignalDaemonStateSchema>;
 
-export const PasskeyEnrollmentStateSchema = z.enum(["notStarted", "bootstrapPending", "ready", "complete"]);
-export type PasskeyEnrollmentState = z.infer<typeof PasskeyEnrollmentStateSchema>;
+export const PasskeyEnrollmentStateSchema = z.enum([
+  "notStarted",
+  "bootstrapPending",
+  "ready",
+  "complete",
+]);
+export type PasskeyEnrollmentState = z.infer<
+  typeof PasskeyEnrollmentStateSchema
+>;
 
 export const CanonicalOriginSchema = z.object({
   accessMode: AccessModeSchema,
@@ -68,7 +99,7 @@ export const CanonicalOriginSchema = z.object({
   rpId: z.string(),
   hostname: z.string(),
   source: z.enum(["tailscaleServe", "cloudflareTunnel", "manual"]),
-  updatedAt: z.string()
+  updatedAt: z.string(),
 });
 export type CanonicalOrigin = z.infer<typeof CanonicalOriginSchema>;
 
@@ -86,7 +117,7 @@ export const TailscaleStatusSchema = z.object({
   httpsEnabled: z.boolean(),
   serveCommand: z.string().nullable(),
   canonicalUrl: z.string().url().nullable(),
-  lastCheckedAt: z.string().nullable()
+  lastCheckedAt: z.string().nullable(),
 });
 export type TailscaleStatus = z.infer<typeof TailscaleStatusSchema>;
 
@@ -101,7 +132,7 @@ export const CloudflareStatusSchema = z.object({
   hostname: z.string().nullable(),
   canonicalUrl: z.string().url().nullable(),
   lastStartedAt: z.string().nullable(),
-  lastCheckedAt: z.string().nullable()
+  lastCheckedAt: z.string().nullable(),
 });
 export type CloudflareStatus = z.infer<typeof CloudflareStatusSchema>;
 
@@ -112,7 +143,7 @@ export const ServeStatusSchema = z.object({
   source: z.enum(["tailscale", "cloudflare", "none"]),
   url: z.string().url().nullable(),
   target: z.string().nullable(),
-  lastCheckedAt: z.string().nullable()
+  lastCheckedAt: z.string().nullable(),
 });
 export type ServeStatus = z.infer<typeof ServeStatusSchema>;
 
@@ -128,16 +159,24 @@ export const BootstrapStateSchema = z.object({
   bootstrapTokenIssuedAt: z.string().nullable(),
   bootstrapTokenExpiresAt: z.string().nullable(),
   bootstrapUrl: z.string().url().nullable(),
-  localhostOnlyMessage: z.string()
+  localhostOnlyMessage: z.string(),
 });
 export type BootstrapState = z.infer<typeof BootstrapStateSchema>;
 
 export const StartupDiagnosticSchema = z.object({
-  id: z.enum(["tailscale", "cloudflare", "openclaw", "ollama", "llamaCpp", "signal", "cloudProviders"]),
+  id: z.enum([
+    "tailscale",
+    "cloudflare",
+    "openclaw",
+    "ollama",
+    "llamaCpp",
+    "signal",
+    "cloudProviders",
+  ]),
   health: HealthStateSchema,
   message: z.string(),
   blocking: z.boolean(),
-  action: z.string().nullable()
+  action: z.string().nullable(),
 });
 export type StartupDiagnostic = z.infer<typeof StartupDiagnosticSchema>;
 
@@ -154,7 +193,9 @@ export const RuntimeStatusSchema = z.object({
   endpoint: z.string().nullable(),
   installed: z.boolean(),
   lastStartedAt: z.string().nullable(),
-  metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({})
+  metadata: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+    .default({}),
 });
 export type RuntimeStatus = z.infer<typeof RuntimeStatusSchema>;
 
@@ -167,7 +208,7 @@ export const ProviderProfileSchema = z.object({
   enabled: z.boolean(),
   toolSupport: z.boolean(),
   health: HealthStateSchema,
-  healthMessage: z.string()
+  healthMessage: z.string(),
 });
 export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
 
@@ -180,7 +221,7 @@ export const CloudProviderSummarySchema = z.object({
   defaultModel: z.string().nullable(),
   health: HealthStateSchema,
   healthMessage: z.string(),
-  lastUpdatedAt: z.string().nullable()
+  lastUpdatedAt: z.string().nullable(),
 });
 export type CloudProviderSummary = z.infer<typeof CloudProviderSummarySchema>;
 
@@ -191,7 +232,9 @@ export const ChannelStatusSchema = z.object({
   configured: z.boolean(),
   health: HealthStateSchema,
   healthMessage: z.string(),
-  metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({})
+  metadata: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+    .default({}),
 });
 export type ChannelStatus = z.infer<typeof ChannelStatusSchema>;
 
@@ -206,22 +249,30 @@ export const LaunchAgentStatusSchema = z.object({
   pid: z.number().int().positive().nullable(),
   lastExitStatus: z.number().int().nullable(),
   health: HealthStateSchema,
-  healthMessage: z.string()
+  healthMessage: z.string(),
 });
 export type LaunchAgentStatus = z.infer<typeof LaunchAgentStatusSchema>;
 
 export const SignalHealthCheckSchema = z.object({
-  id: z.enum(["cli", "java", "account", "daemon", "channel", "pairing", "compatibility"]),
+  id: z.enum([
+    "cli",
+    "java",
+    "account",
+    "daemon",
+    "channel",
+    "pairing",
+    "compatibility",
+  ]),
   label: z.string(),
   health: HealthStateSchema,
-  message: z.string()
+  message: z.string(),
 });
 export type SignalHealthCheck = z.infer<typeof SignalHealthCheckSchema>;
 
 export const SignalPendingPairingSchema = z.object({
   code: z.string(),
   from: z.string(),
-  requestedAt: z.string().nullable()
+  requestedAt: z.string().nullable(),
 });
 export type SignalPendingPairing = z.infer<typeof SignalPendingPairingSchema>;
 
@@ -247,8 +298,8 @@ export const ChannelConfigSummarySchema = z.object({
     lastError: z.string().nullable(),
     lastStartedAt: z.string().nullable(),
     compatibilityWarning: z.string().nullable(),
-    healthChecks: z.array(SignalHealthCheckSchema)
-  })
+    healthChecks: z.array(SignalHealthCheckSchema),
+  }),
 });
 export type ChannelConfigSummary = z.infer<typeof ChannelConfigSummarySchema>;
 
@@ -258,7 +309,7 @@ export const SessionSummarySchema = z.object({
   scope: z.enum(["main", "signal", "web", "global"]).default("main"),
   updatedAt: z.string(),
   unreadCount: z.number().int().nonnegative().default(0),
-  lastMessagePreview: z.string().default("")
+  lastMessagePreview: z.string().default(""),
 });
 export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 
@@ -272,11 +323,17 @@ export const ChatMessageSchema = z.object({
   text: z.string(),
   createdAt: z.string(),
   status: z.enum(["streaming", "complete", "error"]).default("complete"),
-  source: z.enum(["web", "signal", "openclaw"]).default("web")
+  source: z.enum(["web", "signal", "openclaw"]).default("web"),
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
-export const JobStatusSchema = z.enum(["queued", "running", "succeeded", "failed", "cancelled"]);
+export const JobStatusSchema = z.enum([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
 export type JobStatus = z.infer<typeof JobStatusSchema>;
 
 export const JobRecordSchema = z.object({
@@ -291,7 +348,7 @@ export const JobRecordSchema = z.object({
   lastLine: z.string().default(""),
   hasOutput: z.boolean().default(false),
   stdoutBytes: z.number().int().nonnegative().default(0),
-  stderrBytes: z.number().int().nonnegative().default(0)
+  stderrBytes: z.number().int().nonnegative().default(0),
 });
 export type JobRecord = z.infer<typeof JobRecordSchema>;
 
@@ -302,7 +359,7 @@ export const ApprovalRecordSchema = z.object({
   details: z.string(),
   createdAt: z.string(),
   status: z.enum(["pending", "approved", "denied"]),
-  source: z.string()
+  source: z.string(),
 });
 export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>;
 
@@ -311,7 +368,7 @@ export const WorkspaceEntrySchema = z.object({
   name: z.string(),
   kind: z.enum(["file", "directory"]),
   size: z.number().nullable(),
-  modifiedAt: z.string()
+  modifiedAt: z.string(),
 });
 export type WorkspaceEntry = z.infer<typeof WorkspaceEntrySchema>;
 
@@ -322,13 +379,13 @@ export const FileContentSchema = z.object({
   size: z.number().int().nonnegative(),
   truncated: z.boolean(),
   mimeType: z.string(),
-  encoding: z.literal("utf-8")
+  encoding: z.literal("utf-8"),
 });
 export type FileContent = z.infer<typeof FileContentSchema>;
 
 export const FileConflictResponseSchema = z.object({
   error: z.string(),
-  currentModifiedAt: z.string()
+  currentModifiedAt: z.string(),
 });
 export type FileConflictResponse = z.infer<typeof FileConflictResponseSchema>;
 
@@ -338,7 +395,7 @@ export const JobOutputSnapshotSchema = z.object({
   stderr: z.string(),
   truncated: z.boolean(),
   stdoutBytes: z.number().int().nonnegative(),
-  stderrBytes: z.number().int().nonnegative()
+  stderrBytes: z.number().int().nonnegative(),
 });
 export type JobOutputSnapshot = z.infer<typeof JobOutputSnapshotSchema>;
 
@@ -347,7 +404,7 @@ export const PasskeySummarySchema = z.object({
   createdAt: z.string(),
   lastUsedAt: z.string().nullable(),
   deviceType: z.string(),
-  backedUp: z.boolean()
+  backedUp: z.boolean(),
 });
 export type PasskeySummary = z.infer<typeof PasskeySummarySchema>;
 
@@ -356,7 +413,7 @@ export const BootstrapLinkSchema = z.object({
   issuedAt: z.string(),
   expiresAt: z.string(),
   canonicalOrigin: CanonicalOriginSchema,
-  bootstrapUrl: z.string().url()
+  bootstrapUrl: z.string().url(),
 });
 export type BootstrapLink = z.infer<typeof BootstrapLinkSchema>;
 
@@ -368,9 +425,20 @@ export const SetupStateSchema = z.object({
   selectedRuntime: RuntimeIdSchema.nullable(),
   selectedModel: z.string().nullable(),
   remoteAccessEnabled: z.boolean(),
-  signalEnabled: z.boolean()
+  signalEnabled: z.boolean(),
 });
 export type SetupState = z.infer<typeof SetupStateSchema>;
+
+export const QuickstartResultSchema = z.object({
+  hostReady: z.boolean(),
+  remoteReady: z.boolean(),
+  workspaceRoot: z.string(),
+  modelId: z.string(),
+  phoneUrl: z.string().url().nullable(),
+  actions: z.array(z.string()),
+  remotePendingReason: z.string().nullable(),
+});
+export type QuickstartResult = z.infer<typeof QuickstartResultSchema>;
 
 export const ContextManagementStatusSchema = z.object({
   enabled: z.boolean(),
@@ -378,9 +446,11 @@ export const ContextManagementStatusSchema = z.object({
   pruningMode: z.enum(["off", "cache-ttl"]),
   memoryFlushEnabled: z.boolean(),
   reserveTokensFloor: z.number().int().nonnegative(),
-  softThresholdTokens: z.number().int().nonnegative()
+  softThresholdTokens: z.number().int().nonnegative(),
 });
-export type ContextManagementStatus = z.infer<typeof ContextManagementStatusSchema>;
+export type ContextManagementStatus = z.infer<
+  typeof ContextManagementStatusSchema
+>;
 
 export const LatencySourceSchema = z.enum(["server", "client"]);
 export type LatencySource = z.infer<typeof LatencySourceSchema>;
@@ -392,7 +462,7 @@ export const LatencySampleSchema = z.object({
   startedAt: z.string(),
   endedAt: z.string(),
   durationMs: z.number().nonnegative(),
-  context: z.record(z.string(), z.string()).default({})
+  context: z.record(z.string(), z.string()).default({}),
 });
 export type LatencySample = z.infer<typeof LatencySampleSchema>;
 
@@ -405,7 +475,7 @@ export const LatencySummarySchema = z.object({
   maxDurationMs: z.number().nonnegative().nullable(),
   avgDurationMs: z.number().nonnegative().nullable(),
   p50DurationMs: z.number().nonnegative().nullable(),
-  p95DurationMs: z.number().nonnegative().nullable()
+  p95DurationMs: z.number().nonnegative().nullable(),
 });
 export type LatencySummary = z.infer<typeof LatencySummarySchema>;
 
@@ -413,14 +483,14 @@ export const LatencyMetricSchema = z.object({
   name: z.string(),
   source: LatencySourceSchema,
   summary: LatencySummarySchema,
-  recentSamples: z.array(LatencySampleSchema)
+  recentSamples: z.array(LatencySampleSchema),
 });
 export type LatencyMetric = z.infer<typeof LatencyMetricSchema>;
 
 export const PerformanceSnapshotSchema = z.object({
   generatedAt: z.string(),
   metrics: z.array(LatencyMetricSchema),
-  recentSamples: z.array(LatencySampleSchema)
+  recentSamples: z.array(LatencySampleSchema),
 });
 export type PerformanceSnapshot = z.infer<typeof PerformanceSnapshotSchema>;
 
@@ -441,13 +511,13 @@ export const DashboardStateSchema = z.object({
   launchAgent: LaunchAgentStatusSchema,
   sessions: z.array(SessionSummarySchema),
   jobs: z.array(JobRecordSchema),
-  approvals: z.array(ApprovalRecordSchema)
+  approvals: z.array(ApprovalRecordSchema),
 });
 export type DashboardState = z.infer<typeof DashboardStateSchema>;
 
 export const WebSocketEnvelopeSchema = z.object({
   type: z.string(),
-  payload: z.unknown()
+  payload: z.unknown(),
 });
 export type WebSocketEnvelope = z.infer<typeof WebSocketEnvelopeSchema>;
 
@@ -456,148 +526,148 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("chat.send"),
     payload: z.object({
       sessionId: z.string(),
-      text: z.string().min(1)
-    })
+      text: z.string().min(1),
+    }),
   }),
   z.object({
     type: z.literal("chat.history"),
     payload: z.object({
-      sessionId: z.string()
-    })
+      sessionId: z.string(),
+    }),
   }),
   z.object({
     type: z.literal("chat.abort"),
     payload: z.object({
-      sessionId: z.string()
-    })
+      sessionId: z.string(),
+    }),
   }),
   z.object({
     type: z.literal("job.subscribe"),
     payload: z.object({
-      jobId: z.string()
-    })
+      jobId: z.string(),
+    }),
   }),
   z.object({
     type: z.literal("approval.resolve"),
     payload: z.object({
       approvalId: z.string(),
-      resolution: z.enum(["approved", "denied"])
-    })
+      resolution: z.enum(["approved", "denied"]),
+    }),
   }),
   z.object({
     type: z.literal("runtime.refresh"),
-    payload: z.object({})
-  })
+    payload: z.object({}),
+  }),
 ]);
 export type ClientCommand = z.infer<typeof ClientCommandSchema>;
 
 export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("dashboard.state"),
-    payload: DashboardStateSchema
+    payload: DashboardStateSchema,
   }),
   z.object({
     type: z.literal("chat.message"),
-    payload: ChatMessageSchema
+    payload: ChatMessageSchema,
   }),
   z.object({
     type: z.literal("chat.history"),
     payload: z.object({
       sessionId: z.string(),
-      messages: z.array(ChatMessageSchema)
-    })
+      messages: z.array(ChatMessageSchema),
+    }),
   }),
   z.object({
     type: z.literal("chat.stream.delta"),
     payload: z.object({
       sessionId: z.string(),
       runId: z.string(),
-      delta: z.string()
-    })
+      delta: z.string(),
+    }),
   }),
   z.object({
     type: z.literal("chat.stream.done"),
     payload: z.object({
       sessionId: z.string(),
-      runId: z.string()
-    })
+      runId: z.string(),
+    }),
   }),
   z.object({
     type: z.literal("chat.stream.error"),
     payload: z.object({
       sessionId: z.string(),
       runId: z.string(),
-      message: z.string()
-    })
+      message: z.string(),
+    }),
   }),
   z.object({
     type: z.literal("job.output"),
     payload: z.object({
       jobId: z.string(),
       stream: z.enum(["stdout", "stderr"]),
-      chunk: z.string()
-    })
+      chunk: z.string(),
+    }),
   }),
   z.object({
     type: z.literal("job.updated"),
-    payload: JobRecordSchema
+    payload: JobRecordSchema,
   }),
   z.object({
     type: z.literal("approval.updated"),
-    payload: ApprovalRecordSchema
+    payload: ApprovalRecordSchema,
   }),
   z.object({
     type: z.literal("approvals.updated"),
-    payload: z.array(ApprovalRecordSchema)
+    payload: z.array(ApprovalRecordSchema),
   }),
   z.object({
     type: z.literal("sessions.updated"),
-    payload: z.array(SessionSummarySchema)
+    payload: z.array(SessionSummarySchema),
   }),
   z.object({
     type: z.literal("runtime.updated"),
-    payload: z.array(RuntimeStatusSchema)
+    payload: z.array(RuntimeStatusSchema),
   }),
   z.object({
     type: z.literal("providers.updated"),
     payload: z.object({
       providers: z.array(ProviderProfileSchema),
-      cloudProviders: z.array(CloudProviderSummarySchema)
-    })
+      cloudProviders: z.array(CloudProviderSummarySchema),
+    }),
   }),
   z.object({
     type: z.literal("setup.updated"),
-    payload: SetupStateSchema
+    payload: SetupStateSchema,
   }),
   z.object({
     type: z.literal("access.updated"),
-    payload: BootstrapStateSchema
+    payload: BootstrapStateSchema,
   }),
   z.object({
     type: z.literal("launchAgent.updated"),
-    payload: LaunchAgentStatusSchema
+    payload: LaunchAgentStatusSchema,
   }),
   z.object({
     type: z.literal("channel.updated"),
     payload: z.object({
       statuses: z.array(ChannelStatusSchema),
-      config: ChannelConfigSummarySchema
-    })
+      config: ChannelConfigSummarySchema,
+    }),
   }),
   z.object({
     type: z.literal("context.updated"),
-    payload: ContextManagementStatusSchema
+    payload: ContextManagementStatusSchema,
   }),
   z.object({
     type: z.literal("error"),
     payload: z.object({
-      message: z.string()
-    })
+      message: z.string(),
+    }),
   }),
   z.object({
     type: z.literal("performance.updated"),
-    payload: PerformanceSnapshotSchema
-  })
+    payload: PerformanceSnapshotSchema,
+  }),
 ]);
 export type ServerEvent = z.infer<typeof ServerEventSchema>;
 

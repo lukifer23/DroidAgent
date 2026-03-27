@@ -22,12 +22,13 @@
 
 1. Install and sign in to Tailscale on the Mac.
 2. If the normal Tailscale daemon is unavailable on macOS, let DroidAgent start its userspace fallback daemon.
-3. From Setup or Settings, enable Tailscale Serve.
-4. Set the Tailscale URL as canonical.
-5. Generate the one-time phone bootstrap link.
-6. Open that link on the phone and enroll the passkey.
+3. Open `Setup` and let the quickstart pass create the Tailscale phone URL automatically, or enable Tailscale Serve from Settings when you want manual control.
+4. DroidAgent sets the Tailscale URL as canonical as part of that quickstart/manual enable path.
+5. If the same passkey provider already syncs to the phone, open the canonical URL directly and sign in.
+6. Use a one-time bootstrap link only when you need to enroll a new device-specific passkey after the canonical URL is healthy.
 
 Notes:
+
 - DroidAgent keeps the app itself on loopback and only exposes the canonical remote URL through Tailscale Serve.
 - The userspace fallback stores its state under `~/.droidagent/tailscale` and writes logs to `~/.droidagent/logs/tailscaled.log`.
 - If the userspace daemon starts but is not authenticated yet, run the Tailscale login flow before expecting a canonical URL.
@@ -36,12 +37,13 @@ Notes:
 
 1. Create a named Cloudflare Tunnel and a stable public hostname in your Cloudflare account.
 2. Copy the tunnel token for that named tunnel.
-3. In Setup or Settings, enter the public hostname and tunnel token.
+3. In Setup Advanced or Settings, enter the public hostname and tunnel token.
 4. Enable the Cloudflare tunnel.
 5. After the public URL is healthy, set Cloudflare as canonical.
-6. Generate the one-time phone bootstrap link and enroll the phone passkey.
+6. Open the canonical Cloudflare URL directly when your passkey provider already syncs to the phone, or generate a one-time bootstrap link only when a new device-specific passkey is required.
 
 Notes:
+
 - DroidAgent normalizes the hostname server-side.
 - After the first successful enable, you can reuse the stored Keychain token without pasting it again.
 - If Cloudflare is the active canonical origin for an enrolled owner, DroidAgent refuses to stop that tunnel until you switch canonical access elsewhere.

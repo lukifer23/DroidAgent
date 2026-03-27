@@ -3,7 +3,7 @@ import {
   startAuthentication,
   startRegistration,
   type PublicKeyCredentialCreationOptionsJSON as BrowserRegistrationOptions,
-  type PublicKeyCredentialRequestOptionsJSON as BrowserAuthenticationOptions
+  type PublicKeyCredentialRequestOptionsJSON as BrowserAuthenticationOptions,
 } from "@simplewebauthn/browser";
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -23,21 +23,37 @@ interface PasskeySupportState {
   platformAuthenticatorAvailable: boolean | null;
 }
 
-function normalizePasskeyError(error: unknown, action: "registration" | "login"): string {
-  const name = typeof error === "object" && error && "name" in error ? String(error.name) : "";
-  const message = error instanceof Error ? error.message : "Passkey action failed.";
+function normalizePasskeyError(
+  error: unknown,
+  action: "registration" | "login",
+): string {
+  const name =
+    typeof error === "object" && error && "name" in error
+      ? String(error.name)
+      : "";
+  const message =
+    error instanceof Error ? error.message : "Passkey action failed.";
 
-  if (/secure context/i.test(message) || (!window.isSecureContext && /webauthn|publickeycredential/i.test(message))) {
+  if (
+    /secure context/i.test(message) ||
+    (!window.isSecureContext && /webauthn|publickeycredential/i.test(message))
+  ) {
     return "Passkeys need a secure browser context. Use DroidAgent from localhost on the Mac or over the configured HTTPS remote URL.";
   }
 
-  if (name === "NotAllowedError" || /timed out|abort|cancel|not allowed/i.test(message)) {
+  if (
+    name === "NotAllowedError" ||
+    /timed out|abort|cancel|not allowed/i.test(message)
+  ) {
     return action === "registration"
       ? "Passkey enrollment was canceled or blocked. If no browser prompt appeared, try Safari or Chrome on the Mac and confirm Touch ID or your passkey prompt is available."
       : "Passkey sign-in was canceled or blocked. If no browser prompt appeared, try Safari or Chrome on the Mac and confirm your passkey prompt is available.";
   }
 
-  if (name === "NotSupportedError" || /webauthn is not supported|publickeycredential/i.test(message)) {
+  if (
+    name === "NotSupportedError" ||
+    /webauthn is not supported|publickeycredential/i.test(message)
+  ) {
     return "This browser context does not expose the WebAuthn APIs DroidAgent needs for passkeys. Open the app in a current Safari, Chrome, or Edge session.";
   }
 
@@ -58,11 +74,17 @@ export function AuthScreen() {
   const access = accessQuery.data;
   const [passkeySupport, setPasskeySupport] = useState<PasskeySupportState>({
     checked: false,
-    secureContext: typeof window !== "undefined" ? window.isSecureContext : false,
-    hasWebAuthn: typeof window !== "undefined" ? typeof window.PublicKeyCredential !== "undefined" : false,
-    platformAuthenticatorAvailable: null
+    secureContext:
+      typeof window !== "undefined" ? window.isSecureContext : false,
+    hasWebAuthn:
+      typeof window !== "undefined"
+        ? typeof window.PublicKeyCredential !== "undefined"
+        : false,
+    platformAuthenticatorAvailable: null,
   });
-  const [pendingAction, setPendingAction] = useState<"register" | "login" | null>(null);
+  const [pendingAction, setPendingAction] = useState<
+    "register" | "login" | null
+  >(null);
 
   useEffect(() => {
     const loopbackIpHosts = new Set(["127.0.0.1", "::1", "[::1]"]);
@@ -85,7 +107,8 @@ export function AuthScreen() {
 
       if (
         hasWebAuthn &&
-        typeof window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === "function"
+        typeof window.PublicKeyCredential
+          .isUserVerifyingPlatformAuthenticatorAvailable === "function"
       ) {
         try {
           platformAuthenticatorAvailable =
@@ -103,7 +126,7 @@ export function AuthScreen() {
         checked: true,
         secureContext,
         hasWebAuthn,
-        platformAuthenticatorAvailable
+        platformAuthenticatorAvailable,
       });
     }
 
@@ -119,13 +142,18 @@ export function AuthScreen() {
     setPendingAction("register");
     try {
       const suffix = bootstrapSuffix();
-      const options = await postJson<PublicKeyCredentialCreationOptionsJSON>(`/api/auth/register/options${suffix}`, {});
-      const response = await startRegistration({ optionsJSON: options as BrowserRegistrationOptions });
+      const options = await postJson<PublicKeyCredentialCreationOptionsJSON>(
+        `/api/auth/register/options${suffix}`,
+        {},
+      );
+      const response = await startRegistration({
+        optionsJSON: options as BrowserRegistrationOptions,
+      });
       await postJson(`/api/auth/register/verify${suffix}`, response);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["auth"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["access"] })
+        queryClient.invalidateQueries({ queryKey: ["access"] }),
       ]);
     } catch (error) {
       setErrorMessage(normalizePasskeyError(error, "registration"));
@@ -138,13 +166,18 @@ export function AuthScreen() {
     setErrorMessage(null);
     setPendingAction("login");
     try {
-      const options = await postJson<PublicKeyCredentialRequestOptionsJSON>("/api/auth/login/options", {});
-      const response = await startAuthentication({ optionsJSON: options as BrowserAuthenticationOptions });
+      const options = await postJson<PublicKeyCredentialRequestOptionsJSON>(
+        "/api/auth/login/options",
+        {},
+      );
+      const response = await startAuthentication({
+        optionsJSON: options as BrowserAuthenticationOptions,
+      });
       await postJson("/api/auth/login/verify", response);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["auth"] }),
         queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["passkeys"] })
+        queryClient.invalidateQueries({ queryKey: ["passkeys"] }),
       ]);
     } catch (error) {
       setErrorMessage(normalizePasskeyError(error, "login"));
@@ -153,8 +186,17 @@ export function AuthScreen() {
     }
   }
 
-  const bootstrapToken = new URLSearchParams(window.location.search).get("bootstrap");
-  const passkeyActionSupported = passkeySupport.secureContext && passkeySupport.hasWebAuthn;
+  const bootstrapToken = new URLSearchParams(window.location.search).get(
+    "bootstrap",
+  );
+  const passkeyActionSupported =
+    passkeySupport.secureContext && passkeySupport.hasWebAuthn;
+  const authHeading = authQuery.data?.hasUser
+    ? "Sign in to DroidAgent."
+    : "Set up owner access.";
+  const authDescription = authQuery.data?.hasUser
+    ? "Use the passkey already enrolled for this DroidAgent instance."
+    : "Create the owner passkey once. DroidAgent can prepare the Mac and phone access after you are in.";
   const passkeyStatus = useMemo(() => {
     if (!passkeySupport.checked) {
       return "Checking passkey support on this browser.";
@@ -175,25 +217,34 @@ export function AuthScreen() {
     <main className="auth-screen">
       <section className="hero-card">
         <div className="hero-kicker">DroidAgent</div>
-        <h1>Mobile-first control for OpenClaw on your own Mac.</h1>
-        <p>
-          Passkey login, local-first runtimes, Tailscale or Cloudflare phone access, workspace-scoped execution, and a PWA
-          shell sized for a foldable device.
-        </p>
+        <h1>{authHeading}</h1>
+        <p>{authDescription}</p>
         {access ? (
           <section className="status-block">
             <strong>Host access</strong>
             <p>{access.localhostOnlyMessage}</p>
-            {access.canonicalOrigin ? <small>Canonical URL: {access.canonicalOrigin.origin}</small> : null}
-            {bootstrapToken ? <small>Phone enrollment link detected. Complete owner passkey setup on this device.</small> : null}
+            {access.canonicalOrigin ? (
+              <small>Canonical URL: {access.canonicalOrigin.origin}</small>
+            ) : null}
+            {bootstrapToken ? (
+              <small>
+                Phone enrollment link detected. Complete owner passkey setup on
+                this device.
+              </small>
+            ) : null}
           </section>
         ) : null}
         <section className="status-block auth-capability-block">
           <strong>Passkey Readiness</strong>
           <p>{passkeyStatus}</p>
-          <small>Use a current Safari, Chrome, or Edge session. `localhost` and the configured HTTPS remote URL both count as secure contexts.</small>
+          <small>
+            Use a current Safari, Chrome, or Edge session. `localhost` and the
+            configured HTTPS remote URL both count as secure contexts.
+          </small>
         </section>
-        {errorMessage ? <p className="status-banner error">{errorMessage}</p> : null}
+        {errorMessage ? (
+          <p className="status-banner error">{errorMessage}</p>
+        ) : null}
         <div className="hero-actions">
           {authQuery.data?.hasUser ? (
             <button
@@ -201,7 +252,9 @@ export function AuthScreen() {
               disabled={pendingAction === "login" || !passkeyActionSupported}
               onClick={() => void handleLogin()}
             >
-              {pendingAction === "login" ? "Starting Passkey Sign-In..." : "Sign in with Passkey"}
+              {pendingAction === "login"
+                ? "Starting Passkey Sign-In..."
+                : "Sign in with Passkey"}
             </button>
           ) : (
             <button

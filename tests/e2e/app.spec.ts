@@ -4,40 +4,78 @@ import { expect, test } from "@playwright/test";
 
 import { gotoSignedIn } from "./support";
 
-test("shows the passkey auth screen before sign-in", async ({ page, baseURL }) => {
+test("shows the passkey auth screen before sign-in", async ({
+  page,
+  baseURL,
+}) => {
   await page.goto(baseURL ?? "http://127.0.0.1:4418");
 
-  await expect(page.getByRole("heading", { name: /Mobile-first control/i })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: /Sign in to DroidAgent|Set up owner access/i,
+    }),
+  ).toBeVisible();
   await expect(page.getByText(/Passkey Readiness/i)).toBeVisible();
 });
 
 test("loads the signed-in shell and bottom-nav routes", async ({ page }) => {
   await gotoSignedIn(page, "/chat");
 
-  await expect(page.getByRole("heading", { name: "Operator Console" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Operator Console" }),
+  ).toBeVisible();
   await page.getByRole("link", { name: "Files" }).click();
-  await expect(page.getByRole("button", { name: "Create Directory" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Create Directory" }),
+  ).toBeVisible();
   await page.getByRole("link", { name: "Settings" }).click();
-  await expect(page.getByRole("heading", { name: "Performance Diagnostics" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Performance Diagnostics" }),
+  ).toBeVisible();
 });
 
-test("streams chat replies through the real websocket path", async ({ page }, testInfo) => {
+test("loads the simplified setup screen", async ({ page }) => {
+  await gotoSignedIn(page, "/setup");
+
+  await expect(
+    page.getByRole("heading", { name: /Make this Mac and your phone ready/i }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", {
+      name: /Preparing DroidAgent|Prepare DroidAgent|Finish Setup|Refresh Setup/i,
+    }),
+  ).toBeVisible();
+});
+
+test("streams chat replies through the real websocket path", async ({
+  page,
+}, testInfo) => {
   await gotoSignedIn(page, "/chat");
   const prompt = `hello from e2e ${testInfo.project.name}`;
-  const assistantReply = page.locator(".chat-thread .message-card.assistant p").filter({
-    hasText: new RegExp(`^Test harness reply: ${prompt}$`)
-  });
+  const assistantReply = page
+    .locator(".chat-thread .message-card.assistant p")
+    .filter({
+      hasText: new RegExp(`^Test harness reply: ${prompt}$`),
+    });
   const sendButton = page.getByRole("button", { name: "Send" });
 
-  await page.getByPlaceholder("Send a message to the current OpenClaw session...").fill(prompt);
+  await page
+    .getByPlaceholder("Send a message to the current OpenClaw session...")
+    .fill(prompt);
   await expect(sendButton).toBeEnabled();
   await sendButton.click();
 
-  await expect(page.locator(".message-card.user p").filter({ hasText: new RegExp(`^${prompt}$`) })).toBeVisible();
+  await expect(
+    page
+      .locator(".message-card.user p")
+      .filter({ hasText: new RegExp(`^${prompt}$`) }),
+  ).toBeVisible();
   await expect(assistantReply.last()).toBeVisible();
 });
 
-test("surfaces file conflicts from disk changes and allows reload", async ({ page }) => {
+test("surfaces file conflicts from disk changes and allows reload", async ({
+  page,
+}) => {
   const state = await gotoSignedIn(page, "/files");
 
   await page.getByRole("button", { name: /notes.txt/i }).click();
@@ -65,11 +103,15 @@ test("runs owner jobs and replays output", async ({ page }) => {
 
 test("reconnects after a temporary offline period", async ({ page }) => {
   await gotoSignedIn(page, "/chat");
-  const reconnectBanner = page.getByText(/You are offline|Reconnecting to DroidAgent/i);
+  const reconnectBanner = page.getByText(
+    /You are offline|Reconnecting to DroidAgent/i,
+  );
   const prompt = "reconnect check";
-  const assistantReply = page.locator(".chat-thread .message-card.assistant p").filter({
-    hasText: new RegExp(`^Test harness reply: ${prompt}$`)
-  });
+  const assistantReply = page
+    .locator(".chat-thread .message-card.assistant p")
+    .filter({
+      hasText: new RegExp(`^Test harness reply: ${prompt}$`),
+    });
 
   await page.context().setOffline(true);
   await page.evaluate(() => {
@@ -82,9 +124,13 @@ test("reconnects after a temporary offline period", async ({ page }) => {
     window.dispatchEvent(new Event("online"));
   });
   await expect(reconnectBanner).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "Operator Console" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Operator Console" }),
+  ).toBeVisible();
   const sendButton = page.getByRole("button", { name: "Send" });
-  await page.getByPlaceholder("Send a message to the current OpenClaw session...").fill(prompt);
+  await page
+    .getByPlaceholder("Send a message to the current OpenClaw session...")
+    .fill(prompt);
   await expect(sendButton).toBeEnabled();
   await sendButton.click();
   await expect(assistantReply.last()).toBeVisible();

@@ -40,6 +40,8 @@ node apps/server/dist/index.js
 
 Then open `http://localhost:4318`.
 
+After the owner passkey is enrolled, the `Setup` route now drives the common path with one quickstart action: workspace, Ollama, OpenClaw, default model, and the phone URL when Tailscale is already authenticated on the Mac.
+
 ## Product Defaults
 
 - OpenClaw stays loopback-only and token-protected

@@ -56,8 +56,9 @@ pnpm perf:report
 - Use Tailscale Serve when you want private tailnet-only phone access.
 - If the normal macOS Tailscale daemon is unavailable, DroidAgent can start a userspace `tailscaled` process under `~/.droidagent/tailscale` and operate against its socket instead.
 - Use a Cloudflare named tunnel when you want a stable public hostname.
-- Use the canonical remote URL for daily access after phone bootstrap.
-- Generate a new bootstrap link only after the canonical remote URL is healthy.
+- After owner sign-in, the Setup route is the fast path: it prepares the default local runtime path and creates the Tailscale phone URL automatically when Tailscale is already authenticated.
+- Use the canonical remote URL for daily access when the same passkey provider already syncs to the phone.
+- Generate a new bootstrap link only after the canonical remote URL is healthy and only when you need to enroll a new device-specific passkey.
 - If Cloudflare is the active canonical URL, switch canonical access before stopping that tunnel.
 - Use localhost only for maintenance and recovery tasks after canonical setup.
 

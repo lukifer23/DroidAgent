@@ -5,7 +5,8 @@ import {
   FileConflictResponseSchema,
   FileContentSchema,
   PerformanceSnapshotSchema,
-  ServerEventSchema
+  QuickstartResultSchema,
+  ServerEventSchema,
 } from "./index";
 
 describe("DashboardStateSchema", () => {
@@ -19,7 +20,7 @@ describe("DashboardStateSchema", () => {
         selectedRuntime: "ollama",
         selectedModel: null,
         remoteAccessEnabled: false,
-        signalEnabled: false
+        signalEnabled: false,
       },
       canonicalUrl: null,
       tailscaleStatus: {
@@ -36,7 +37,7 @@ describe("DashboardStateSchema", () => {
         httpsEnabled: false,
         serveCommand: null,
         canonicalUrl: null,
-        lastCheckedAt: null
+        lastCheckedAt: null,
       },
       cloudflareStatus: {
         installed: false,
@@ -49,7 +50,7 @@ describe("DashboardStateSchema", () => {
         hostname: null,
         canonicalUrl: null,
         lastStartedAt: null,
-        lastCheckedAt: null
+        lastCheckedAt: null,
       },
       serveStatus: {
         enabled: false,
@@ -58,7 +59,7 @@ describe("DashboardStateSchema", () => {
         source: "none",
         url: null,
         target: null,
-        lastCheckedAt: null
+        lastCheckedAt: null,
       },
       bootstrapRequired: true,
       startupDiagnostics: [],
@@ -88,8 +89,8 @@ describe("DashboardStateSchema", () => {
           lastError: null,
           lastStartedAt: null,
           compatibilityWarning: null,
-          healthChecks: []
-        }
+          healthChecks: [],
+        },
       },
       contextManagement: {
         enabled: true,
@@ -97,7 +98,7 @@ describe("DashboardStateSchema", () => {
         pruningMode: "off",
         memoryFlushEnabled: true,
         reserveTokensFloor: 2048,
-        softThresholdTokens: 512
+        softThresholdTokens: 512,
       },
       launchAgent: {
         label: "com.droidagent.server",
@@ -110,11 +111,11 @@ describe("DashboardStateSchema", () => {
         pid: null,
         lastExitStatus: null,
         health: "warn",
-        healthMessage: "Not installed."
+        healthMessage: "Not installed.",
       },
       sessions: [],
       jobs: [],
-      approvals: []
+      approvals: [],
     });
 
     expect(parsed.setup.currentStep).toBe("hostScan");
@@ -128,7 +129,7 @@ describe("DashboardStateSchema", () => {
       size: 17,
       truncated: false,
       mimeType: "application/typescript",
-      encoding: "utf-8"
+      encoding: "utf-8",
     });
 
     expect(parsed.path).toBe("src/app.ts");
@@ -137,7 +138,7 @@ describe("DashboardStateSchema", () => {
   it("accepts structured file conflict payloads", () => {
     const parsed = FileConflictResponseSchema.parse({
       error: "The file changed on disk after it was loaded.",
-      currentModifiedAt: new Date().toISOString()
+      currentModifiedAt: new Date().toISOString(),
     });
 
     expect(parsed.error).toMatch(/changed on disk/);
@@ -149,8 +150,8 @@ describe("DashboardStateSchema", () => {
       payload: {
         sessionId: "main",
         runId: "run-1",
-        delta: "hello"
-      }
+        delta: "hello",
+      },
     });
 
     expect(parsed.type).toBe("chat.stream.delta");
@@ -170,7 +171,7 @@ describe("DashboardStateSchema", () => {
           rpId: "agent.example.com",
           hostname: "agent.example.com",
           source: "cloudflareTunnel",
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date().toISOString(),
         },
         tailscaleStatus: {
           installed: true,
@@ -186,7 +187,7 @@ describe("DashboardStateSchema", () => {
           httpsEnabled: true,
           serveCommand: "tailscale serve --bg --https=443 4318",
           canonicalUrl: "https://droidagent.example.ts.net",
-          lastCheckedAt: new Date().toISOString()
+          lastCheckedAt: new Date().toISOString(),
         },
         cloudflareStatus: {
           installed: true,
@@ -199,7 +200,7 @@ describe("DashboardStateSchema", () => {
           hostname: "agent.example.com",
           canonicalUrl: "https://agent.example.com",
           lastStartedAt: new Date().toISOString(),
-          lastCheckedAt: new Date().toISOString()
+          lastCheckedAt: new Date().toISOString(),
         },
         serveStatus: {
           enabled: true,
@@ -208,13 +209,13 @@ describe("DashboardStateSchema", () => {
           source: "cloudflare",
           url: "https://agent.example.com",
           target: "http://127.0.0.1:4318",
-          lastCheckedAt: new Date().toISOString()
+          lastCheckedAt: new Date().toISOString(),
         },
         bootstrapTokenIssuedAt: null,
         bootstrapTokenExpiresAt: null,
         bootstrapUrl: null,
-        localhostOnlyMessage: "Use localhost only for maintenance."
-      }
+        localhostOnlyMessage: "Use localhost only for maintenance.",
+      },
     });
 
     expect(parsed.type).toBe("access.updated");
@@ -225,8 +226,8 @@ describe("DashboardStateSchema", () => {
       type: "providers.updated",
       payload: {
         providers: [],
-        cloudProviders: []
-      }
+        cloudProviders: [],
+      },
     });
     const contextEvent = ServerEventSchema.parse({
       type: "context.updated",
@@ -236,8 +237,8 @@ describe("DashboardStateSchema", () => {
         pruningMode: "cache-ttl",
         memoryFlushEnabled: true,
         reserveTokensFloor: 24000,
-        softThresholdTokens: 6000
-      }
+        softThresholdTokens: 6000,
+      },
     });
 
     expect(providerEvent.type).toBe("providers.updated");
@@ -260,7 +261,7 @@ describe("DashboardStateSchema", () => {
             maxDurationMs: 12,
             avgDurationMs: 11,
             p50DurationMs: 10,
-            p95DurationMs: 12
+            p95DurationMs: 12,
           },
           recentSamples: [
             {
@@ -271,20 +272,35 @@ describe("DashboardStateSchema", () => {
               endedAt: new Date().toISOString(),
               durationMs: 10,
               context: {
-                method: "GET"
-              }
-            }
-          ]
-        }
+                method: "GET",
+              },
+            },
+          ],
+        },
       ],
-      recentSamples: []
+      recentSamples: [],
     });
 
     const event = ServerEventSchema.parse({
       type: "performance.updated",
-      payload: snapshot
+      payload: snapshot,
     });
 
     expect(event.type).toBe("performance.updated");
+  });
+
+  it("accepts quickstart results", () => {
+    const parsed = QuickstartResultSchema.parse({
+      hostReady: true,
+      remoteReady: false,
+      workspaceRoot: "/tmp/droidagent",
+      modelId: "qwen3.5:4b",
+      phoneUrl: null,
+      actions: ["Workspace selected.", "Ollama started."],
+      remotePendingReason:
+        "Sign in to Tailscale on this Mac to finish phone access.",
+    });
+
+    expect(parsed.actions).toHaveLength(2);
   });
 });

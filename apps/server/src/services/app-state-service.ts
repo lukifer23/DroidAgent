@@ -108,7 +108,7 @@ export const DEFAULT_CLOUD_PROVIDER_PREFERENCES: CloudProviderPreferences = {
 const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   selectedRuntime: "ollama",
   activeProviderId: "ollama-default",
-  ollamaModel: "gpt-oss:20b",
+  ollamaModel: "qwen3.5:4b",
   llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
   llamaCppContextWindow: 8192,
   workspaceRoot: null,
@@ -140,7 +140,7 @@ const DEFAULT_SETUP_STATE: SetupState = {
   passkeyConfigured: false,
   workspaceRoot: null,
   selectedRuntime: "ollama",
-  selectedModel: "gpt-oss:20b",
+  selectedModel: "qwen3.5:4b",
   remoteAccessEnabled: false,
   signalEnabled: false
 };

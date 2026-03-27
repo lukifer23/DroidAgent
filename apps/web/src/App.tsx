@@ -4,32 +4,33 @@ import {
   RouterProvider,
   createRootRoute,
   createRoute,
-  createRouter
+  createRouter,
 } from "@tanstack/react-router";
 
 import { useAuthQuery, useDashboardQuery } from "./app-data";
 import { DroidAgentAppProvider } from "./app-context";
 import { AppLayout } from "./app-layout";
+import { isOperatorReady } from "./lib/operator-readiness";
 import { ChatScreen } from "./screens/chat-screen";
 import { FilesScreen } from "./screens/files-screen";
+import { SetupScreen } from "./screens/setup-screen";
 import { SettingsScreen } from "./screens/settings-screen";
 
-const loadSetupScreen = () => import("./screens/setup-screen");
 const loadJobsScreen = () => import("./screens/jobs-screen");
 const loadModelsScreen = () => import("./screens/models-screen");
 const loadChannelsScreen = () => import("./screens/channels-screen");
 
-const SetupScreen = lazy(async () => ({ default: (await loadSetupScreen()).SetupScreen }));
-const JobsScreen = lazy(async () => ({ default: (await loadJobsScreen()).JobsScreen }));
-const ModelsScreen = lazy(async () => ({ default: (await loadModelsScreen()).ModelsScreen }));
-const ChannelsScreen = lazy(async () => ({ default: (await loadChannelsScreen()).ChannelsScreen }));
+const JobsScreen = lazy(async () => ({
+  default: (await loadJobsScreen()).JobsScreen,
+}));
+const ModelsScreen = lazy(async () => ({
+  default: (await loadModelsScreen()).ModelsScreen,
+}));
+const ChannelsScreen = lazy(async () => ({
+  default: (await loadChannelsScreen()).ChannelsScreen,
+}));
 const preloadScreens = () =>
-  Promise.all([
-    loadSetupScreen(),
-    loadJobsScreen(),
-    loadModelsScreen(),
-    loadChannelsScreen()
-  ]);
+  Promise.all([loadJobsScreen(), loadModelsScreen(), loadChannelsScreen()]);
 
 function withLazyScreen(Component: ComponentType) {
   return function LazyScreen() {
@@ -44,8 +45,9 @@ function withLazyScreen(Component: ComponentType) {
 function IndexRedirect() {
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
-  const completed = dashboardQuery.data?.setup.completedSteps.length ?? 0;
-  return <Navigate to={completed < 5 ? "/setup" : "/chat"} />;
+  return (
+    <Navigate to={isOperatorReady(dashboardQuery.data) ? "/chat" : "/setup"} />
+  );
 }
 
 function IdleRoutePreloader() {
@@ -71,7 +73,11 @@ function IdleRoutePreloader() {
     }
 
     return () => {
-      if (idleHandle !== null && typeof window !== "undefined" && "cancelIdleCallback" in window) {
+      if (
+        idleHandle !== null &&
+        typeof window !== "undefined" &&
+        "cancelIdleCallback" in window
+      ) {
         window.cancelIdleCallback(idleHandle);
       }
       if (frameHandle !== null) {
@@ -84,55 +90,55 @@ function IdleRoutePreloader() {
 }
 
 const rootRoute = createRootRoute({
-  component: AppLayout
+  component: AppLayout,
 });
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: IndexRedirect
+  component: IndexRedirect,
 });
 
 const setupRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "setup",
-  component: withLazyScreen(SetupScreen)
+  component: withLazyScreen(SetupScreen),
 });
 
 const chatRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "chat",
-  component: withLazyScreen(ChatScreen)
+  component: withLazyScreen(ChatScreen),
 });
 
 const filesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "files",
-  component: withLazyScreen(FilesScreen)
+  component: withLazyScreen(FilesScreen),
 });
 
 const jobsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "jobs",
-  component: withLazyScreen(JobsScreen)
+  component: withLazyScreen(JobsScreen),
 });
 
 const modelsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "models",
-  component: withLazyScreen(ModelsScreen)
+  component: withLazyScreen(ModelsScreen),
 });
 
 const channelsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "channels",
-  component: withLazyScreen(ChannelsScreen)
+  component: withLazyScreen(ChannelsScreen),
 });
 
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "settings",
-  component: withLazyScreen(SettingsScreen)
+  component: withLazyScreen(SettingsScreen),
 });
 
 const routeTree = rootRoute.addChildren([
@@ -143,11 +149,11 @@ const routeTree = rootRoute.addChildren([
   jobsRoute,
   modelsRoute,
   channelsRoute,
-  settingsRoute
+  settingsRoute,
 ]);
 
 const router = createRouter({
-  routeTree
+  routeTree,
 });
 
 declare module "@tanstack/react-router" {
