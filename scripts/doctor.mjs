@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-const baseUrl = process.env.DROIDAGENT_BASE_URL ?? "http://127.0.0.1:4318";
+const baseUrl = process.env.DROIDAGENT_BASE_URL ?? "http://localhost:4318";
 const appDir = path.join(os.homedir(), ".droidagent");
 const repoRoot = process.cwd();
 const requiredDirs = [

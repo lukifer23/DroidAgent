@@ -26,7 +26,7 @@ The bootstrap script:
 5. optionally starts Ollama if already installed
 6. starts the DroidAgent server
 7. waits for health readiness
-8. opens `http://127.0.0.1:4318`
+8. opens `http://localhost:4318`
 
 Bootstrap is idempotent and safe to re-run.
 
@@ -66,7 +66,7 @@ pnpm build
 node apps/server/dist/index.js
 ```
 
-Then open `http://127.0.0.1:4318`.
+Then open `http://localhost:4318`.
 
 ## Recovery
 

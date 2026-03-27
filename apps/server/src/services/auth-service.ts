@@ -12,7 +12,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { Context } from "hono";
 
-import { PasskeySummarySchema, nowIso } from "@droidagent/shared";
+import { PasskeySummarySchema, nowIso, type CanonicalOrigin } from "@droidagent/shared";
 
 import { db, schema } from "../db/index.js";
 import { appStateService } from "./app-state-service.js";
@@ -36,6 +36,38 @@ function encodeBase64Url(input: Uint8Array): string {
 interface RequestOriginInfo {
   rpId: string;
   origin: string;
+}
+
+export function resolveRequestOriginInfo(params: {
+  requestUrl: string;
+  requestOriginHeader?: string | null | undefined;
+  canonicalOrigin?: Pick<CanonicalOrigin, "origin" | "rpId"> | null | undefined;
+}): RequestOriginInfo {
+  if (params.canonicalOrigin) {
+    return {
+      rpId: params.canonicalOrigin.rpId,
+      origin: params.canonicalOrigin.origin
+    };
+  }
+
+  const origin = params.requestOriginHeader?.trim() ? new URL(params.requestOriginHeader).origin : new URL(params.requestUrl).origin;
+  return {
+    rpId: new URL(origin).hostname || "localhost",
+    origin
+  };
+}
+
+export function resolveSecureCookieRequirement(params: {
+  requestUrl: string;
+  requestOriginHeader?: string | null | undefined;
+  canonicalOrigin?: Pick<CanonicalOrigin, "origin"> | null | undefined;
+}): boolean {
+  if (params.canonicalOrigin) {
+    return new URL(params.canonicalOrigin.origin).protocol === "https:";
+  }
+
+  const origin = params.requestOriginHeader?.trim() ? new URL(params.requestOriginHeader).origin : new URL(params.requestUrl).origin;
+  return new URL(origin).protocol === "https:";
 }
 
 type ChallengeKind = "registration-owner" | "registration-additional" | "authentication";
@@ -224,7 +256,15 @@ export class AuthService {
   }
 
   async beginAuthenticationFromContext(c: Context) {
-    return this.beginAuthentication(this.getOriginInfo(c));
+    const canonicalOrigin = await accessService.assertCanonicalAuthenticatedRequest(c);
+    return this.beginAuthentication(
+      canonicalOrigin
+        ? {
+            rpId: canonicalOrigin.rpId,
+            origin: canonicalOrigin.origin
+          }
+        : this.getOriginInfo(c)
+    );
   }
 
   async beginAuthentication(originInfo: RequestOriginInfo) {
@@ -403,16 +443,18 @@ export class AuthService {
   }
 
   private getOriginInfo(c: Context): RequestOriginInfo {
-    const url = new URL(c.req.url);
-    return {
-      rpId: url.hostname || "localhost",
-      origin: url.origin
-    };
+    return resolveRequestOriginInfo({
+      requestUrl: c.req.url,
+      requestOriginHeader: c.req.header("origin")
+    });
   }
 
-  private requireSecureCookie(c: Context): boolean {
-    const url = new URL(c.req.url);
-    return url.protocol === "https:";
+  private requireSecureCookie(c: Context, canonicalOrigin?: Pick<CanonicalOrigin, "origin"> | null): boolean {
+    return resolveSecureCookieRequirement({
+      requestUrl: c.req.url,
+      requestOriginHeader: c.req.header("origin"),
+      canonicalOrigin
+    });
   }
 
   async beginRegistration(c: Context): Promise<ReturnType<AuthService["beginOwnerRegistration"]>> {
@@ -421,27 +463,37 @@ export class AuthService {
       throw new Error("A passkey is already configured. Use sign in instead.");
     }
     const token = new URL(c.req.url).searchParams.get("bootstrap");
+    let canonicalOrigin: CanonicalOrigin | null = null;
     if (token) {
-      await accessService.assertBootstrapRegistrationRequest(c, token);
+      canonicalOrigin = await accessService.assertBootstrapRegistrationRequest(c, token);
     } else {
       await accessService.assertLocalhostBootstrapRequest(c);
     }
-    return this.beginOwnerRegistration(this.getOriginInfo(c));
+    return this.beginOwnerRegistration(
+      canonicalOrigin
+        ? {
+            rpId: canonicalOrigin.rpId,
+            origin: canonicalOrigin.origin
+          }
+        : this.getOriginInfo(c)
+    );
   }
 
   async finishRegistration(c: Context, response: unknown): Promise<AuthUser> {
     const token = new URL(c.req.url).searchParams.get("bootstrap");
+    let canonicalOrigin: CanonicalOrigin | null = null;
     if (token) {
-      await accessService.assertBootstrapRegistrationRequest(c, token);
+      canonicalOrigin = await accessService.assertBootstrapRegistrationRequest(c, token);
       await accessService.consumeBootstrapToken(token);
     } else {
       await accessService.assertLocalhostBootstrapRequest(c);
     }
-    return this.finishOwnerRegistration(c, response, this.requireSecureCookie(c));
+    return this.finishOwnerRegistration(c, response, this.requireSecureCookie(c, canonicalOrigin));
   }
 
   async finishAuthenticationFromContext(c: Context, response: unknown): Promise<AuthUser> {
-    return this.finishAuthentication(c, response, this.requireSecureCookie(c));
+    const canonicalOrigin = await accessService.assertCanonicalAuthenticatedRequest(c);
+    return this.finishAuthentication(c, response, this.requireSecureCookie(c, canonicalOrigin));
   }
 
   async beginAdditionalRegistrationFromContext(c: Context, user: AuthUser) {

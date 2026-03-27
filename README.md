@@ -38,7 +38,7 @@ pnpm build
 node apps/server/dist/index.js
 ```
 
-Then open `http://127.0.0.1:4318`.
+Then open `http://localhost:4318`.
 
 ## Product Defaults
 
@@ -68,7 +68,7 @@ Then open `http://127.0.0.1:4318`.
 - Job logs: `~/.droidagent/logs/jobs`
 - OpenClaw profile: `~/.openclaw-droidagent`
 - LaunchAgent plist: `~/Library/LaunchAgents/com.droidagent.server.plist`
-- Server URL: `http://127.0.0.1:4318`
+- Server URL: `http://localhost:4318`
 
 ## Notes
 

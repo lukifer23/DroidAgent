@@ -1057,7 +1057,7 @@ const server = serve(
     port: SERVER_PORT
   },
   (info) => {
-    console.log(`DroidAgent server listening on http://127.0.0.1:${info.port}`);
+    console.log(`DroidAgent server listening on http://localhost:${info.port}`);
   }
 );
 

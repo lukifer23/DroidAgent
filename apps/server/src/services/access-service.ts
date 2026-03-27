@@ -144,6 +144,14 @@ export class AccessService {
   }
 
   getRequestOrigin(c: Context): string {
+    const originHeader = c.req.header("origin");
+    if (originHeader) {
+      try {
+        return normalizeOrigin(originHeader);
+      } catch {
+        // fall through to request URL
+      }
+    }
     return this.getRequestUrl(c).origin;
   }
 

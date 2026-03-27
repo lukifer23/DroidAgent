@@ -104,8 +104,8 @@ node apps/server/dist/index.js &
 SERVER_PID=$!
 
 for i in {1..10}; do
-  if curl -sf "http://127.0.0.1:4318/api/health" >/dev/null 2>&1; then
-    log_ok "Server ready at http://127.0.0.1:4318"
+  if curl -sf "http://localhost:4318/api/health" >/dev/null 2>&1; then
+    log_ok "Server ready at http://localhost:4318"
     break
   fi
   if [[ $i -eq 10 ]]; then
@@ -115,9 +115,9 @@ for i in {1..10}; do
 done
 
 echo ""
-echo "${GREEN}DroidAgent is running.${NC} Open http://127.0.0.1:4318 in your browser."
+echo "${GREEN}DroidAgent is running.${NC} Open http://localhost:4318 in your browser."
 echo ""
-open "http://127.0.0.1:4318" 2>/dev/null || echo "Open manually: http://127.0.0.1:4318"
+open "http://localhost:4318" 2>/dev/null || echo "Open manually: http://localhost:4318"
 echo ""
 
 wait "$SERVER_PID" 2>/dev/null || true

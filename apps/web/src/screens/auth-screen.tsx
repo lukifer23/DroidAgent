@@ -65,6 +65,17 @@ export function AuthScreen() {
   const [pendingAction, setPendingAction] = useState<"register" | "login" | null>(null);
 
   useEffect(() => {
+    const loopbackIpHosts = new Set(["127.0.0.1", "::1", "[::1]"]);
+    if (!loopbackIpHosts.has(window.location.hostname)) {
+      return;
+    }
+
+    const redirected = new URL(window.location.href);
+    redirected.hostname = "localhost";
+    window.location.replace(redirected.toString());
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
 
     async function probePasskeySupport() {
