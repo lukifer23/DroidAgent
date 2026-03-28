@@ -13,7 +13,7 @@ import {
   type SetupState,
   type SignalDaemonState,
   type SignalRegistrationMode,
-  type SignalRegistrationState
+  type SignalRegistrationState,
 } from "@droidagent/shared";
 
 import { db, schema } from "../db/index.js";
@@ -23,7 +23,10 @@ export interface CloudProviderPreference {
   lastUpdatedAt: string | null;
 }
 
-export type CloudProviderPreferences = Record<CloudProviderId, CloudProviderPreference>;
+export type CloudProviderPreferences = Record<
+  CloudProviderId,
+  CloudProviderPreference
+>;
 
 export interface AccessSettings {
   mode: AccessMode;
@@ -39,6 +42,7 @@ export interface RuntimeSettings {
   selectedRuntime: "ollama" | "llamaCpp";
   activeProviderId: string;
   ollamaModel: string;
+  ollamaContextWindow: number;
   llamaCppModel: string;
   llamaCppContextWindow: number;
   workspaceRoot: string | null;
@@ -71,44 +75,45 @@ const DEFAULT_ACCESS_SETTINGS: AccessSettings = {
   bootstrapTokenIssuedAt: null,
   bootstrapTokenExpiresAt: null,
   cloudflareHostname: null,
-  cloudflareLastStartedAt: null
+  cloudflareLastStartedAt: null,
 };
 
 export const DEFAULT_CLOUD_PROVIDER_PREFERENCES: CloudProviderPreferences = {
   openai: {
     defaultModel: "openai/gpt-5.4",
-    lastUpdatedAt: null
+    lastUpdatedAt: null,
   },
   anthropic: {
     defaultModel: "anthropic/claude-sonnet-4-5",
-    lastUpdatedAt: null
+    lastUpdatedAt: null,
   },
   openrouter: {
     defaultModel: "openrouter/anthropic/claude-sonnet-4-5",
-    lastUpdatedAt: null
+    lastUpdatedAt: null,
   },
   gemini: {
     defaultModel: "gemini/gemini-2.5-pro",
-    lastUpdatedAt: null
+    lastUpdatedAt: null,
   },
   groq: {
     defaultModel: "groq/llama-3.3-70b-versatile",
-    lastUpdatedAt: null
+    lastUpdatedAt: null,
   },
   together: {
     defaultModel: "together/deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
-    lastUpdatedAt: null
+    lastUpdatedAt: null,
   },
   xai: {
     defaultModel: "xai/grok-4-fast",
-    lastUpdatedAt: null
-  }
+    lastUpdatedAt: null,
+  },
 };
 
 const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   selectedRuntime: "ollama",
   activeProviderId: "ollama-default",
   ollamaModel: "qwen3.5:4b",
+  ollamaContextWindow: 65536,
   llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
   llamaCppContextWindow: 8192,
   workspaceRoot: null,
@@ -131,7 +136,7 @@ const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   signalLastStartedAt: null,
   signalCompatibilityWarning: null,
   smartContextManagementEnabled: true,
-  cloudProviders: DEFAULT_CLOUD_PROVIDER_PREFERENCES
+  cloudProviders: DEFAULT_CLOUD_PROVIDER_PREFERENCES,
 };
 
 const DEFAULT_SETUP_STATE: SetupState = {
@@ -142,7 +147,7 @@ const DEFAULT_SETUP_STATE: SetupState = {
   selectedRuntime: "ollama",
   selectedModel: "qwen3.5:4b",
   remoteAccessEnabled: false,
-  signalEnabled: false
+  signalEnabled: false,
 };
 
 function deserializeJson<T>(raw: string, fallback: T): T {
@@ -153,29 +158,38 @@ function deserializeJson<T>(raw: string, fallback: T): T {
   }
 }
 
-function mergeRuntimeSettings(update: Partial<RuntimeSettings>, current: RuntimeSettings): RuntimeSettings {
+function mergeRuntimeSettings(
+  update: Partial<RuntimeSettings>,
+  current: RuntimeSettings,
+): RuntimeSettings {
   return {
     ...current,
     ...update,
     cloudProviders: {
       ...current.cloudProviders,
-      ...(update.cloudProviders ?? {})
-    }
+      ...(update.cloudProviders ?? {}),
+    },
   };
 }
 
-function mergeAccessSettings(update: Partial<AccessSettings>, current: AccessSettings): AccessSettings {
+function mergeAccessSettings(
+  update: Partial<AccessSettings>,
+  current: AccessSettings,
+): AccessSettings {
   return {
     ...current,
     ...update,
-    canonicalOrigin: update.canonicalOrigin === undefined ? current.canonicalOrigin : update.canonicalOrigin
+    canonicalOrigin:
+      update.canonicalOrigin === undefined
+        ? current.canonicalOrigin
+        : update.canonicalOrigin,
   };
 }
 
 export class AppStateService {
   async getJsonSetting<T>(key: string, fallback: T): Promise<T> {
     const row = await db.query.appSettings.findFirst({
-      where: eq(schema.appSettings.key, key)
+      where: eq(schema.appSettings.key, key),
     });
     if (!row) {
       return fallback;
@@ -190,42 +204,56 @@ export class AppStateService {
       .values({
         key,
         value: JSON.stringify(value),
-        updatedAt: now
+        updatedAt: now,
       })
       .onConflictDoUpdate({
         target: schema.appSettings.key,
         set: {
           value: JSON.stringify(value),
-          updatedAt: now
-        }
+          updatedAt: now,
+        },
       });
   }
 
   async getRuntimeSettings(): Promise<RuntimeSettings> {
-    const current = await this.getJsonSetting("runtimeSettings", DEFAULT_RUNTIME_SETTINGS);
+    const current = await this.getJsonSetting(
+      "runtimeSettings",
+      DEFAULT_RUNTIME_SETTINGS,
+    );
     return mergeRuntimeSettings(current, DEFAULT_RUNTIME_SETTINGS);
   }
 
   async getAccessSettings(): Promise<AccessSettings> {
-    const current = await this.getJsonSetting("accessSettings", DEFAULT_ACCESS_SETTINGS);
+    const current = await this.getJsonSetting(
+      "accessSettings",
+      DEFAULT_ACCESS_SETTINGS,
+    );
     return mergeAccessSettings(
       {
         ...current,
-        canonicalOrigin: current.canonicalOrigin ? CanonicalOriginSchema.parse(current.canonicalOrigin) : null,
-        mode: AccessModeSchema.parse(current.mode ?? DEFAULT_ACCESS_SETTINGS.mode)
+        canonicalOrigin: current.canonicalOrigin
+          ? CanonicalOriginSchema.parse(current.canonicalOrigin)
+          : null,
+        mode: AccessModeSchema.parse(
+          current.mode ?? DEFAULT_ACCESS_SETTINGS.mode,
+        ),
       },
-      DEFAULT_ACCESS_SETTINGS
+      DEFAULT_ACCESS_SETTINGS,
     );
   }
 
-  async updateAccessSettings(update: Partial<AccessSettings>): Promise<AccessSettings> {
+  async updateAccessSettings(
+    update: Partial<AccessSettings>,
+  ): Promise<AccessSettings> {
     const current = await this.getAccessSettings();
     const next = mergeAccessSettings(update, current);
     await this.setJsonSetting("accessSettings", next);
     return next;
   }
 
-  async updateRuntimeSettings(update: Partial<RuntimeSettings>): Promise<RuntimeSettings> {
+  async updateRuntimeSettings(
+    update: Partial<RuntimeSettings>,
+  ): Promise<RuntimeSettings> {
     const current = await this.getRuntimeSettings();
     const next = mergeRuntimeSettings(update, current);
     await this.setJsonSetting("runtimeSettings", next);
@@ -234,7 +262,7 @@ export class AppStateService {
 
   async updateCloudProviderPreference(
     providerId: CloudProviderId,
-    update: Partial<CloudProviderPreference>
+    update: Partial<CloudProviderPreference>,
   ): Promise<RuntimeSettings> {
     const current = await this.getRuntimeSettings();
     return await this.updateRuntimeSettings({
@@ -242,14 +270,17 @@ export class AppStateService {
         ...current.cloudProviders,
         [providerId]: {
           ...current.cloudProviders[providerId],
-          ...update
-        }
-      }
+          ...update,
+        },
+      },
     });
   }
 
   async getSetupState(): Promise<SetupState> {
-    const current = await this.getJsonSetting("setupState", DEFAULT_SETUP_STATE);
+    const current = await this.getJsonSetting(
+      "setupState",
+      DEFAULT_SETUP_STATE,
+    );
     return SetupStateSchema.parse(current);
   }
 
@@ -257,13 +288,16 @@ export class AppStateService {
     const current = await this.getSetupState();
     const merged = SetupStateSchema.parse({
       ...current,
-      ...update
+      ...update,
     });
     await this.setJsonSetting("setupState", merged);
     return merged;
   }
 
-  async markSetupStepCompleted(step: SetupState["currentStep"], patch: Partial<SetupState> = {}): Promise<SetupState> {
+  async markSetupStepCompleted(
+    step: SetupState["currentStep"],
+    patch: Partial<SetupState> = {},
+  ): Promise<SetupState> {
     const current = await this.getSetupState();
     const completedSteps = current.completedSteps.includes(step)
       ? current.completedSteps
@@ -272,7 +306,7 @@ export class AppStateService {
     return await this.updateSetupState({
       ...patch,
       completedSteps,
-      currentStep: nextStep
+      currentStep: nextStep,
     });
   }
 
@@ -285,7 +319,7 @@ export class AppStateService {
   async listRecentJobs(limit = 20) {
     return await db.query.jobs.findMany({
       orderBy: (jobs, { desc }) => [desc(jobs.createdAt)],
-      limit
+      limit,
     });
   }
 
@@ -299,7 +333,7 @@ export class AppStateService {
       startedAt: null,
       finishedAt: null,
       exitCode: null,
-      lastLine: ""
+      lastLine: "",
     } as const;
 
     await db.insert(schema.jobs).values(record);
@@ -314,12 +348,9 @@ export class AppStateService {
       finishedAt: string | null;
       exitCode: number | null;
       lastLine: string;
-    }>
+    }>,
   ): Promise<void> {
-    await db
-      .update(schema.jobs)
-      .set(update)
-      .where(eq(schema.jobs.id, jobId));
+    await db.update(schema.jobs).set(update).where(eq(schema.jobs.id, jobId));
   }
 }
 

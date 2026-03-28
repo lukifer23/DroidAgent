@@ -28,7 +28,11 @@ function resolveWorkspaceRoot(
   input: string | null | undefined,
   current: string | null,
 ): string {
-  const candidate = input?.trim() || current || process.cwd();
+  const trimmedInput = input?.trim() ?? "";
+  const candidate =
+    (trimmedInput === "." && current ? current : trimmedInput) ||
+    current ||
+    process.cwd();
   return path.resolve(expandHomePath(candidate));
 }
 
@@ -140,6 +144,7 @@ export class QuickstartService {
       await harnessService.configureRuntimeModel({
         providerId: "ollama-default",
         modelId,
+        contextWindow: currentSettings.ollamaContextWindow,
       });
       await appStateService.markSetupStepCompleted("models", {
         selectedRuntime: "ollama",
@@ -200,7 +205,7 @@ export class QuickstartService {
       }
     } else {
       remotePendingReason =
-        "Sign in to Tailscale on this Mac to create the phone URL automatically. Cloudflare remains available in Advanced Setup.";
+        "Sign in to Tailscale on this Mac to create the phone URL automatically.";
     }
 
     access = await accessService.getBootstrapState();

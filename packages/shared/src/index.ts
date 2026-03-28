@@ -204,6 +204,7 @@ export const ProviderProfileSchema = z.object({
   provider: z.enum(["ollama", "llamaCpp", "openaiCompatible", "cloud"]),
   label: z.string(),
   model: z.string(),
+  contextWindow: z.number().int().positive().nullable().default(null),
   baseUrl: z.string().nullable(),
   enabled: z.boolean(),
   toolSupport: z.boolean(),

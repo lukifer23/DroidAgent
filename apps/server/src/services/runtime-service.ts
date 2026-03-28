@@ -8,7 +8,7 @@ import {
   RuntimeStatusSchema,
   type ProviderProfile,
   type RuntimeId,
-  type RuntimeStatus
+  type RuntimeStatus,
 } from "@droidagent/shared";
 
 import {
@@ -18,7 +18,7 @@ import {
   LLAMA_CPP_PORT,
   LLAMA_CPP_UBATCH_SIZE,
   baseEnv,
-  paths
+  paths,
 } from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
 import { TtlCache } from "../lib/ttl-cache.js";
@@ -45,21 +45,27 @@ const LLAMA_CPP_PRESETS: LlamaModelPreset[] = [
     id: "gemma-3-1b-it",
     label: "Gemma 3 1B IT GGUF",
     hfRepo: "ggml-org/gemma-3-1b-it-GGUF",
-    contextWindow: 8192
+    contextWindow: 8192,
   },
   {
     id: "qwen3-8b-instruct",
     label: "Qwen3 8B Instruct GGUF",
     hfRepo: "bartowski/Qwen3-8B-GGUF",
-    contextWindow: 32768
-  }
+    contextWindow: 32768,
+  },
 ];
 
 export class RuntimeService {
   private llamaCppProcess: ChildProcess | null = null;
-  private readonly runtimeStatusesCache = new TtlCache<RuntimeStatus[]>(RUNTIME_STATUS_TTL_MS);
-  private readonly providerProfilesCache = new TtlCache<ProviderProfile[]>(PROVIDER_PROFILE_TTL_MS);
-  private readonly hostAccelerationCache = new TtlCache<Record<string, string | number | boolean>>(86_400_000);
+  private readonly runtimeStatusesCache = new TtlCache<RuntimeStatus[]>(
+    RUNTIME_STATUS_TTL_MS,
+  );
+  private readonly providerProfilesCache = new TtlCache<ProviderProfile[]>(
+    PROVIDER_PROFILE_TTL_MS,
+  );
+  private readonly hostAccelerationCache = new TtlCache<
+    Record<string, string | number | boolean>
+  >(86_400_000);
 
   invalidateCaches(): void {
     this.runtimeStatusesCache.invalidate();
@@ -84,17 +90,19 @@ export class RuntimeService {
     return (await response.json()) as T;
   }
 
-  private async hostAccelerationMetadata(): Promise<Record<string, string | number | boolean>> {
+  private async hostAccelerationMetadata(): Promise<
+    Record<string, string | number | boolean>
+  > {
     return await this.hostAccelerationCache.get(async () => {
       try {
         if (process.platform === "darwin") {
           const [chipResult, architectureResult] = await Promise.allSettled([
             runCommand("sysctl", ["-n", "machdep.cpu.brand_string"], {
-              timeoutMs: 1_000
+              timeoutMs: 1_000,
             }),
             runCommand("uname", ["-m"], {
-              timeoutMs: 1_000
-            })
+              timeoutMs: 1_000,
+            }),
           ]);
           const gpuModel =
             chipResult.status === "fulfilled"
@@ -107,7 +115,7 @@ export class RuntimeService {
 
           const metadata: Record<string, string | number | boolean> = {
             accelerationBackend: "metal",
-            metalSupport: "Metal available on macOS host."
+            metalSupport: "Metal available on macOS host.",
           };
           if (gpuModel) {
             metadata.gpuModel = gpuModel;
@@ -119,7 +127,7 @@ export class RuntimeService {
         }
 
         return {
-          accelerationBackend: "cpu"
+          accelerationBackend: "cpu",
         };
       } catch {
         return {};
@@ -127,7 +135,9 @@ export class RuntimeService {
     });
   }
 
-  private async ollamaProcessorMetadata(): Promise<Record<string, string | number | boolean>> {
+  private async ollamaProcessorMetadata(): Promise<
+    Record<string, string | number | boolean>
+  > {
     try {
       const result = await runCommand("ollama", ["ps"]);
       const lines = result.stdout
@@ -159,16 +169,19 @@ export class RuntimeService {
         detectedVersion: null,
         binaryPath: null,
         health: "warn",
-        healthMessage: "Install via Homebrew to use the default local model path.",
+        healthMessage:
+          "Install via Homebrew to use the default local model path.",
         endpoint: "http://127.0.0.1:11434",
         installed: false,
         lastStartedAt: null,
-        metadata: hostAcceleration
+        metadata: hostAcceleration,
       });
     }
 
     try {
-      const tags = await this.fetchJson<{ models?: Array<{ name: string }> }>("http://127.0.0.1:11434/api/tags");
+      const tags = await this.fetchJson<{ models?: Array<{ name: string }> }>(
+        "http://127.0.0.1:11434/api/tags",
+      );
       const ollamaProcessor = await this.ollamaProcessorMetadata();
       return RuntimeStatusSchema.parse({
         id: "ollama",
@@ -176,18 +189,22 @@ export class RuntimeService {
         state: "running",
         enabled: true,
         installMethod: "brew",
-        detectedVersion: (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
+        detectedVersion:
+          (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
         binaryPath,
         health: "ok",
         healthMessage: `Ollama is serving ${tags.models?.length ?? 0} model(s)${hostAcceleration.accelerationBackend === "metal" ? " with Metal available." : "."}`,
         endpoint: "http://127.0.0.1:11434",
         installed: true,
-        lastStartedAt: await appStateService.getJsonSetting<string | null>("ollamaStartedAt", null),
+        lastStartedAt: await appStateService.getJsonSetting<string | null>(
+          "ollamaStartedAt",
+          null,
+        ),
         metadata: {
           models: tags.models?.length ?? 0,
           ...hostAcceleration,
-          ...ollamaProcessor
-        }
+          ...ollamaProcessor,
+        },
       });
     } catch {
       return RuntimeStatusSchema.parse({
@@ -196,14 +213,19 @@ export class RuntimeService {
         state: "stopped",
         enabled: true,
         installMethod: "brew",
-        detectedVersion: (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
+        detectedVersion:
+          (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
         binaryPath,
         health: "warn",
-        healthMessage: "Ollama is installed but not currently serving on 127.0.0.1:11434.",
+        healthMessage:
+          "Ollama is installed but not currently serving on 127.0.0.1:11434.",
         endpoint: "http://127.0.0.1:11434",
         installed: true,
-        lastStartedAt: await appStateService.getJsonSetting<string | null>("ollamaStartedAt", null),
-        metadata: hostAcceleration
+        lastStartedAt: await appStateService.getJsonSetting<string | null>(
+          "ollamaStartedAt",
+          null,
+        ),
+        metadata: hostAcceleration,
       });
     }
   }
@@ -216,7 +238,7 @@ export class RuntimeService {
       gpuLayers: LLAMA_CPP_GPU_LAYERS,
       flashAttention: LLAMA_CPP_FLASH_ATTN,
       batchSize: LLAMA_CPP_BATCH_SIZE,
-      ubatchSize: LLAMA_CPP_UBATCH_SIZE
+      ubatchSize: LLAMA_CPP_UBATCH_SIZE,
     };
     if (!binaryPath) {
       return RuntimeStatusSchema.parse({
@@ -228,33 +250,40 @@ export class RuntimeService {
         detectedVersion: null,
         binaryPath: null,
         health: "warn",
-        healthMessage: "Install the Homebrew formula to enable advanced local model serving.",
+        healthMessage:
+          "Install the Homebrew formula to enable advanced local model serving.",
         endpoint: `http://127.0.0.1:${LLAMA_CPP_PORT}/v1`,
         installed: false,
         lastStartedAt: null,
-        metadata: llamaMetadata
+        metadata: llamaMetadata,
       });
     }
 
     try {
-      const models = await this.fetchJson<{ data?: Array<{ id: string }> }>(`http://127.0.0.1:${LLAMA_CPP_PORT}/v1/models`);
+      const models = await this.fetchJson<{ data?: Array<{ id: string }> }>(
+        `http://127.0.0.1:${LLAMA_CPP_PORT}/v1/models`,
+      );
       return RuntimeStatusSchema.parse({
         id: "llamaCpp",
         label: "llama.cpp",
         state: "running",
         enabled: true,
         installMethod: "brew",
-        detectedVersion: (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
+        detectedVersion:
+          (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
         binaryPath,
         health: "ok",
         healthMessage: `llama.cpp is serving ${models.data?.length ?? 0} model(s) with ${hostAcceleration.accelerationBackend === "metal" ? "Metal acceleration" : "CPU execution"}.`,
         endpoint: `http://127.0.0.1:${LLAMA_CPP_PORT}/v1`,
         installed: true,
-        lastStartedAt: await appStateService.getJsonSetting<string | null>("llamaCppStartedAt", null),
+        lastStartedAt: await appStateService.getJsonSetting<string | null>(
+          "llamaCppStartedAt",
+          null,
+        ),
         metadata: {
           models: models.data?.length ?? 0,
-          ...llamaMetadata
-        }
+          ...llamaMetadata,
+        },
       });
     } catch {
       return RuntimeStatusSchema.parse({
@@ -263,21 +292,29 @@ export class RuntimeService {
         state: "stopped",
         enabled: true,
         installMethod: "brew",
-        detectedVersion: (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
+        detectedVersion:
+          (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
         binaryPath,
         health: "warn",
         healthMessage: `llama.cpp is installed but its local server is not running. It will launch with ${hostAcceleration.accelerationBackend === "metal" ? "Metal acceleration" : "CPU execution"} defaults.`,
         endpoint: `http://127.0.0.1:${LLAMA_CPP_PORT}/v1`,
         installed: true,
-        lastStartedAt: await appStateService.getJsonSetting<string | null>("llamaCppStartedAt", null),
-        metadata: llamaMetadata
+        lastStartedAt: await appStateService.getJsonSetting<string | null>(
+          "llamaCppStartedAt",
+          null,
+        ),
+        metadata: llamaMetadata,
       });
     }
   }
 
   async getRuntimeStatuses(): Promise<RuntimeStatus[]> {
     return await this.runtimeStatusesCache.get(async () => {
-      return await Promise.all([harnessService.health(), this.ollamaStatus(), this.llamaCppStatus()]);
+      return await Promise.all([
+        harnessService.health(),
+        this.ollamaStatus(),
+        this.llamaCppStatus(),
+      ]);
     });
   }
 
@@ -299,7 +336,10 @@ export class RuntimeService {
 
     if (runtimeId === "ollama") {
       await runCommand("brew", ["services", "start", "ollama"]);
-      await appStateService.setJsonSetting("ollamaStartedAt", new Date().toISOString());
+      await appStateService.setJsonSetting(
+        "ollamaStartedAt",
+        new Date().toISOString(),
+      );
       this.invalidateCaches();
       return;
     }
@@ -316,7 +356,9 @@ export class RuntimeService {
     }
 
     if (runtimeId === "ollama") {
-      await runCommand("brew", ["services", "stop", "ollama"], { okExitCodes: [0, 1] });
+      await runCommand("brew", ["services", "stop", "ollama"], {
+        okExitCodes: [0, 1],
+      });
       this.invalidateCaches();
       return;
     }
@@ -334,36 +376,38 @@ export class RuntimeService {
       await appStateService.updateRuntimeSettings({
         selectedRuntime: "ollama",
         activeProviderId: "ollama-default",
-        ollamaModel: modelId
+        ollamaModel: modelId,
       });
       await harnessService.configureRuntimeModel({
         providerId: "ollama-default",
-        modelId
+        modelId,
       });
       await appStateService.markSetupStepCompleted("models", {
         selectedRuntime: "ollama",
-        selectedModel: modelId
+        selectedModel: modelId,
       });
       this.invalidateCaches();
       return;
     }
 
     if (runtimeId === "llamaCpp") {
-      const preset = LLAMA_CPP_PRESETS.find((entry) => entry.id === modelId) ?? LLAMA_CPP_PRESETS[0]!;
+      const preset =
+        LLAMA_CPP_PRESETS.find((entry) => entry.id === modelId) ??
+        LLAMA_CPP_PRESETS[0]!;
       await appStateService.updateRuntimeSettings({
         selectedRuntime: "llamaCpp",
         activeProviderId: "llamacpp-default",
         llamaCppModel: preset.hfRepo,
-        llamaCppContextWindow: preset.contextWindow
+        llamaCppContextWindow: preset.contextWindow,
       });
       await harnessService.configureRuntimeModel({
         providerId: "llamacpp-default",
         modelId: path.basename(preset.hfRepo).toLowerCase(),
-        contextWindow: preset.contextWindow
+        contextWindow: preset.contextWindow,
       });
       await appStateService.markSetupStepCompleted("models", {
         selectedRuntime: "llamaCpp",
-        selectedModel: preset.hfRepo
+        selectedModel: preset.hfRepo,
       });
       this.invalidateCaches();
       return;
@@ -382,22 +426,31 @@ export class RuntimeService {
           provider: "ollama",
           label: "Ollama",
           model: settings.ollamaModel,
+          contextWindow: settings.ollamaContextWindow,
           baseUrl: "http://127.0.0.1:11434",
           enabled: settings.activeProviderId === "ollama-default",
           toolSupport: true,
-          health: statuses.find((status) => status.id === "ollama")?.health ?? "warn",
-          healthMessage: statuses.find((status) => status.id === "ollama")?.healthMessage ?? "Unavailable"
+          health:
+            statuses.find((status) => status.id === "ollama")?.health ?? "warn",
+          healthMessage:
+            statuses.find((status) => status.id === "ollama")?.healthMessage ??
+            "Unavailable",
         }),
         ProviderProfileSchema.parse({
           id: "llamacpp-default",
           provider: "llamaCpp",
           label: "llama.cpp",
           model: settings.llamaCppModel,
+          contextWindow: settings.llamaCppContextWindow,
           baseUrl: `http://127.0.0.1:${LLAMA_CPP_PORT}/v1`,
           enabled: settings.activeProviderId === "llamacpp-default",
           toolSupport: true,
-          health: statuses.find((status) => status.id === "llamaCpp")?.health ?? "warn",
-          healthMessage: statuses.find((status) => status.id === "llamaCpp")?.healthMessage ?? "Unavailable"
+          health:
+            statuses.find((status) => status.id === "llamaCpp")?.health ??
+            "warn",
+          healthMessage:
+            statuses.find((status) => status.id === "llamaCpp")
+              ?.healthMessage ?? "Unavailable",
         }),
         ...cloudProviders
           .filter((provider) => provider.stored && provider.defaultModel)
@@ -407,13 +460,14 @@ export class RuntimeService {
               provider: "cloud",
               label: provider.label,
               model: provider.defaultModel ?? "",
+              contextWindow: null,
               baseUrl: null,
               enabled: settings.activeProviderId === provider.id,
               toolSupport: true,
               health: provider.health,
-              healthMessage: provider.healthMessage
-            })
-          )
+              healthMessage: provider.healthMessage,
+            }),
+          ),
       ];
     });
   }
@@ -421,7 +475,9 @@ export class RuntimeService {
   async listModels(runtimeId: RuntimeId) {
     if (runtimeId === "ollama") {
       try {
-        const tags = await this.fetchJson<{ models?: Array<{ name: string }> }>("http://127.0.0.1:11434/api/tags");
+        const tags = await this.fetchJson<{ models?: Array<{ name: string }> }>(
+          "http://127.0.0.1:11434/api/tags",
+        );
         return (tags.models ?? []).map((model) => model.name);
       } catch {
         return [];
@@ -471,12 +527,12 @@ export class RuntimeService {
         "--batch-size",
         String(Math.min(settings.llamaCppContextWindow, LLAMA_CPP_BATCH_SIZE)),
         "--ubatch-size",
-        String(Math.min(settings.llamaCppContextWindow, LLAMA_CPP_UBATCH_SIZE))
+        String(Math.min(settings.llamaCppContextWindow, LLAMA_CPP_UBATCH_SIZE)),
       ],
       {
         env: baseEnv(),
-        stdio: ["ignore", "pipe", "pipe"]
-      }
+        stdio: ["ignore", "pipe", "pipe"],
+      },
     );
 
     child.stdout.on("data", (chunk) => {
@@ -493,7 +549,10 @@ export class RuntimeService {
     });
 
     this.llamaCppProcess = child;
-    await appStateService.setJsonSetting("llamaCppStartedAt", new Date().toISOString());
+    await appStateService.setJsonSetting(
+      "llamaCppStartedAt",
+      new Date().toISOString(),
+    );
     this.invalidateCaches();
 
     for (let i = 0; i < HEALTH_CHECK_RETRIES; i++) {
@@ -503,12 +562,14 @@ export class RuntimeService {
         await harnessService.configureRuntimeModel({
           providerId: "llamacpp-default",
           modelId: path.basename(settings.llamaCppModel).toLowerCase(),
-          contextWindow: settings.llamaCppContextWindow
+          contextWindow: settings.llamaCppContextWindow,
         });
         return;
       } catch {
         if (i === HEALTH_CHECK_RETRIES - 1) {
-          throw new Error("llama.cpp server started but did not become ready in time.");
+          throw new Error(
+            "llama.cpp server started but did not become ready in time.",
+          );
         }
       }
     }

@@ -75,6 +75,7 @@ describe("QuickstartService", () => {
     selectedRuntime: "ollama" | "llamaCpp";
     activeProviderId: string;
     ollamaModel: string;
+    ollamaContextWindow: number;
     workspaceRoot: string | null;
   };
   let runtimeStatuses: Array<{
@@ -109,6 +110,7 @@ describe("QuickstartService", () => {
       selectedRuntime: "llamaCpp",
       activeProviderId: "llamacpp-default",
       ollamaModel: "qwen3.5:4b",
+      ollamaContextWindow: 65536,
       workspaceRoot: null,
     };
     runtimeStatuses = [

@@ -1,24 +1,23 @@
 :root {
   color-scheme: dark;
-  --bg: #111315;
-  --panel: #181d21;
-  --panel-strong: #1f252a;
-  --text: #f5f3eb;
-  --muted: #9ea7ae;
-  --accent: #f2c14e;
-  --accent-strong: #ed6a5a;
-  --border: rgba(255, 255, 255, 0.08);
-  --shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
+  --bg: #080a0d;
+  --panel: rgba(17, 22, 28, 0.86);
+  --panel-strong: rgba(21, 27, 34, 0.96);
+  --text: #f6f1e8;
+  --muted: #a4aeb8;
+  --accent: #f3c55c;
+  --accent-strong: #ff7b59;
+  --border: rgba(255, 255, 255, 0.09);
+  --shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
+  --shadow-soft: 0 14px 32px rgba(0, 0, 0, 0.26);
+  --focus-ring:
+    0 0 0 1px rgba(243, 197, 92, 0.28), 0 0 0 4px rgba(243, 197, 92, 0.14);
   --motion-fast: 140ms;
   --motion-base: 220ms;
   --motion-slow: 320ms;
   --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   font-family:
-    ui-sans-serif,
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+    "Avenir Next", "SF Pro Display", "Segoe UI", ui-sans-serif, sans-serif;
 }
 
 * {
@@ -34,15 +33,20 @@ body {
   background:
     radial-gradient(
       circle at top left,
-      rgba(242, 193, 78, 0.22),
-      transparent 30%
+      rgba(243, 197, 92, 0.18),
+      transparent 32%
     ),
     radial-gradient(
       circle at top right,
-      rgba(237, 106, 90, 0.18),
-      transparent 28%
+      rgba(255, 123, 89, 0.14),
+      transparent 34%
     ),
-    linear-gradient(180deg, #111315, #0a0d10 65%);
+    radial-gradient(
+      circle at 20% 82%,
+      rgba(243, 197, 92, 0.07),
+      transparent 26%
+    ),
+    linear-gradient(180deg, #0d1116, #07090c 72%);
   color: var(--text);
   overflow-x: hidden;
 }
@@ -74,18 +78,21 @@ button,
   color: #121212;
   font-weight: 700;
   cursor: pointer;
+  box-shadow: var(--shadow-soft);
   transition:
     transform var(--motion-fast) var(--motion-ease),
     opacity var(--motion-fast) var(--motion-ease),
     background-color var(--motion-base) var(--motion-ease),
-    border-color var(--motion-base) var(--motion-ease);
+    border-color var(--motion-base) var(--motion-ease),
+    box-shadow var(--motion-base) var(--motion-ease);
 }
 
 button.secondary,
 .ghost-button,
 .button-link.secondary {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.07);
   color: var(--text);
+  box-shadow: none;
 }
 
 button:disabled {
@@ -100,9 +107,19 @@ pre {
   width: 100%;
   border-radius: 16px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.045);
   color: var(--text);
   padding: 0.9rem 1rem;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 textarea {
@@ -134,7 +151,9 @@ pre {
 .summary-card,
 .status-banner {
   backdrop-filter: blur(20px);
-  background: rgba(24, 29, 33, 0.84);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 42%),
+    var(--panel);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
   animation: panel-enter var(--motion-slow) var(--motion-ease);
@@ -144,7 +163,7 @@ pre {
 }
 
 .hero-card {
-  padding: 1.45rem;
+  padding: 1.55rem;
   border-radius: 28px;
   width: min(100%, 620px);
 }
@@ -162,7 +181,7 @@ pre {
 .panel-heading h2 {
   margin: 0;
   font-size: clamp(1.6rem, 5vw, 2.8rem);
-  line-height: 1;
+  line-height: 0.94;
 }
 
 .topbar h1 {
@@ -210,6 +229,7 @@ small {
 .topbar {
   align-items: center;
   grid-template-columns: 1fr auto;
+  margin-bottom: 0.2rem;
 }
 
 .system-rail,
@@ -228,6 +248,7 @@ small {
   display: grid;
   gap: 0.7rem;
   min-height: 0;
+  padding: 1rem 1.05rem;
 }
 
 .system-rail-card.good {
@@ -342,14 +363,15 @@ small {
 }
 
 .panel-card {
-  border-radius: 24px;
-  padding: 1.1rem;
+  border-radius: 26px;
+  padding: 1.15rem;
   contain: layout paint;
   transition:
     transform var(--motion-fast) var(--motion-ease),
     border-color var(--motion-base) var(--motion-ease),
     background-color var(--motion-base) var(--motion-ease),
-    opacity var(--motion-base) var(--motion-ease);
+    opacity var(--motion-base) var(--motion-ease),
+    box-shadow var(--motion-base) var(--motion-ease);
 }
 
 .active-card {
@@ -369,7 +391,8 @@ small {
 .setup-intro {
   margin: 0.65rem 0 0;
   color: var(--muted);
-  line-height: 1.45;
+  line-height: 1.55;
+  max-width: 66ch;
 }
 
 .main-layout {
@@ -710,7 +733,12 @@ small {
 }
 
 .session-pill {
+  display: grid;
+  gap: 0.35rem;
   min-width: 210px;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 20px;
   text-align: left;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
@@ -726,18 +754,34 @@ small {
 .session-pill.active {
   background: linear-gradient(
     135deg,
-    rgba(242, 193, 78, 0.28),
-    rgba(237, 106, 90, 0.18)
+    rgba(243, 197, 92, 0.22),
+    rgba(255, 123, 89, 0.16)
   );
+  border-color: rgba(243, 197, 92, 0.28);
   transform: translateY(-1px);
+}
+
+.session-pill strong {
+  font-size: 0.98rem;
+  line-height: 1.15;
+}
+
+.session-pill span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.42;
 }
 
 .chat-thread {
   display: grid;
   gap: 0.8rem;
+  align-content: start;
 }
 
 .message-card {
+  width: min(100%, 52rem);
   border-radius: 22px;
   padding: 1rem 1.1rem;
   border: 1px solid var(--border);
@@ -751,11 +795,19 @@ small {
 }
 
 .message-card.user {
-  background: rgba(242, 193, 78, 0.1);
+  justify-self: end;
+  background: rgba(243, 197, 92, 0.11);
 }
 
 .message-card.assistant {
+  justify-self: start;
   background: rgba(255, 255, 255, 0.05);
+}
+
+.message-card.tool,
+.message-card.system {
+  justify-self: start;
+  background: rgba(255, 255, 255, 0.035);
 }
 
 .message-card header {
@@ -768,9 +820,29 @@ small {
 
 .message-card p {
   margin: 0;
-  line-height: 1.5;
+  line-height: 1.62;
+  font-size: 1rem;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.thread-header,
+.empty-thread {
+  background:
+    linear-gradient(180deg, rgba(243, 197, 92, 0.06), transparent 60%),
+    rgba(255, 255, 255, 0.035);
+}
+
+.thread-header-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.thread-header h3 {
+  margin: 0.18rem 0 0;
+  font-size: 1.2rem;
 }
 
 .composer {
@@ -838,8 +910,9 @@ small {
   padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
   border-radius: 26px;
   border: 1px solid var(--border);
-  background: rgba(17, 19, 21, 0.92);
+  background: rgba(10, 13, 17, 0.94);
   backdrop-filter: blur(24px);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.36);
   backface-visibility: hidden;
   transform: translateZ(0);
   will-change: transform, opacity;
@@ -871,7 +944,7 @@ small {
 .nav-link.active,
 .bottom-nav button.active {
   color: var(--text);
-  background: rgba(242, 193, 78, 0.12);
+  background: rgba(243, 197, 92, 0.14);
   transform: translateY(-1px);
 }
 
@@ -1016,6 +1089,11 @@ button:hover:not(:disabled),
     grid-template-columns: 1fr;
   }
 
+  .thread-header-row {
+    flex-direction: column;
+    align-items: start;
+  }
+
   .system-rail {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1086,12 +1164,20 @@ button:hover:not(:disabled),
     grid-template-columns: 1fr;
   }
 
+  .hero-card h1 {
+    font-size: clamp(2.2rem, 12vw, 3.5rem);
+  }
+
   .topbar h1 {
     font-size: 1.65rem;
   }
 
   .panel-card {
     padding: 1rem;
+  }
+
+  .message-card {
+    width: 100%;
   }
 }
 

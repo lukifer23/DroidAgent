@@ -15,6 +15,7 @@ import {
 } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { postJson } from "../lib/api";
+import { formatTokenBudget } from "../lib/formatters";
 
 const DEFAULT_OLLAMA_MODEL = "qwen3.5:4b";
 
@@ -226,9 +227,12 @@ export function SetupScreen() {
           setupModel,
           "Will prepare automatically",
         ),
-        detail: providerModelMatches && providerSelected
-          ? "The default Ollama provider is already pointing at the chosen model."
-          : "DroidAgent will pin this model for the first chat.",
+        detail:
+          providerModelMatches && providerSelected
+            ? `The default Ollama provider is already pointing at the chosen model with a ${formatTokenBudget(
+                ollamaProvider?.contextWindow,
+              )} context budget.`
+            : "DroidAgent will pin this model for the first chat.",
         ready: providerModelMatches && providerSelected,
       },
     ],
@@ -252,8 +256,8 @@ export function SetupScreen() {
         value: tailscaleReady ? "Authenticated" : "Required",
         detail: tailscaleReady
           ? "This Mac can now publish a private remote URL over Tailscale."
-          : access?.tailscaleStatus.healthMessage ??
-            "Finish Tailscale sign-in on this Mac first.",
+          : (access?.tailscaleStatus.healthMessage ??
+            "Finish Tailscale sign-in on this Mac first."),
         ready: tailscaleReady,
       },
       {
@@ -272,7 +276,7 @@ export function SetupScreen() {
             : "Waiting for the URL",
         detail:
           remoteReady && passkeyConfigured
-            ? "Open the phone URL, then sign in with the same owner passkey."
+            ? "Open the phone URL. If this device does not already have an owner passkey, use a one-time device enrollment link first."
             : "Once the URL is live, DroidAgent is ready for the phone browser or PWA shell.",
         ready: remoteReady && passkeyConfigured,
       },
@@ -308,8 +312,12 @@ export function SetupScreen() {
   async function executeQuickstart() {
     setActiveAction("quickstart");
     try {
+      const requestedWorkspaceRoot =
+        workspaceInput.trim() === "." && dashboard?.setup.workspaceRoot
+          ? dashboard.setup.workspaceRoot
+          : workspaceInput;
       const result = await postJson<QuickstartResult>("/api/setup/quickstart", {
-        workspaceRoot: workspaceInput,
+        workspaceRoot: requestedWorkspaceRoot,
         modelId: setupModel,
       });
       setQuickstartResult(result);
@@ -346,7 +354,11 @@ export function SetupScreen() {
   }, [access, dashboard, hostReady, remoteReady, runAction, tailscaleReady]);
 
   useEffect(() => {
-    if (!canIssueEnrollmentLink || bootstrapLink || bootstrapIssuedRef.current) {
+    if (
+      !canIssueEnrollmentLink ||
+      bootstrapLink ||
+      bootstrapIssuedRef.current
+    ) {
       return;
     }
 
@@ -381,9 +393,9 @@ export function SetupScreen() {
             <div className="eyebrow">Quickstart</div>
             <h2>Make this Mac and your phone ready.</h2>
             <p className="setup-intro">
-              DroidAgent should handle the normal path in one pass: workspace,
-              Ollama, OpenClaw, the default local model, then the private
-              Tailscale phone URL.
+              DroidAgent should handle the normal path in one pass: shared
+              workspace, Ollama, OpenClaw, a 65k local context budget, then the
+              private Tailscale phone URL.
             </p>
           </div>
           <div className="setup-hero-stats">
@@ -634,8 +646,13 @@ export function SetupScreen() {
                     void runAction(async () => {
                       setActiveAction("workspace");
                       try {
+                        const requestedWorkspaceRoot =
+                          workspaceInput.trim() === "." &&
+                          dashboard?.setup.workspaceRoot
+                            ? dashboard.setup.workspaceRoot
+                            : workspaceInput;
                         await postJson("/api/setup/workspace", {
-                          workspaceRoot: workspaceInput,
+                          workspaceRoot: requestedWorkspaceRoot,
                         });
                         await refreshSetupQueries();
                       } finally {

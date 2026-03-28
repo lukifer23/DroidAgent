@@ -24,7 +24,7 @@ export function ChatScreen() {
     sendRealtimeCommand,
     trackChatSubmit,
     runAction,
-    wsStatus
+    wsStatus,
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
@@ -33,17 +33,25 @@ export function ChatScreen() {
   const [chatInput, setChatInput] = useState("");
 
   const sessions = dashboard?.sessions ?? [];
+  const activeSession =
+    sessions.find((session) => session.id === selectedSessionId) ?? sessions[0];
   const streaming = streamingRuns[selectedSessionId];
   const transportReady = wsStatus === "connected" && Boolean(selectedSessionId);
 
   const messagesQuery = useQuery({
     queryKey: ["sessions", selectedSessionId, "messages"],
-    queryFn: () => api<ChatMessage[]>(`/api/sessions/${encodeURIComponent(selectedSessionId)}/messages`),
+    queryFn: () =>
+      api<ChatMessage[]>(
+        `/api/sessions/${encodeURIComponent(selectedSessionId)}/messages`,
+      ),
     enabled: Boolean(authQuery.data?.user && selectedSessionId),
-    staleTime: 15_000
+    staleTime: 15_000,
   });
 
-  const messages = useMemo(() => messagesQuery.data ?? [], [messagesQuery.data]);
+  const messages = useMemo(
+    () => messagesQuery.data ?? [],
+    [messagesQuery.data],
+  );
 
   async function handleSendChat() {
     const nextMessage = chatInput.trim();
@@ -58,13 +66,13 @@ export function ChatScreen() {
       text: nextMessage,
       createdAt: new Date().toISOString(),
       status: "complete",
-      source: "web"
+      source: "web",
     };
 
-    queryClient.setQueryData<ChatMessage[]>(["sessions", selectedSessionId, "messages"], [
-      ...messages,
-      optimisticMessage
-    ]);
+    queryClient.setQueryData<ChatMessage[]>(
+      ["sessions", selectedSessionId, "messages"],
+      [...messages, optimisticMessage],
+    );
 
     trackChatSubmit(selectedSessionId);
     const sentLive =
@@ -73,13 +81,16 @@ export function ChatScreen() {
         type: "chat.send",
         payload: {
           sessionId: selectedSessionId,
-          text: nextMessage
-        }
+          text: nextMessage,
+        },
       });
     if (!sentLive) {
-      await postJson(`/api/sessions/${encodeURIComponent(selectedSessionId)}/messages`, {
-        text: nextMessage
-      });
+      await postJson(
+        `/api/sessions/${encodeURIComponent(selectedSessionId)}/messages`,
+        {
+          text: nextMessage,
+        },
+      );
     }
     setChatInput("");
   }
@@ -104,6 +115,22 @@ export function ChatScreen() {
       </aside>
 
       <div className="chat-thread">
+        <article className="panel-card compact thread-header">
+          <div className="thread-header-row">
+            <div>
+              <div className="journey-kicker">Current Session</div>
+              <h3>{activeSession?.title ?? "Operator Chat"}</h3>
+            </div>
+            <span className={`status-chip${transportReady ? " ready" : ""}`}>
+              {transportReady ? "Live" : "Reconnecting"}
+            </span>
+          </div>
+          <small>
+            {activeSession?.lastMessagePreview ||
+              "Start a clean operator conversation from the web shell."}
+          </small>
+        </article>
+
         {(dashboard?.approvals ?? []).length > 0 ? (
           <article className="panel-card">
             <h3>Approvals</h3>
@@ -117,7 +144,7 @@ export function ChatScreen() {
                       onClick={() =>
                         void runAction(async () => {
                           await postJson(`/api/approvals/${approval.id}`, {
-                            resolution: "approved"
+                            resolution: "approved",
                           });
                         }, "Approval granted.")
                       }
@@ -129,7 +156,7 @@ export function ChatScreen() {
                       onClick={() =>
                         void runAction(async () => {
                           await postJson(`/api/approvals/${approval.id}`, {
-                            resolution: "denied"
+                            resolution: "denied",
                           });
                         }, "Approval denied.")
                       }
@@ -143,6 +170,17 @@ export function ChatScreen() {
           </article>
         ) : null}
 
+        {messages.length === 0 && !streaming ? (
+          <article className="panel-card compact empty-thread">
+            <strong>Fresh operator thread</strong>
+            <small>
+              Use this session for direct Mac control. DroidAgent keeps the
+              default path local-first with Ollama, OpenClaw, and the shared
+              workspace.
+            </small>
+          </article>
+        ) : null}
+
         {messages.map((message) => (
           <article key={message.id} className={`message-card ${message.role}`}>
             <header>{roleLabel(message.role)}</header>
@@ -152,7 +190,7 @@ export function ChatScreen() {
         {streaming ? (
           <article className="message-card assistant streaming">
             <header>assistant</header>
-            <p>{streaming.text || "Thinking..."}</p>
+            <p>{streaming.text || "Starting the run..."}</p>
           </article>
         ) : null}
       </div>
@@ -171,7 +209,9 @@ export function ChatScreen() {
           disabled={!selectedSessionId}
         />
         <small className="composer-status">
-          {transportReady ? "Live connection ready." : "Live connection is reconnecting before the next run can start."}
+          {transportReady
+            ? "Live connection ready."
+            : "Live connection is reconnecting before the next run can start."}
         </small>
         <div className="button-row">
           <button type="submit" disabled={!transportReady || !chatInput.trim()}>
@@ -188,11 +228,14 @@ export function ChatScreen() {
                     sendRealtimeCommand({
                       type: "chat.abort",
                       payload: {
-                        sessionId: selectedSessionId
-                      }
+                        sessionId: selectedSessionId,
+                      },
                     });
                   if (!aborted) {
-                    await postJson(`/api/sessions/${encodeURIComponent(selectedSessionId)}/abort`, {});
+                    await postJson(
+                      `/api/sessions/${encodeURIComponent(selectedSessionId)}/abort`,
+                      {},
+                    );
                   }
                 }, "Run aborted.")
               }

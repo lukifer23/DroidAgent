@@ -1,19 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { paths } from "../env.js";
+
 const {
   getRuntimeSettings,
   updateRuntimeSettings,
   getJsonSetting,
   setJsonSetting,
   getProcessEnv,
-  runCommand
+  runCommand,
 } = vi.hoisted(() => ({
   getRuntimeSettings: vi.fn(),
   updateRuntimeSettings: vi.fn(),
   getJsonSetting: vi.fn(),
   setJsonSetting: vi.fn(),
   getProcessEnv: vi.fn(),
-  runCommand: vi.fn()
+  runCommand: vi.fn(),
 }));
 
 vi.mock("./app-state-service.js", () => ({
@@ -21,14 +23,14 @@ vi.mock("./app-state-service.js", () => ({
     getRuntimeSettings,
     updateRuntimeSettings,
     getJsonSetting,
-    setJsonSetting
-  }
+    setJsonSetting,
+  },
 }));
 
 vi.mock("./keychain-service.js", () => ({
   keychainService: {
-    getProcessEnv
-  }
+    getProcessEnv,
+  },
 }));
 
 vi.mock("../lib/process.js", () => ({
@@ -38,11 +40,11 @@ vi.mock("../lib/process.js", () => ({
       message: string,
       public readonly stdout: string,
       public readonly stderr: string,
-      public readonly exitCode: number | null
+      public readonly exitCode: number | null,
     ) {
       super(message);
     }
-  }
+  },
 }));
 
 import { openclawService } from "./openclaw-service.js";
@@ -51,6 +53,7 @@ describe("OpenClaw context management policy", () => {
   let runtimeSettings: {
     activeProviderId: string;
     ollamaModel: string;
+    ollamaContextWindow: number;
     llamaCppModel: string;
     llamaCppContextWindow: number;
     smartContextManagementEnabled: boolean;
@@ -67,13 +70,24 @@ describe("OpenClaw context management policy", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    (openclawService as unknown as { gatewayToken: string | null }).gatewayToken = null;
-    (openclawService as unknown as { gatewayProcess: unknown | null }).gatewayProcess = null;
-    (openclawService as unknown as { activeRuns: Map<string, unknown> }).activeRuns = new Map();
+    (
+      openclawService as unknown as { gatewayToken: string | null }
+    ).gatewayToken = null;
+    (
+      openclawService as unknown as { gatewayProcess: unknown | null }
+    ).gatewayProcess = null;
+    (
+      openclawService as unknown as { activeRuns: Map<string, unknown> }
+    ).activeRuns = new Map();
+    vi.spyOn(
+      openclawService as never,
+      "ensureWorkspaceScaffold" as never,
+    ).mockResolvedValue(undefined);
 
     runtimeSettings = {
       activeProviderId: "anthropic",
       ollamaModel: "qwen3.5:4b",
+      ollamaContextWindow: 65536,
       llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
       llamaCppContextWindow: 8192,
       smartContextManagementEnabled: true,
@@ -84,58 +98,88 @@ describe("OpenClaw context management policy", () => {
         gemini: { defaultModel: "gemini/gemini-2.5-pro" },
         groq: { defaultModel: "groq/llama-3.3-70b-versatile" },
         together: { defaultModel: "together/deepseek-r1" },
-        xai: { defaultModel: "xai/grok-4-fast" }
-      }
+        xai: { defaultModel: "xai/grok-4-fast" },
+      },
     };
 
     getRuntimeSettings.mockImplementation(async () => runtimeSettings);
-    updateRuntimeSettings.mockImplementation(async (update: Record<string, unknown>) => {
-      runtimeSettings = {
-        ...runtimeSettings,
-        ...update
-      };
-      return runtimeSettings;
-    });
+    updateRuntimeSettings.mockImplementation(
+      async (update: Record<string, unknown>) => {
+        runtimeSettings = {
+          ...runtimeSettings,
+          ...update,
+        };
+        return runtimeSettings;
+      },
+    );
     getJsonSetting.mockResolvedValue(null);
     setJsonSetting.mockResolvedValue(undefined);
     getProcessEnv.mockResolvedValue({});
     runCommand.mockResolvedValue({
       stdout: "",
       stderr: "",
-      exitCode: 0
+      exitCode: 0,
     });
   });
 
   it("writes safeguard compaction and cache-ttl pruning for Anthropic-backed models", async () => {
-    vi.spyOn(openclawService as never, "readCurrentConfig" as never).mockReturnValue(null);
-    const execSpy = vi.spyOn(openclawService as never, "execOpenClaw" as never).mockResolvedValue("");
+    vi.spyOn(
+      openclawService as never,
+      "readCurrentConfig" as never,
+    ).mockReturnValue(null);
+    const execSpy = vi
+      .spyOn(openclawService as never, "execOpenClaw" as never)
+      .mockResolvedValue("");
 
     await openclawService.setSmartContextManagement(true);
 
     const compactionArgs = execSpy.mock.calls[0]?.[0] as string[];
     const pruningArgs = execSpy.mock.calls[1]?.[0] as string[];
-    const compaction = JSON.parse(compactionArgs[3] ?? "{}") as Record<string, unknown>;
-    const pruning = JSON.parse(pruningArgs[3] ?? "{}") as Record<string, unknown>;
+    const compaction = JSON.parse(compactionArgs[3] ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    const pruning = JSON.parse(pruningArgs[3] ?? "{}") as Record<
+      string,
+      unknown
+    >;
 
     expect(compaction.mode).toBe("safeguard");
     expect(compaction.reserveTokensFloor).toBe(24000);
     expect((compaction.memoryFlush as { enabled: boolean }).enabled).toBe(true);
-    expect((compaction.memoryFlush as { softThresholdTokens: number }).softThresholdTokens).toBe(6000);
+    expect(
+      (compaction.memoryFlush as { softThresholdTokens: number })
+        .softThresholdTokens,
+    ).toBe(6000);
     expect(pruning.mode).toBe("cache-ttl");
-    expect((pruning.tools as { deny: string[] }).deny).toEqual(["browser", "canvas"]);
+    expect((pruning.tools as { deny: string[] }).deny).toEqual([
+      "browser",
+      "canvas",
+    ]);
   });
 
   it("turns pruning off for local runtimes while keeping compaction active", async () => {
     runtimeSettings.activeProviderId = "ollama-default";
-    vi.spyOn(openclawService as never, "readCurrentConfig" as never).mockReturnValue(null);
-    const execSpy = vi.spyOn(openclawService as never, "execOpenClaw" as never).mockResolvedValue("");
+    vi.spyOn(
+      openclawService as never,
+      "readCurrentConfig" as never,
+    ).mockReturnValue(null);
+    const execSpy = vi
+      .spyOn(openclawService as never, "execOpenClaw" as never)
+      .mockResolvedValue("");
 
     await openclawService.setSmartContextManagement(true);
 
     const compactionArgs = execSpy.mock.calls[0]?.[0] as string[];
     const pruningArgs = execSpy.mock.calls[1]?.[0] as string[];
-    const compaction = JSON.parse(compactionArgs[3] ?? "{}") as Record<string, unknown>;
-    const pruning = JSON.parse(pruningArgs[3] ?? "{}") as Record<string, unknown>;
+    const compaction = JSON.parse(compactionArgs[3] ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    const pruning = JSON.parse(pruningArgs[3] ?? "{}") as Record<
+      string,
+      unknown
+    >;
 
     expect(compaction.mode).toBe("safeguard");
     expect(pruning.mode).toBe("off");
@@ -144,14 +188,19 @@ describe("OpenClaw context management policy", () => {
   it("writes the currently selected Ollama model into the default primary model", async () => {
     runtimeSettings.activeProviderId = "ollama-default";
     runtimeSettings.ollamaModel = "qwen3.5:4b";
-    vi.spyOn(openclawService as never, "readCurrentConfig" as never).mockReturnValue(null);
-    const execSpy = vi.spyOn(openclawService as never, "execOpenClaw" as never).mockResolvedValue("");
+    vi.spyOn(
+      openclawService as never,
+      "readCurrentConfig" as never,
+    ).mockReturnValue(null);
+    const execSpy = vi
+      .spyOn(openclawService as never, "execOpenClaw" as never)
+      .mockResolvedValue("");
 
     await openclawService.ensureConfigured();
 
-    const modelArgs = execSpy.mock.calls.find((call) => (call[0] as string[])[2] === "agents.defaults.model.primary")?.[0] as
-      | string[]
-      | undefined;
+    const modelArgs = execSpy.mock.calls.find(
+      (call) => (call[0] as string[])[2] === "agents.defaults.model.primary",
+    )?.[0] as string[] | undefined;
 
     expect(modelArgs).toBeDefined();
     expect(JSON.parse(modelArgs?.[3] ?? '""')).toBe("ollama/qwen3.5:4b");
@@ -167,57 +216,102 @@ describe("OpenClaw context management policy", () => {
         bind: "loopback",
         auth: {
           mode: "token",
-          token: "existing-token"
+          token: "existing-token",
         },
         http: {
           endpoints: {
             chatCompletions: {
-              enabled: true
-            }
-          }
-        }
+              enabled: true,
+            },
+          },
+        },
       },
       agents: {
         defaults: {
+          workspace: paths.workspaceRoot,
           model: {
-            primary: "ollama/qwen3.5:4b"
+            primary: "ollama/qwen3.5:4b",
           },
           thinkingDefault: "off",
           compaction: {
             mode: "safeguard",
             timeoutSeconds: 900,
-            reserveTokensFloor: 24000,
+            reserveTokensFloor: 16384,
             identifierPolicy: "strict",
             postCompactionSections: ["Session Startup", "Red Lines"],
             memoryFlush: {
               enabled: true,
-              softThresholdTokens: 6000,
-              systemPrompt: "Session nearing compaction. Store durable memories now.",
-              prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store."
-            }
+              softThresholdTokens: 5242,
+              systemPrompt:
+                "Session nearing compaction. Store durable memories now.",
+              prompt:
+                "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
+            },
           },
           contextPruning: {
-            mode: "off"
-          }
-        }
+            mode: "off",
+          },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            apiKey: "ollama-local",
+            models: [
+              {
+                id: "qwen3.5:4b",
+                name: "qwen3.5:4b",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 65536,
+                maxTokens: 65536,
+              },
+            ],
+          },
+        },
+      },
+      hooks: {
+        internal: {
+          entries: {
+            "bootstrap-extra-files": {
+              paths: [
+                "AGENTS.md",
+                "TOOLS.md",
+                "SOUL.md",
+                "IDENTITY.md",
+                "USER.md",
+                "MEMORY.md",
+                "memory/**/*.md",
+              ],
+            },
+          },
+        },
       },
       tools: {
         exec: {
           host: "gateway",
           security: "allowlist",
-          ask: "on-miss"
-        }
+          ask: "on-miss",
+        },
       },
       channels: {
         signal: {
           dmPolicy: "pairing",
-          groupPolicy: "disabled"
-        }
-      }
+          groupPolicy: "disabled",
+        },
+      },
     };
 
-    vi.spyOn(openclawService as never, "readCurrentConfig" as never).mockReturnValue(currentConfig);
-    const execSpy = vi.spyOn(openclawService as never, "execOpenClaw" as never).mockResolvedValue("");
+    vi.spyOn(
+      openclawService as never,
+      "readCurrentConfig" as never,
+    ).mockReturnValue(currentConfig);
+    const execSpy = vi
+      .spyOn(openclawService as never, "execOpenClaw" as never)
+      .mockResolvedValue("");
     getJsonSetting.mockImplementation(async (key: string) => {
       if (key === "openclawGatewayToken") {
         return "existing-token";
@@ -236,61 +330,106 @@ describe("OpenClaw context management policy", () => {
     const currentConfig = {
       agents: {
         defaults: {
+          workspace: paths.workspaceRoot,
           compaction: {
             mode: "safeguard",
-            reserveTokensFloor: 24000,
+            reserveTokensFloor: 16384,
             identifierPolicy: "strict",
             postCompactionSections: ["Session Startup", "Red Lines"],
             timeoutSeconds: 900,
             memoryFlush: {
               enabled: true,
-              softThresholdTokens: 6000,
-              prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
-              systemPrompt: "Session nearing compaction. Store durable memories now."
-            }
+              softThresholdTokens: 5242,
+              prompt:
+                "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
+              systemPrompt:
+                "Session nearing compaction. Store durable memories now.",
+            },
           },
           contextPruning: {
-            mode: "off"
+            mode: "off",
           },
           thinkingDefault: "off",
           model: {
-            primary: "ollama/qwen3.5:4b"
-          }
-        }
+            primary: "ollama/qwen3.5:4b",
+          },
+        },
+      },
+      models: {
+        providers: {
+          ollama: {
+            models: [
+              {
+                maxTokens: 65536,
+                cost: { cacheWrite: 0, input: 0, cacheRead: 0, output: 0 },
+                contextWindow: 65536,
+                input: ["text"],
+                reasoning: false,
+                name: "qwen3.5:4b",
+                id: "qwen3.5:4b",
+              },
+            ],
+            api: "ollama",
+            apiKey: "ollama-local",
+            baseUrl: "http://127.0.0.1:11434",
+          },
+        },
       },
       gateway: {
         auth: {
           token: "existing-token",
-          mode: "token"
+          mode: "token",
         },
         http: {
           endpoints: {
             chatCompletions: {
-              enabled: true
-            }
-          }
+              enabled: true,
+            },
+          },
         },
         bind: "loopback",
         port: 18789,
-        mode: "local"
+        mode: "local",
+      },
+      hooks: {
+        internal: {
+          entries: {
+            "bootstrap-extra-files": {
+              paths: [
+                "AGENTS.md",
+                "TOOLS.md",
+                "SOUL.md",
+                "IDENTITY.md",
+                "USER.md",
+                "MEMORY.md",
+                "memory/**/*.md",
+              ],
+            },
+          },
+        },
       },
       tools: {
         exec: {
           ask: "on-miss",
           security: "allowlist",
-          host: "gateway"
-        }
+          host: "gateway",
+        },
       },
       channels: {
         signal: {
           groupPolicy: "disabled",
-          dmPolicy: "pairing"
-        }
-      }
+          dmPolicy: "pairing",
+        },
+      },
     };
 
-    vi.spyOn(openclawService as never, "readCurrentConfig" as never).mockReturnValue(currentConfig);
-    const execSpy = vi.spyOn(openclawService as never, "execOpenClaw" as never).mockResolvedValue("");
+    vi.spyOn(
+      openclawService as never,
+      "readCurrentConfig" as never,
+    ).mockReturnValue(currentConfig);
+    const execSpy = vi
+      .spyOn(openclawService as never, "execOpenClaw" as never)
+      .mockResolvedValue("");
     getJsonSetting.mockImplementation(async (key: string) => {
       if (key === "openclawGatewayToken") {
         return "existing-token";
@@ -312,33 +451,43 @@ describe("OpenClaw context management policy", () => {
     await openclawService.startGateway();
 
     expect(execSpy).toHaveBeenCalledTimes(1);
-    expect(setJsonSetting).not.toHaveBeenCalledWith("openclawStartedAt", expect.anything());
+    expect(setJsonSetting).not.toHaveBeenCalledWith(
+      "openclawStartedAt",
+      expect.anything(),
+    );
   });
 
   it("surfaces a port conflict when another OpenClaw service owns the configured gateway port", async () => {
-    vi.spyOn(openclawService as never, "execOpenClaw" as never).mockRejectedValue(
-      new Error("gateway connect failed: GatewayClientRequestError: unauthorized: gateway token mismatch")
+    vi.spyOn(
+      openclawService as never,
+      "execOpenClaw" as never,
+    ).mockRejectedValue(
+      new Error(
+        "gateway connect failed: GatewayClientRequestError: unauthorized: gateway token mismatch",
+      ),
     );
     runCommand
       .mockResolvedValueOnce({
         stdout: "p87974\n",
         stderr: "",
-        exitCode: 0
+        exitCode: 0,
       })
       .mockResolvedValueOnce({
         stdout: "openclaw-gateway\n",
         stderr: "",
-        exitCode: 0
+        exitCode: 0,
       });
 
     const status = await openclawService.status();
 
     expect(status.health).toBe("warn");
-    expect(status.healthMessage).toContain("A different OpenClaw service is already using the configured DroidAgent gateway port.");
+    expect(status.healthMessage).toContain(
+      "A different OpenClaw service is already using the configured DroidAgent gateway port.",
+    );
     expect(status.healthMessage).toContain("openclaw-gateway");
     expect(status.metadata).toMatchObject({
       portOwnerPid: 87974,
-      portOwnerCommand: "openclaw-gateway"
+      portOwnerCommand: "openclaw-gateway",
     });
   });
 
@@ -349,14 +498,14 @@ describe("OpenClaw context management policy", () => {
         displayName: "heartbeat",
         derivedTitle: "Hello",
         updatedAtMs: 1_710_000_000_000,
-        lastMessagePreview: "ignore this"
+        lastMessagePreview: "ignore this",
       },
       {
         key: "signal:+15551234567",
         derivedTitle: "Signal thread",
         updatedAtMs: 1_710_000_000_500,
-        lastMessagePreview: "pairing request"
-      }
+        lastMessagePreview: "pairing request",
+      },
     ] as never);
 
     const sessions = await openclawService.listSessions();
@@ -364,10 +513,14 @@ describe("OpenClaw context management policy", () => {
     expect(sessions[0]).toMatchObject({
       id: "web:operator",
       title: "Operator Chat",
-      scope: "web"
+      scope: "web",
     });
-    expect(sessions.some((session) => session.id === "agent:main:main")).toBe(false);
-    expect(sessions.some((session) => session.id === "signal:+15551234567")).toBe(true);
+    expect(sessions.some((session) => session.id === "agent:main:main")).toBe(
+      false,
+    );
+    expect(
+      sessions.some((session) => session.id === "signal:+15551234567"),
+    ).toBe(true);
   });
 
   it("renders structured history content into readable chat messages", async () => {
@@ -380,9 +533,9 @@ describe("OpenClaw context management policy", () => {
           content: [
             {
               type: "text",
-              text: "Read HEARTBEAT.md if it exists."
-            }
-          ]
+              text: "Read HEARTBEAT.md if it exists.",
+            },
+          ],
         },
         {
           id: "message-assistant",
@@ -393,10 +546,10 @@ describe("OpenClaw context management policy", () => {
               type: "toolCall",
               name: "read",
               arguments: {
-                path: "/tmp/HEARTBEAT.md"
-              }
-            }
-          ]
+                path: "/tmp/HEARTBEAT.md",
+              },
+            },
+          ],
         },
         {
           id: "message-tool",
@@ -405,11 +558,11 @@ describe("OpenClaw context management policy", () => {
           content: [
             {
               type: "text",
-              text: "HEARTBEAT_OK"
-            }
-          ]
-        }
-      ]
+              text: "HEARTBEAT_OK",
+            },
+          ],
+        },
+      ],
     } as never);
 
     const messages = await openclawService.loadHistory("web:operator");
@@ -417,14 +570,14 @@ describe("OpenClaw context management policy", () => {
     expect(messages).toHaveLength(3);
     expect(messages[0]).toMatchObject({
       role: "user",
-      text: "Read HEARTBEAT.md if it exists."
+      text: "Read HEARTBEAT.md if it exists.",
     });
     expect(messages[1]?.role).toBe("assistant");
     expect(messages[1]?.text).toContain("Tool call: read");
     expect(messages[1]?.text).toContain('"path": "/tmp/HEARTBEAT.md"');
     expect(messages[2]).toMatchObject({
       role: "tool",
-      text: "HEARTBEAT_OK"
+      text: "HEARTBEAT_OK",
     });
   });
 });

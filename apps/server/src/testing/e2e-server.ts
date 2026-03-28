@@ -57,12 +57,25 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
   const sessionId = randomUUID();
   const now = new Date().toISOString();
 
-  for (const dir of [homeDir, appDir, logsDir, jobsLogsDir, tempDir, stateDir, uploadsDir, workspaceRoot]) {
+  for (const dir of [
+    homeDir,
+    appDir,
+    logsDir,
+    jobsLogsDir,
+    tempDir,
+    stateDir,
+    uploadsDir,
+    workspaceRoot,
+  ]) {
     await fs.mkdir(dir, { recursive: true });
   }
 
   await fs.writeFile(sampleFilePath, "first pass", "utf8");
-  await fs.writeFile(path.join(workspaceRoot, "README.md"), "# DroidAgent E2E Workspace\n", "utf8");
+  await fs.writeFile(
+    path.join(workspaceRoot, "README.md"),
+    "# DroidAgent E2E Workspace\n",
+    "utf8",
+  );
 
   const sqlite = new Database(dbPath);
   sqlite.exec(`
@@ -118,20 +131,28 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
     );
   `);
 
-  sqlite.prepare("INSERT INTO users (id, username, display_name, created_at) VALUES (?, ?, ?, ?)").run(
-    userId,
-    "owner",
-    "DroidAgent Owner",
-    now
-  );
   sqlite
-    .prepare("INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(sessionId, userId, hashToken(sessionToken), new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(), now);
+    .prepare(
+      "INSERT INTO users (id, username, display_name, created_at) VALUES (?, ?, ?, ?)",
+    )
+    .run(userId, "owner", "DroidAgent Owner", now);
+  sqlite
+    .prepare(
+      "INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run(
+      sessionId,
+      userId,
+      hashToken(sessionToken),
+      new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
+      now,
+    );
 
   const runtimeSettings = {
     selectedRuntime: "ollama",
     activeProviderId: "ollama-default",
     ollamaModel: "qwen3.5:4b",
+    ollamaContextWindow: 65536,
     llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
     llamaCppContextWindow: 8192,
     workspaceRoot,
@@ -156,24 +177,42 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
     smartContextManagementEnabled: true,
     cloudProviders: {
       openai: { defaultModel: "openai/gpt-5.4", lastUpdatedAt: null },
-      anthropic: { defaultModel: "anthropic/claude-sonnet-4-5", lastUpdatedAt: null },
-      openrouter: { defaultModel: "openrouter/anthropic/claude-sonnet-4-5", lastUpdatedAt: null },
+      anthropic: {
+        defaultModel: "anthropic/claude-sonnet-4-5",
+        lastUpdatedAt: null,
+      },
+      openrouter: {
+        defaultModel: "openrouter/anthropic/claude-sonnet-4-5",
+        lastUpdatedAt: null,
+      },
       gemini: { defaultModel: "gemini/gemini-2.5-pro", lastUpdatedAt: null },
-      groq: { defaultModel: "groq/llama-3.3-70b-versatile", lastUpdatedAt: null },
-      together: { defaultModel: "together/deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free", lastUpdatedAt: null },
-      xai: { defaultModel: "xai/grok-4-fast", lastUpdatedAt: null }
-    }
+      groq: {
+        defaultModel: "groq/llama-3.3-70b-versatile",
+        lastUpdatedAt: null,
+      },
+      together: {
+        defaultModel: "together/deepseek-ai/DeepSeek-R1-Distill-Llama-70B-free",
+        lastUpdatedAt: null,
+      },
+      xai: { defaultModel: "xai/grok-4-fast", lastUpdatedAt: null },
+    },
   };
 
   const setupState = {
-    completedSteps: ["auth", "workspace", "runtime", "models", "providerRegistration"],
+    completedSteps: [
+      "auth",
+      "workspace",
+      "runtime",
+      "models",
+      "providerRegistration",
+    ],
     currentStep: "remoteAccess",
     passkeyConfigured: true,
     workspaceRoot,
     selectedRuntime: "ollama",
     selectedModel: "qwen3.5:4b",
     remoteAccessEnabled: false,
-    signalEnabled: false
+    signalEnabled: false,
   };
 
   const accessSettings = {
@@ -183,16 +222,20 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
     bootstrapTokenIssuedAt: null,
     bootstrapTokenExpiresAt: null,
     cloudflareHostname: null,
-    cloudflareLastStartedAt: null
+    cloudflareLastStartedAt: null,
   };
 
   const insertSetting = sqlite.prepare(
-    "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+    "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
   );
   insertSetting.run("runtimeSettings", JSON.stringify(runtimeSettings), now);
   insertSetting.run("setupState", JSON.stringify(setupState), now);
   insertSetting.run("accessSettings", JSON.stringify(accessSettings), now);
-  insertSetting.run("openclawGatewayToken", JSON.stringify("droidagent-e2e-token"), now);
+  insertSetting.run(
+    "openclawGatewayToken",
+    JSON.stringify("droidagent-e2e-token"),
+    now,
+  );
   sqlite.close();
 
   await fs.mkdir(artifactDir, { recursive: true });
@@ -200,7 +243,7 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
     baseUrl: `http://127.0.0.1:${SERVER_PORT}`,
     sessionToken,
     workspaceRoot,
-    sampleFilePath
+    sampleFilePath,
   };
   await fs.writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
   return state;
@@ -210,16 +253,28 @@ async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "droidagent-e2e-"));
   const state = await seedEnvironment(rootDir);
 
-  const child = spawn("node", [path.join(repoRoot, "apps", "server", "dist", "index.js")], {
-    cwd: repoRoot,
-    env: {
-      ...process.env,
-      HOME: path.join(rootDir, "home"),
-      DROIDAGENT_PORT: String(SERVER_PORT),
-      DROIDAGENT_TEST_MODE: "1"
+  const child = spawn(
+    "node",
+    [path.join(repoRoot, "apps", "server", "dist", "index.js")],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        HOME: path.join(rootDir, "home"),
+        DROIDAGENT_PORT: String(SERVER_PORT),
+        DROIDAGENT_TEST_MODE: "1",
+        DROIDAGENT_OPENCLAW_BIN: path.join(
+          repoRoot,
+          "apps",
+          "server",
+          "node_modules",
+          ".bin",
+          "openclaw",
+        ),
+      },
+      stdio: "inherit",
     },
-    stdio: "inherit"
-  });
+  );
 
   const cleanup = async () => {
     if (child.exitCode === null) {
@@ -229,7 +284,9 @@ async function main() {
         child.kill("SIGKILL");
       }
     }
-    await fs.rm(rootDir, { recursive: true, force: true }).catch(() => undefined);
+    await fs
+      .rm(rootDir, { recursive: true, force: true })
+      .catch(() => undefined);
     await fs.rm(statePath, { force: true }).catch(() => undefined);
   };
 

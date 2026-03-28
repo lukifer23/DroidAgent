@@ -3,6 +3,7 @@ import type { ProviderProfile, RuntimeStatus } from "@droidagent/shared";
 import { useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { postJson } from "../lib/api";
+import { formatTokenBudget } from "../lib/formatters";
 
 function runtimeMetadata(runtime: RuntimeStatus) {
   const labels: Record<string, string> = {
@@ -13,7 +14,7 @@ function runtimeMetadata(runtime: RuntimeStatus) {
     gpuLayers: "GPU Layers",
     flashAttention: "Flash Attention",
     batchSize: "Batch",
-    ubatchSize: "Ubatch"
+    ubatchSize: "Ubatch",
   };
 
   return Object.entries(runtime.metadata)
@@ -21,7 +22,7 @@ function runtimeMetadata(runtime: RuntimeStatus) {
     .map(([key, value]) => ({
       key,
       label: labels[key] ?? key,
-      value: String(value)
+      value: String(value),
     }));
 }
 
@@ -29,9 +30,22 @@ export function ModelsScreen() {
   const { runAction } = useDroidAgentApp();
   const dashboardQuery = useDashboardQuery(true);
   const dashboard = dashboardQuery.data;
+  const localOllamaProvider = dashboard?.providers.find(
+    (provider) => provider.id === "ollama-default",
+  );
 
   return (
     <section className="stack-list">
+      <article className="panel-card compact active-card">
+        <strong>Default Local Path</strong>
+        <span>{localOllamaProvider?.model ?? "qwen3.5:4b"}</span>
+        <small>
+          {formatTokenBudget(localOllamaProvider?.contextWindow)} context •{" "}
+          thinking off • smart context trimming{" "}
+          {dashboard?.contextManagement.enabled ? "on" : "off"}
+        </small>
+      </article>
+
       {(dashboard?.runtimes ?? []).map((runtime: RuntimeStatus) => (
         <article key={runtime.id} className="panel-card">
           <h3>{runtime.label}</h3>
@@ -83,9 +97,17 @@ export function ModelsScreen() {
       ))}
 
       {(dashboard?.providers ?? []).map((provider: ProviderProfile) => (
-        <article key={provider.id} className={`panel-card compact${provider.enabled ? " active-card" : ""}`}>
+        <article
+          key={provider.id}
+          className={`panel-card compact${provider.enabled ? " active-card" : ""}`}
+        >
           <strong>{provider.label}</strong>
           <span>{provider.model}</span>
+          {provider.contextWindow ? (
+            <small>
+              Context window: {formatTokenBudget(provider.contextWindow)}
+            </small>
+          ) : null}
           <small>{provider.healthMessage}</small>
         </article>
       ))}

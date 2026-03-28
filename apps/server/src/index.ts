@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { serve } from "@hono/node-server";
@@ -136,6 +137,26 @@ function expandHomePath(input: string): string {
     return path.join(process.env.HOME ?? "", input.slice(2));
   }
   return input;
+}
+
+function isSafeE2EWorkspaceRoot(input: string): boolean {
+  const resolved = path.resolve(input);
+  const repoRoot = path.resolve(paths.workspaceRoot);
+  const tempRoot = path.resolve(os.tmpdir());
+
+  if (!resolved.startsWith(tempRoot)) {
+    return false;
+  }
+
+  if (!resolved.includes("droidagent-e2e-")) {
+    return false;
+  }
+
+  if (resolved === repoRoot) {
+    return false;
+  }
+
+  return !repoRoot.startsWith(`${resolved}${path.sep}`);
 }
 
 function withMeasuredStreamRelay(
@@ -1134,6 +1155,9 @@ if (TEST_MODE) {
 
     const runtimeSettings = await appStateService.getRuntimeSettings();
     if (runtimeSettings.workspaceRoot) {
+      if (!isSafeE2EWorkspaceRoot(runtimeSettings.workspaceRoot)) {
+        throw new Error("Refusing to reset a non-ephemeral E2E workspace.");
+      }
       await fs.promises.rm(runtimeSettings.workspaceRoot, {
         recursive: true,
         force: true,
