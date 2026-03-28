@@ -44,6 +44,8 @@ const GATEWAY_READY_DELAY_MS = 800;
 const CHAT_COMPLETIONS_PATH = "/v1/chat/completions";
 const DEFAULT_CONTEXT_WINDOW = 200000;
 const CHANNEL_STATUS_TTL_MS = 5_000;
+const DEFAULT_WEB_SESSION_ID = "web:operator";
+const INTERNAL_SESSION_IDS = new Set(["agent:main:main"]);
 
 function stringifyConfigValue(value: unknown): string {
   return JSON.stringify(value);
@@ -135,18 +137,227 @@ function extractDeltaText(payload: unknown): string {
   return "";
 }
 
+function formatStructuredValue(value: unknown): string {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+      try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  }
+
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function collectTextParts(value: unknown): string[] {
+  if (typeof value === "string") {
+    return value.trim() ? [value] : [];
+  }
+
+  if (value === null || value === undefined) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectTextParts(entry));
+  }
+
+  if (typeof value !== "object") {
+    return [String(value)];
+  }
+
+  const record = value as Record<string, unknown>;
+  const type = typeof record.type === "string" ? record.type : null;
+
+  if (type === "text" && typeof record.text === "string") {
+    return record.text.trim() ? [record.text] : [];
+  }
+
+  if (type === "toolCall") {
+    const name = typeof record.name === "string" ? record.name : "tool";
+    const renderedArguments = formatStructuredValue(record.arguments);
+    return renderedArguments
+      ? [`Tool call: ${name}\n${renderedArguments}`]
+      : [`Tool call: ${name}`];
+  }
+
+  if (type === "toolResult") {
+    const lines = collectTextParts(
+      record.content ?? record.text ?? record.result ?? record.output,
+    );
+    if (lines.length > 0) {
+      return [`Tool result\n${lines.join("\n\n")}`];
+    }
+    const renderedResult = formatStructuredValue(
+      record.result ?? record.output ?? record.content,
+    );
+    return renderedResult ? [`Tool result\n${renderedResult}`] : [];
+  }
+
+  if (typeof record.text === "string") {
+    return record.text.trim() ? [record.text] : [];
+  }
+
+  if ("content" in record) {
+    const contentLines = collectTextParts(record.content);
+    if (contentLines.length > 0) {
+      return contentLines;
+    }
+  }
+
+  if ("result" in record || "output" in record) {
+    const rendered = formatStructuredValue(record.result ?? record.output);
+    return rendered ? [rendered] : [];
+  }
+
+  return [formatStructuredValue(record)];
+}
+
+function renderHistoryContent(message: Record<string, unknown>): string {
+  const lines = collectTextParts(message.content ?? message.text);
+  if (lines.length > 0) {
+    return lines.join("\n\n");
+  }
+
+  if (typeof message.text === "string" && message.text.trim()) {
+    return message.text;
+  }
+
+  return formatStructuredValue(message.content ?? "");
+}
+
+function resolveMessageRole(role: unknown): ChatMessage["role"] {
+  if (role === "assistant" || role === "system" || role === "tool") {
+    return role;
+  }
+
+  if (role === "toolResult") {
+    return "tool";
+  }
+
+  return "user";
+}
+
+function resolveIsoTimestamp(message: Record<string, unknown>): string {
+  const timestamp =
+    message.ts ??
+    message.createdAtMs ??
+    message.updatedAtMs ??
+    message.updatedAt ??
+    message.createdAt;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    return new Date(timestamp).toISOString();
+  }
+
+  if (typeof timestamp === "string" && timestamp.trim()) {
+    const parsed = Number(timestamp);
+    if (Number.isFinite(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+    const normalized = new Date(timestamp);
+    if (!Number.isNaN(normalized.getTime())) {
+      return normalized.toISOString();
+    }
+  }
+
+  return nowIso();
+}
+
+function collapsePreview(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, 140);
+}
+
+function renderPreviewValue(
+  preview: unknown,
+  lastMessage: unknown,
+): string {
+  if (typeof preview === "string" && preview.trim()) {
+    return collapsePreview(preview);
+  }
+
+  if (typeof lastMessage === "string" && lastMessage.trim()) {
+    return collapsePreview(lastMessage);
+  }
+
+  if (lastMessage && typeof lastMessage === "object" && !Array.isArray(lastMessage)) {
+    return collapsePreview(renderHistoryContent(lastMessage as Record<string, unknown>));
+  }
+
+  if (Array.isArray(lastMessage)) {
+    return collapsePreview(
+      collectTextParts(lastMessage).join("\n\n"),
+    );
+  }
+
+  return "";
+}
+
+function isInternalSessionRecord(
+  item: Record<string, unknown>,
+  sessionKey: string,
+): boolean {
+  if (INTERNAL_SESSION_IDS.has(sessionKey)) {
+    return true;
+  }
+
+  const displayName = String(item.displayName ?? item.title ?? "").toLowerCase();
+  const origin = item.origin as Record<string, unknown> | undefined;
+  const originProvider = String(origin?.provider ?? "").toLowerCase();
+  const originLabel = String(origin?.label ?? "").toLowerCase();
+
+  return (
+    displayName === "heartbeat" ||
+    originProvider === "heartbeat" ||
+    originLabel === "heartbeat"
+  );
+}
+
+function resolveSessionScope(sessionKey: string): SessionSummary["scope"] {
+  if (sessionKey.startsWith("signal")) {
+    return "signal";
+  }
+  if (sessionKey.startsWith("web:")) {
+    return "web";
+  }
+  if (sessionKey.startsWith("global:")) {
+    return "global";
+  }
+  return "main";
+}
+
+function operatorSession(updatedAt = nowIso()): SessionSummary {
+  return SessionSummarySchema.parse({
+    id: DEFAULT_WEB_SESSION_ID,
+    title: "Operator Chat",
+    scope: "web",
+    updatedAt,
+    unreadCount: 0,
+    lastMessagePreview: "Start a fresh DroidAgent session."
+  });
+}
+
 function parseHistoryMessage(sessionKey: string, message: Record<string, unknown>, index: number): ChatMessage {
   return ChatMessageSchema.parse({
     id: String(message.id ?? `${sessionKey}-${index}`),
     sessionId: sessionKey,
-    role: message.role === "assistant" || message.role === "system" || message.role === "tool" ? message.role : "user",
-    text:
-      typeof message.content === "string"
-        ? message.content
-        : typeof message.text === "string"
-          ? message.text
-          : JSON.stringify(message.content ?? ""),
-    createdAt: new Date(Number(message.ts ?? message.createdAtMs ?? Date.now())).toISOString(),
+    role: resolveMessageRole(message.role),
+    text: renderHistoryContent(message),
+    createdAt: resolveIsoTimestamp(message),
     status: "complete",
     source: "openclaw"
   });
@@ -862,23 +1073,48 @@ export class OpenClawService {
         includeLastMessage: true
       })) as Array<Record<string, unknown>>;
       const list = Array.isArray(response) ? response : [];
-      return list
+      const sessions = list
+        .filter((item) => {
+          const sessionKey = String(item.key ?? item.sessionKey ?? item.id ?? "main");
+          return !isInternalSessionRecord(item, sessionKey);
+        })
         .map((item) => {
           const sessionKey = String(item.key ?? item.sessionKey ?? item.id ?? "main");
           return SessionSummarySchema.parse({
             id: sessionKey,
-            title: String(item.title ?? item.derivedTitle ?? sessionKey),
-            scope: sessionKey.startsWith("signal") ? "signal" : "main",
-            updatedAt: new Date(Number(item.updatedAtMs ?? item.updatedAt ?? Date.now())).toISOString(),
+            title:
+              sessionKey === DEFAULT_WEB_SESSION_ID
+                ? "Operator Chat"
+                : String(item.title ?? item.derivedTitle ?? sessionKey),
+            scope: resolveSessionScope(sessionKey),
+            updatedAt: resolveIsoTimestamp(item),
             unreadCount: Number(item.unreadCount ?? 0),
-            lastMessagePreview: String(
-              item.lastMessagePreview ?? (item.lastMessage as { text?: unknown } | undefined)?.text ?? ""
+            lastMessagePreview: renderPreviewValue(
+              item.lastMessagePreview,
+              item.lastMessage,
             )
           });
         })
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        .sort((left, right) => {
+          if (left.id === DEFAULT_WEB_SESSION_ID) {
+            return -1;
+          }
+          if (right.id === DEFAULT_WEB_SESSION_ID) {
+            return 1;
+          }
+          return right.updatedAt.localeCompare(left.updatedAt);
+        });
+
+      if (sessions.some((session) => session.id === DEFAULT_WEB_SESSION_ID)) {
+        return sessions;
+      }
+
+      return [
+        operatorSession(sessions[0]?.updatedAt ?? nowIso()),
+        ...sessions,
+      ];
     } catch {
-      return [];
+      return [operatorSession()];
     }
   }
 

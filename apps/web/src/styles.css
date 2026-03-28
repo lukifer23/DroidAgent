@@ -598,6 +598,10 @@ small {
   align-items: center;
 }
 
+.link-preview-row.secondary-row {
+  margin-top: 0.2rem;
+}
+
 .setup-qr {
   width: min(280px, 100%);
   border-radius: 24px;
@@ -765,6 +769,8 @@ small {
 .message-card p {
   margin: 0;
   line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .composer {

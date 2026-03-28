@@ -341,4 +341,90 @@ describe("OpenClaw context management policy", () => {
       portOwnerCommand: "openclaw-gateway"
     });
   });
+
+  it("filters internal heartbeat sessions and keeps a stable operator chat session", async () => {
+    vi.spyOn(openclawService, "callGateway").mockResolvedValue([
+      {
+        key: "agent:main:main",
+        displayName: "heartbeat",
+        derivedTitle: "Hello",
+        updatedAtMs: 1_710_000_000_000,
+        lastMessagePreview: "ignore this"
+      },
+      {
+        key: "signal:+15551234567",
+        derivedTitle: "Signal thread",
+        updatedAtMs: 1_710_000_000_500,
+        lastMessagePreview: "pairing request"
+      }
+    ] as never);
+
+    const sessions = await openclawService.listSessions();
+
+    expect(sessions[0]).toMatchObject({
+      id: "web:operator",
+      title: "Operator Chat",
+      scope: "web"
+    });
+    expect(sessions.some((session) => session.id === "agent:main:main")).toBe(false);
+    expect(sessions.some((session) => session.id === "signal:+15551234567")).toBe(true);
+  });
+
+  it("renders structured history content into readable chat messages", async () => {
+    vi.spyOn(openclawService, "callGateway").mockResolvedValue({
+      messages: [
+        {
+          id: "message-user",
+          role: "user",
+          ts: 1_710_000_000_000,
+          content: [
+            {
+              type: "text",
+              text: "Read HEARTBEAT.md if it exists."
+            }
+          ]
+        },
+        {
+          id: "message-assistant",
+          role: "assistant",
+          ts: 1_710_000_000_100,
+          content: [
+            {
+              type: "toolCall",
+              name: "read",
+              arguments: {
+                path: "/tmp/HEARTBEAT.md"
+              }
+            }
+          ]
+        },
+        {
+          id: "message-tool",
+          role: "toolResult",
+          ts: 1_710_000_000_200,
+          content: [
+            {
+              type: "text",
+              text: "HEARTBEAT_OK"
+            }
+          ]
+        }
+      ]
+    } as never);
+
+    const messages = await openclawService.loadHistory("web:operator");
+
+    expect(messages).toHaveLength(3);
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      text: "Read HEARTBEAT.md if it exists."
+    });
+    expect(messages[1]?.role).toBe("assistant");
+    expect(messages[1]?.text).toContain("Tool call: read");
+    expect(messages[1]?.text).toContain('"path": "/tmp/HEARTBEAT.md"');
+    expect(messages[2]).toMatchObject({
+      role: "tool",
+      text: "HEARTBEAT_OK"
+    });
+  });
 });

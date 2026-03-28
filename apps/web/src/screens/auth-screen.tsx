@@ -241,6 +241,12 @@ export function AuthScreen() {
                 device instead of asking the Mac-only passkey to already exist
                 here.
               </small>
+            ) : authQuery.data?.hasUser && access.canonicalOrigin ? (
+              <small>
+                If this phone does not already have a synced owner passkey, open
+                a device enrollment link from Setup or Settings on the Mac
+                first.
+              </small>
             ) : null}
           </section>
         ) : null}

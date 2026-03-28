@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { QuickstartResult, StartupDiagnostic } from "@droidagent/shared";
+import type {
+  BootstrapLink,
+  QuickstartResult,
+  StartupDiagnostic,
+} from "@droidagent/shared";
 import QRCode from "qrcode";
 import { Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -37,6 +41,7 @@ function progressPercent(items: { ready: boolean }[]): number {
 export function SetupScreen() {
   const queryClient = useQueryClient();
   const autoPrepareTriggeredRef = useRef(false);
+  const bootstrapIssuedRef = useRef(false);
   const { runAction, setNotice, setErrorMessage } = useDroidAgentApp();
   const dashboardQuery = useDashboardQuery(true);
   const startupDiagnosticsQuery = useStartupDiagnosticsQuery(true);
@@ -48,6 +53,9 @@ export function SetupScreen() {
   const [setupModel, setSetupModel] = useState(DEFAULT_OLLAMA_MODEL);
   const [llamaModel, setLlamaModel] = useState("gemma-3-1b-it");
   const [phoneUrl, setPhoneUrl] = useState<string | null>(null);
+  const [bootstrapLink, setBootstrapLink] = useState<BootstrapLink | null>(
+    null,
+  );
   const [phoneQr, setPhoneQr] = useState<string | null>(null);
   const [quickstartResult, setQuickstartResult] =
     useState<QuickstartResult | null>(null);
@@ -76,17 +84,25 @@ export function SetupScreen() {
     setPhoneUrl(access?.canonicalOrigin?.origin ?? null);
   }, [access?.canonicalOrigin?.origin]);
 
+  const localhostHostnames = useMemo(
+    () => new Set(["localhost", "127.0.0.1", "::1", "[::1]"]),
+    [],
+  );
+  const localhostMaintenance = localhostHostnames.has(window.location.hostname);
+  const enrollmentUrl = bootstrapLink?.bootstrapUrl ?? null;
+  const phoneLaunchUrl = enrollmentUrl ?? phoneUrl;
+
   useEffect(() => {
-    if (!phoneUrl) {
+    if (!phoneLaunchUrl) {
       setPhoneQr(null);
       return;
     }
 
-    void QRCode.toDataURL(phoneUrl, {
+    void QRCode.toDataURL(phoneLaunchUrl, {
       margin: 1,
       width: 280,
     }).then(setPhoneQr);
-  }, [phoneUrl]);
+  }, [phoneLaunchUrl]);
 
   const ollamaRuntime = dashboard?.runtimes.find(
     (runtime) => runtime.id === "ollama",
@@ -116,6 +132,8 @@ export function SetupScreen() {
   const remoteReady = Boolean(
     access?.serveStatus.enabled && access?.canonicalOrigin?.origin,
   );
+  const canIssueEnrollmentLink =
+    localhostMaintenance && passkeyConfigured && remoteReady;
 
   const readinessSteps = useMemo<ReadinessItem[]>(
     () => [
@@ -296,6 +314,10 @@ export function SetupScreen() {
       });
       setQuickstartResult(result);
       setPhoneUrl(result.phoneUrl);
+      if (!result.remoteReady) {
+        setBootstrapLink(null);
+        bootstrapIssuedRef.current = false;
+      }
       await refreshSetupQueries();
       setNotice(
         result.remoteReady
@@ -323,14 +345,29 @@ export function SetupScreen() {
     });
   }, [access, dashboard, hostReady, remoteReady, runAction, tailscaleReady]);
 
-  async function copyPhoneUrl() {
-    if (!phoneUrl) {
+  useEffect(() => {
+    if (!canIssueEnrollmentLink || bootstrapLink || bootstrapIssuedRef.current) {
+      return;
+    }
+
+    bootstrapIssuedRef.current = true;
+    void postJson<BootstrapLink>("/api/access/bootstrap", {})
+      .then((link) => {
+        setBootstrapLink(link);
+      })
+      .catch(() => {
+        bootstrapIssuedRef.current = false;
+      });
+  }, [bootstrapLink, canIssueEnrollmentLink]);
+
+  async function copyLink(value: string, message: string) {
+    if (!value) {
       return;
     }
 
     try {
-      await navigator.clipboard.writeText(phoneUrl);
-      setNotice("Phone URL copied.");
+      await navigator.clipboard.writeText(value);
+      setNotice(message);
     } catch {
       setErrorMessage("Clipboard access failed. Copy the remote URL manually.");
     }
@@ -416,34 +453,73 @@ export function SetupScreen() {
 
         <div className="link-preview-card phone-launch-card">
           <div className="phone-launch-head">
-            <strong>Phone URL</strong>
+            <strong>{enrollmentUrl ? "Add This Phone" : "Phone URL"}</strong>
             {remoteReady ? (
               <span className="status-chip ready">Live</span>
             ) : (
               <span className="status-chip">Waiting</span>
             )}
           </div>
-          {phoneUrl ? (
+          {phoneLaunchUrl ? (
             <>
               <div className="link-preview-row">
-                <input value={phoneUrl} readOnly />
+                <input value={phoneLaunchUrl} readOnly />
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => void copyPhoneUrl()}
+                  onClick={() =>
+                    void copyLink(
+                      phoneLaunchUrl,
+                      enrollmentUrl
+                        ? "Phone enrollment link copied."
+                        : "Phone URL copied.",
+                    )
+                  }
                 >
                   Copy
                 </button>
               </div>
-              <small>
-                Open this on the phone and sign in with the owner passkey.
-                Additional device passkeys can be added later from Settings.
-              </small>
+              {enrollmentUrl ? (
+                <>
+                  <small>
+                    Scan this QR from the Mac or open this one-time link on the
+                    Fold. It enrolls a passkey on that phone instead of asking
+                    the Mac-only passkey to already exist there.
+                  </small>
+                  {phoneUrl ? (
+                    <div className="link-preview-row secondary-row">
+                      <input value={phoneUrl} readOnly />
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() =>
+                          void copyLink(phoneUrl, "Daily phone URL copied.")
+                        }
+                      >
+                        Copy Daily URL
+                      </button>
+                    </div>
+                  ) : null}
+                  <small>
+                    After enrollment, daily sign-in uses the Tailscale URL
+                    above. You do not need to keep the one-time link.
+                  </small>
+                </>
+              ) : (
+                <small>
+                  Open this on the phone and sign in with the owner passkey.
+                  Additional device passkeys can be added later from Settings.
+                </small>
+              )}
               {phoneQr ? (
                 <img
                   className="setup-qr"
                   src={phoneQr}
-                  alt="Remote sign-in URL QR code"
+                  alt={
+                    enrollmentUrl
+                      ? "Phone device enrollment QR code"
+                      : "Remote sign-in URL QR code"
+                  }
                 />
               ) : null}
             </>

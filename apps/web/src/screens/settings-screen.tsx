@@ -280,7 +280,7 @@ export function SettingsScreen() {
             {bootstrapLink ? (
               <article className="health-row ready">
                 <div className="health-row-top">
-                  <strong>Latest Phone Link</strong>
+                  <strong>Latest Device Enrollment Link</strong>
                   <span className="status-chip ready">Issued</span>
                 </div>
                 <small>{bootstrapLink.bootstrapUrl}</small>
@@ -320,10 +320,10 @@ export function SettingsScreen() {
                     {},
                   );
                   setBootstrapLink(link);
-                }, "Phone bootstrap link generated.")
+                }, "Device enrollment link generated.")
               }
             >
-              Generate Phone Link
+              Generate Device Link
             </button>
           </div>
         </article>

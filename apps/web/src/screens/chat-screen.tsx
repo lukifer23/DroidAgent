@@ -8,6 +8,14 @@ import { useDroidAgentApp } from "../app-context";
 import { api, postJson } from "../lib/api";
 import { useStreamingRuns } from "../lib/chat-stream-store";
 
+function roleLabel(role: ChatMessage["role"]): string {
+  if (role === "tool") {
+    return "tool result";
+  }
+
+  return role;
+}
+
 export function ChatScreen() {
   const queryClient = useQueryClient();
   const {
@@ -137,7 +145,7 @@ export function ChatScreen() {
 
         {messages.map((message) => (
           <article key={message.id} className={`message-card ${message.role}`}>
-            <header>{message.role}</header>
+            <header>{roleLabel(message.role)}</header>
             <p>{message.text}</p>
           </article>
         ))}

@@ -50,7 +50,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
-  const [selectedSessionId, setSelectedSessionId] = useState("main");
+  const [selectedSessionId, setSelectedSessionId] = useState("web:operator");
   const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
 
   const routeTransitionRef = useRef<{ path: string; metric: ReturnType<typeof clientPerformance.start> } | null>(null);
