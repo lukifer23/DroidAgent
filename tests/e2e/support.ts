@@ -8,6 +8,7 @@ export interface E2EState {
   sessionToken: string;
   workspaceRoot: string;
   sampleFilePath: string;
+  resetToken: string;
 }
 
 const e2ePort = process.env.DROIDAGENT_E2E_PORT ?? "4418";
@@ -34,7 +35,14 @@ export async function signInSeededOwner(context: BrowserContext): Promise<E2ESta
 
 export async function resetE2EState(page: Page): Promise<void> {
   const state = await readE2EState();
-  const response = await page.request.post(new URL("/api/testing/e2e/reset", state.baseUrl).toString());
+  const response = await page.request.post(
+    new URL("/api/testing/e2e/reset", state.baseUrl).toString(),
+    {
+      headers: {
+        "x-droidagent-e2e-reset-token": state.resetToken,
+      },
+    },
+  );
   if (!response.ok()) {
     throw new Error(`Failed to reset E2E state: ${response.status()} ${await response.text()}`);
   }

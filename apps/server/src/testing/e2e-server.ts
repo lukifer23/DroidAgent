@@ -6,13 +6,15 @@ import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
 import Database from "better-sqlite3";
+import type { SetupState } from "@droidagent/shared";
 
-interface E2EState {
-  baseUrl: string;
-  sessionToken: string;
-  workspaceRoot: string;
-  sampleFilePath: string;
-}
+import type { E2EFixtureState, E2EWorkspaceFile } from "./e2e-fixture.js";
+import type {
+  AccessSettings,
+  RuntimeSettings,
+} from "../services/app-state-service.js";
+
+const OPENCLAW_GATEWAY_TOKEN = "droidagent-e2e-token";
 
 const SERVER_PORT = Number(process.env.DROIDAGENT_E2E_PORT ?? 4418);
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
@@ -41,7 +43,7 @@ async function waitForHealth(baseUrl: string): Promise<void> {
   throw new Error("Timed out waiting for the E2E DroidAgent server.");
 }
 
-async function seedEnvironment(rootDir: string): Promise<E2EState> {
+async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
   const homeDir = path.join(rootDir, "home");
   const appDir = path.join(homeDir, ".droidagent");
   const logsDir = path.join(appDir, "logs");
@@ -55,7 +57,18 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
   const userId = randomUUID();
   const sessionToken = randomUUID();
   const sessionId = randomUUID();
+  const resetToken = randomUUID();
   const now = new Date().toISOString();
+  const workspaceFiles: E2EWorkspaceFile[] = [
+    {
+      path: "notes.txt",
+      content: "first pass",
+    },
+    {
+      path: "README.md",
+      content: "# DroidAgent E2E Workspace\n",
+    },
+  ];
 
   for (const dir of [
     homeDir,
@@ -70,11 +83,14 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
     await fs.mkdir(dir, { recursive: true });
   }
 
-  await fs.writeFile(sampleFilePath, "first pass", "utf8");
-  await fs.writeFile(
-    path.join(workspaceRoot, "README.md"),
-    "# DroidAgent E2E Workspace\n",
-    "utf8",
+  await Promise.all(
+    workspaceFiles.map(async (file) => {
+      await fs.writeFile(
+        path.join(workspaceRoot, file.path),
+        file.content,
+        "utf8",
+      );
+    }),
   );
 
   const sqlite = new Database(dbPath);
@@ -148,7 +164,7 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
       now,
     );
 
-  const runtimeSettings = {
+  const runtimeSettings: RuntimeSettings = {
     selectedRuntime: "ollama",
     activeProviderId: "ollama-default",
     ollamaModel: "qwen3.5:4b",
@@ -199,7 +215,7 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
     },
   };
 
-  const setupState = {
+  const setupState: SetupState = {
     completedSteps: [
       "auth",
       "workspace",
@@ -216,7 +232,7 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
     signalEnabled: false,
   };
 
-  const accessSettings = {
+  const accessSettings: AccessSettings = {
     mode: "loopback",
     canonicalOrigin: null,
     bootstrapTokenHash: null,
@@ -234,17 +250,29 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
   insertSetting.run("accessSettings", JSON.stringify(accessSettings), now);
   insertSetting.run(
     "openclawGatewayToken",
-    JSON.stringify("droidagent-e2e-token"),
+    JSON.stringify(OPENCLAW_GATEWAY_TOKEN),
     now,
   );
   sqlite.close();
 
   await fs.mkdir(artifactDir, { recursive: true });
-  const state: E2EState = {
+  const state: E2EFixtureState = {
     baseUrl: `http://127.0.0.1:${SERVER_PORT}`,
     sessionToken,
     workspaceRoot,
     sampleFilePath,
+    resetToken,
+    rootDir,
+    homeDir,
+    appDir,
+    dbPath,
+    seed: {
+      runtimeSettings,
+      accessSettings,
+      setupState,
+      openclawGatewayToken: OPENCLAW_GATEWAY_TOKEN,
+      workspaceFiles,
+    },
   };
   await fs.writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
   return state;
@@ -264,6 +292,9 @@ async function main() {
         HOME: path.join(rootDir, "home"),
         DROIDAGENT_PORT: String(SERVER_PORT),
         DROIDAGENT_TEST_MODE: "1",
+        DROIDAGENT_E2E_ROOT_DIR: rootDir,
+        DROIDAGENT_E2E_RESET_TOKEN: state.resetToken,
+        DROIDAGENT_E2E_STATE_PATH: statePath,
         DROIDAGENT_OPENCLAW_BIN: path.join(
           repoRoot,
           "apps",

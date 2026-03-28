@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 
 const port = process.env.DROIDAGENT_E2E_PORT ?? "4418";
+const repoRoot = process.cwd();
 
 function listPidsForPort(targetPort) {
   const result = spawnSync("lsof", ["-nP", `-iTCP:${targetPort}`, "-sTCP:LISTEN", "-t"], {
@@ -28,12 +30,40 @@ function isAlive(pid) {
   }
 }
 
+function commandForPid(pid) {
+  const result = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
+    encoding: "utf8"
+  });
+  if (result.status !== 0) {
+    return "";
+  }
+  return result.stdout.trim();
+}
+
+function isManagedE2EProcess(pid) {
+  const command = commandForPid(pid);
+  if (!command) {
+    return false;
+  }
+
+  const normalizedRepoRoot = path.resolve(repoRoot);
+  return (
+    command.includes(normalizedRepoRoot) &&
+    (
+      command.includes("apps/server/dist/testing/e2e-server") ||
+      command.includes("apps/server/dist/index.js")
+    )
+  );
+}
+
 async function wait(ms) {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function main() {
-  const pids = listPidsForPort(port).filter((pid) => pid !== process.pid);
+  const pids = listPidsForPort(port).filter(
+    (pid) => pid !== process.pid && isManagedE2EProcess(pid),
+  );
 
   for (const pid of pids) {
     try {

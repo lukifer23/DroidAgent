@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import { serve } from "@hono/node-server";
@@ -25,6 +24,12 @@ import { quickstartService } from "./services/quickstart-service.js";
 import { signalService } from "./services/signal-service.js";
 import { startupService } from "./services/startup-service.js";
 import { testHarnessService } from "./services/test-harness-service.js";
+import {
+  clearDirectoryContents,
+  isSafeE2ERoot,
+  isWithinDir,
+  readE2EFixtureState,
+} from "./testing/e2e-fixture.js";
 import { websocketHub } from "./websocket-hub.js";
 import { SERVER_PORT, TEST_MODE, ensureAppDirs, paths } from "./env.js";
 import { performanceService } from "./services/performance-service.js";
@@ -137,26 +142,6 @@ function expandHomePath(input: string): string {
     return path.join(process.env.HOME ?? "", input.slice(2));
   }
   return input;
-}
-
-function isSafeE2EWorkspaceRoot(input: string): boolean {
-  const resolved = path.resolve(input);
-  const repoRoot = path.resolve(paths.workspaceRoot);
-  const tempRoot = path.resolve(os.tmpdir());
-
-  if (!resolved.startsWith(tempRoot)) {
-    return false;
-  }
-
-  if (!resolved.includes("droidagent-e2e-")) {
-    return false;
-  }
-
-  if (resolved === repoRoot) {
-    return false;
-  }
-
-  return !repoRoot.startsWith(`${resolved}${path.sep}`);
 }
 
 function withMeasuredStreamRelay(
@@ -1212,48 +1197,95 @@ app.get("/api/models/:runtimeId", async (c) => {
   );
 });
 
-if (TEST_MODE) {
+const E2E_RESET_TOKEN = process.env.DROIDAGENT_E2E_RESET_TOKEN ?? null;
+const E2E_STATE_PATH = process.env.DROIDAGENT_E2E_STATE_PATH ?? null;
+const E2E_ROOT_DIR = process.env.DROIDAGENT_E2E_ROOT_DIR ?? null;
+
+if (TEST_MODE && E2E_RESET_TOKEN && E2E_STATE_PATH && E2E_ROOT_DIR) {
   app.post("/api/testing/e2e/reset", async (c) => {
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;
 
+    const requestToken = c.req.header("x-droidagent-e2e-reset-token");
+    if (requestToken !== E2E_RESET_TOKEN) {
+      return c.json({ error: "Unauthorized E2E reset request." }, 403);
+    }
+
+    const fixture = await readE2EFixtureState(E2E_STATE_PATH);
+    const resolvedFixtureRoot = path.resolve(fixture.rootDir);
+    const resolvedConfiguredRoot = path.resolve(E2E_ROOT_DIR);
+    if (
+      resolvedFixtureRoot !== resolvedConfiguredRoot ||
+      !isSafeE2ERoot(resolvedFixtureRoot, paths.workspaceRoot)
+    ) {
+      throw new Error("Refusing to reset outside the dedicated E2E root.");
+    }
+
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    const guardedPaths = [
+      paths.appDir,
+      paths.dbPath,
+      paths.logsDir,
+      paths.jobsLogsDir,
+      paths.tempDir,
+      paths.stateDir,
+      paths.uploadsDir,
+      paths.signalCliConfigDir,
+      paths.tailscaleDir,
+      paths.openClawStateDir,
+      runtimeSettings.workspaceRoot ?? fixture.workspaceRoot,
+    ];
+    if (
+      !guardedPaths.every((targetPath) =>
+        isWithinDir(resolvedFixtureRoot, targetPath),
+      )
+    ) {
+      throw new Error("Refusing to reset paths outside the dedicated E2E root.");
+    }
+
+    if (
+      path.resolve(fixture.workspaceRoot) !==
+      path.resolve(runtimeSettings.workspaceRoot ?? fixture.workspaceRoot)
+    ) {
+      throw new Error(
+        "Refusing to reset because the current workspace root drifted from the E2E fixture.",
+      );
+    }
+
     testHarnessService.reset();
     performanceService.reset();
+
+    await db.delete(schema.authChallenges);
     await db.delete(schema.jobs);
+    await appStateService.setJsonSetting(
+      "runtimeSettings",
+      fixture.seed.runtimeSettings,
+    );
+    await appStateService.setJsonSetting("setupState", fixture.seed.setupState);
+    await appStateService.setJsonSetting(
+      "accessSettings",
+      fixture.seed.accessSettings,
+    );
+    await appStateService.setJsonSetting(
+      "openclawGatewayToken",
+      fixture.seed.openclawGatewayToken,
+    );
 
     await Promise.all([
-      fs.promises.rm(paths.jobsLogsDir, { recursive: true, force: true }),
+      clearDirectoryContents(paths.jobsLogsDir),
       fs.promises.rm(path.join(paths.logsDir, "jobs-audit.log"), {
         force: true,
       }),
+      clearDirectoryContents(fixture.workspaceRoot),
     ]);
-    await fs.promises.mkdir(paths.jobsLogsDir, { recursive: true });
 
-    const runtimeSettings = await appStateService.getRuntimeSettings();
-    if (runtimeSettings.workspaceRoot) {
-      if (!isSafeE2EWorkspaceRoot(runtimeSettings.workspaceRoot)) {
-        throw new Error("Refusing to reset a non-ephemeral E2E workspace.");
-      }
-      await fs.promises.rm(runtimeSettings.workspaceRoot, {
-        recursive: true,
-        force: true,
-      });
-      await fs.promises.mkdir(runtimeSettings.workspaceRoot, {
-        recursive: true,
-      });
-      await Promise.all([
-        fs.promises.writeFile(
-          path.join(runtimeSettings.workspaceRoot, "notes.txt"),
-          "first pass",
-          "utf8",
-        ),
-        fs.promises.writeFile(
-          path.join(runtimeSettings.workspaceRoot, "README.md"),
-          "# DroidAgent E2E Workspace\n",
-          "utf8",
-        ),
-      ]);
-    }
+    await Promise.all(
+      fixture.seed.workspaceFiles.map(async (file) => {
+        const targetPath = path.join(fixture.workspaceRoot, file.path);
+        await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+        await fs.promises.writeFile(targetPath, file.content, "utf8");
+      }),
+    );
 
     await websocketHub.refreshAll();
     return c.json({ ok: true });
