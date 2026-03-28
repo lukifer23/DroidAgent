@@ -30,8 +30,8 @@ import { signalService } from "./signal-service.js";
 
 const HEALTH_CHECK_RETRIES = 3;
 const HEALTH_CHECK_DELAY_MS = 500;
-const RUNTIME_STATUS_TTL_MS = 5000;
-const PROVIDER_PROFILE_TTL_MS = 5000;
+const RUNTIME_STATUS_TTL_MS = 15_000;
+const PROVIDER_PROFILE_TTL_MS = 15_000;
 
 interface LlamaModelPreset {
   id: string;
@@ -59,7 +59,7 @@ export class RuntimeService {
   private llamaCppProcess: ChildProcess | null = null;
   private readonly runtimeStatusesCache = new TtlCache<RuntimeStatus[]>(RUNTIME_STATUS_TTL_MS);
   private readonly providerProfilesCache = new TtlCache<ProviderProfile[]>(PROVIDER_PROFILE_TTL_MS);
-  private readonly hostAccelerationCache = new TtlCache<Record<string, string | number | boolean>>(60_000);
+  private readonly hostAccelerationCache = new TtlCache<Record<string, string | number | boolean>>(86_400_000);
 
   invalidateCaches(): void {
     this.runtimeStatusesCache.invalidate();
@@ -87,19 +87,40 @@ export class RuntimeService {
   private async hostAccelerationMetadata(): Promise<Record<string, string | number | boolean>> {
     return await this.hostAccelerationCache.get(async () => {
       try {
-        const result = await runCommand("system_profiler", ["SPDisplaysDataType"]);
-        const gpuModel = result.stdout.match(/Chipset Model:\s+(.+)/)?.[1]?.trim() ?? null;
-        const metalSupport = result.stdout.match(/Metal Support:\s+(.+)/)?.[1]?.trim() ?? null;
-        const metadata: Record<string, string | number | boolean> = {
-          accelerationBackend: metalSupport ? "metal" : "cpu"
+        if (process.platform === "darwin") {
+          const [chipResult, architectureResult] = await Promise.allSettled([
+            runCommand("sysctl", ["-n", "machdep.cpu.brand_string"], {
+              timeoutMs: 1_000
+            }),
+            runCommand("uname", ["-m"], {
+              timeoutMs: 1_000
+            })
+          ]);
+          const gpuModel =
+            chipResult.status === "fulfilled"
+              ? chipResult.value.stdout.trim().split("\n")[0] || null
+              : null;
+          const architecture =
+            architectureResult.status === "fulfilled"
+              ? architectureResult.value.stdout.trim().split("\n")[0] || null
+              : null;
+
+          const metadata: Record<string, string | number | boolean> = {
+            accelerationBackend: "metal",
+            metalSupport: "Metal available on macOS host."
+          };
+          if (gpuModel) {
+            metadata.gpuModel = gpuModel;
+          }
+          if (architecture) {
+            metadata.hostArchitecture = architecture;
+          }
+          return metadata;
+        }
+
+        return {
+          accelerationBackend: "cpu"
         };
-        if (gpuModel) {
-          metadata.gpuModel = gpuModel;
-        }
-        if (metalSupport) {
-          metadata.metalSupport = metalSupport;
-        }
-        return metadata;
       } catch {
         return {};
       }

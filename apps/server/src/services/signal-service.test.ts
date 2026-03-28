@@ -10,6 +10,7 @@ const {
   updateSetupState,
   configureSignal,
   removeSignalChannel,
+  invalidateChannelStatusCache,
   spawnMock
 } = vi.hoisted(() => ({
   runCommand: vi.fn(),
@@ -19,6 +20,7 @@ const {
   updateSetupState: vi.fn(),
   configureSignal: vi.fn(),
   removeSignalChannel: vi.fn(),
+  invalidateChannelStatusCache: vi.fn(),
   spawnMock: vi.fn()
 }));
 
@@ -43,7 +45,8 @@ vi.mock("./app-state-service.js", () => ({
 vi.mock("./openclaw-service.js", () => ({
   openclawService: {
     configureSignal,
-    removeSignalChannel
+    removeSignalChannel,
+    invalidateChannelStatusCache
   }
 }));
 
@@ -134,6 +137,7 @@ describe("SignalService", () => {
     updateSetupState.mockResolvedValue(undefined);
     configureSignal.mockResolvedValue(undefined);
     removeSignalChannel.mockResolvedValue(undefined);
+    invalidateChannelStatusCache.mockReset();
     runCommand.mockReset();
     spawnMock.mockReset();
     (signalService as unknown as { linkProcess: unknown; daemonProcess: unknown }).linkProcess = null;
@@ -159,6 +163,26 @@ describe("SignalService", () => {
     expect(runtimeSettings.signalCliVersion).toBe("signal-cli 0.13.2");
     expect(runtimeSettings.signalCompatibilityWarning).toMatch(/older than the current Homebrew formula/);
     expect(runtimeSettings.signalReceiveMode).toBe("persistent");
+  });
+
+  it("treats timed out account probes as an empty account list", async () => {
+    vi.spyOn(signalService as never, "ensureSignalRuntime" as never).mockResolvedValue({
+      cliPath: runtimeSettings.signalCliPath,
+      javaHome: runtimeSettings.signalJavaHome
+    });
+    vi.spyOn(signalService as never, "signalEnv" as never).mockResolvedValue({});
+    runCommand.mockRejectedValue(new Error("timed out"));
+
+    const accounts = await signalService.listAccounts();
+
+    expect(accounts).toEqual([]);
+    expect(runCommand).toHaveBeenCalledWith(
+      "/opt/homebrew/bin/signal-cli",
+      ["-c", expect.any(String), "-o", "json", "listAccounts"],
+      expect.objectContaining({
+        timeoutMs: 1500
+      })
+    );
   });
 
   it("starts the daemon without the deprecated receive-mode flag", async () => {

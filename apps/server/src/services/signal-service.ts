@@ -23,7 +23,10 @@ function looksLikeE164(value: string): boolean {
   return /^\+[1-9]\d{6,14}$/.test(value);
 }
 
-const SIGNAL_STATE_TTL_MS = 5000;
+const SIGNAL_STATE_TTL_MS = 30_000;
+const SIGNAL_COMMAND_TIMEOUT_MS = 1500;
+const SIGNAL_BREW_TIMEOUT_MS = 1500;
+const SIGNAL_DAEMON_TIMEOUT_MS = 1500;
 
 export class SignalService {
   private linkProcess: ChildProcess | null = null;
@@ -33,6 +36,7 @@ export class SignalService {
 
   invalidateStateCache(): void {
     this.lastRefreshedAt = 0;
+    openclawService.invalidateChannelStatusCache();
   }
 
   private async which(binary: string): Promise<string | null> {
@@ -96,7 +100,8 @@ export class SignalService {
         env: {
           ...baseEnv(),
           JAVA_HOME: javaHome
-        }
+        },
+        timeoutMs: SIGNAL_COMMAND_TIMEOUT_MS
       });
       return result.stdout.trim().split("\n")[0] || null;
     } catch {
@@ -111,7 +116,10 @@ export class SignalService {
         return null;
       }
 
-      const result = await runCommand("brew", ["outdated", "signal-cli"], { okExitCodes: [0] });
+      const result = await runCommand("brew", ["outdated", "signal-cli"], {
+        okExitCodes: [0],
+        timeoutMs: SIGNAL_BREW_TIMEOUT_MS
+      });
       if (result.stdout.trim()) {
         return "signal-cli is older than the current Homebrew formula. Upgrade it soon; upstream Signal changes can break older builds.";
       }
@@ -129,11 +137,18 @@ export class SignalService {
     };
   }
 
-  private async runSignal(args: string[], okExitCodes = [0]) {
+  private async runSignal(
+    args: string[],
+    okExitCodes = [0],
+    options: {
+      timeoutMs?: number;
+    } = {}
+  ) {
     const { cliPath } = await this.ensureSignalRuntime();
     return await runCommand(cliPath, ["-c", paths.signalCliConfigDir, ...args], {
       env: await this.signalEnv(),
-      okExitCodes
+      okExitCodes,
+      ...(typeof options.timeoutMs === "number" ? { timeoutMs: options.timeoutMs } : {})
     });
   }
 
@@ -152,11 +167,17 @@ export class SignalService {
   }
 
   private async daemonHealthcheck(url = SIGNAL_DAEMON_URL): Promise<boolean> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SIGNAL_DAEMON_TIMEOUT_MS);
     try {
-      const response = await fetch(`${url}/api/v1/check`);
+      const response = await fetch(`${url}/api/v1/check`, {
+        signal: controller.signal
+      });
       return response.ok;
     } catch {
       return false;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -170,12 +191,27 @@ export class SignalService {
 
   async listAccounts(): Promise<string[]> {
     try {
-      const output = await this.runSignal(["-o", "json", "listAccounts"]);
+      const output = await this.runSignal(["-o", "json", "listAccounts"], [0], {
+        timeoutMs: SIGNAL_COMMAND_TIMEOUT_MS
+      });
       const parsed = JSON.parse(output.stdout) as unknown;
       return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : [];
     } catch {
       return [];
     }
+  }
+
+  private beginRefresh(): Promise<void> {
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    this.refreshPromise = this.refreshStateInternal().finally(() => {
+      this.lastRefreshedAt = Date.now();
+      this.refreshPromise = null;
+    });
+
+    return this.refreshPromise;
   }
 
   async refreshState(): Promise<void> {
@@ -187,13 +223,17 @@ export class SignalService {
       return;
     }
 
-    this.refreshPromise = this.refreshStateInternal();
-    try {
-      await this.refreshPromise;
-      this.lastRefreshedAt = Date.now();
-    } finally {
-      this.refreshPromise = null;
+    await this.beginRefresh();
+  }
+
+  refreshStateInBackground(): void {
+    if (this.refreshPromise || Date.now() - this.lastRefreshedAt < SIGNAL_STATE_TTL_MS) {
+      return;
     }
+
+    void this.beginRefresh().catch((error) => {
+      console.error("Signal background refresh failed", error);
+    });
   }
 
   private async refreshStateInternal(): Promise<void> {

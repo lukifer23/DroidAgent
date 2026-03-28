@@ -34,6 +34,7 @@ import {
   resolveOpenClawBin
 } from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
+import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 import type { HarnessRuntimeModelConfig, StreamRelayCallbacks } from "./harness-service.js";
 import { keychainService } from "./keychain-service.js";
@@ -42,6 +43,7 @@ const GATEWAY_READY_RETRIES = 5;
 const GATEWAY_READY_DELAY_MS = 800;
 const CHAT_COMPLETIONS_PATH = "/v1/chat/completions";
 const DEFAULT_CONTEXT_WINDOW = 200000;
+const CHANNEL_STATUS_TTL_MS = 5_000;
 
 function stringifyConfigValue(value: unknown): string {
   return JSON.stringify(value);
@@ -202,6 +204,13 @@ export class OpenClawService {
   private gatewayProcess: ChildProcess | null = null;
   private gatewayToken: string | null = null;
   private activeRuns = new Map<string, { controller: AbortController; runId: string }>();
+  private readonly channelStatusesCache = new TtlCache<{ statuses: ChannelStatus[]; config: ChannelConfigSummary }>(
+    CHANNEL_STATUS_TTL_MS
+  );
+
+  invalidateChannelStatusCache(): void {
+    this.channelStatusesCache.invalidate();
+  }
 
   private async gatewayHealthProbe(): Promise<{ version?: string }> {
     const output = await this.execOpenClaw([
@@ -962,156 +971,158 @@ export class OpenClawService {
   }
 
   async getChannelStatuses(): Promise<{ statuses: ChannelStatus[]; config: ChannelConfigSummary }> {
-    const runtimeSettings = await appStateService.getRuntimeSettings();
-    const statuses: ChannelStatus[] = [
-      ChannelStatusSchema.parse({
-        id: "web",
-        label: "Web/PWA",
-        enabled: true,
-        configured: true,
-        health: "ok",
-        healthMessage: "Primary DroidAgent interface.",
-        metadata: {}
-      })
-    ];
-
-    try {
-      const output = await this.execOpenClaw(["channels", "status", "--probe", "--json"]);
-      const parsed = JSON.parse(output) as { channels?: Array<Record<string, unknown>> };
-      const signalRows = (Array.isArray(parsed.channels) ? parsed.channels : []).filter((row) => row.channel === "signal");
-      statuses.push(
+    return await this.channelStatusesCache.get(async () => {
+      const runtimeSettings = await appStateService.getRuntimeSettings();
+      const statuses: ChannelStatus[] = [
         ChannelStatusSchema.parse({
-          id: "signal",
-          label: "Signal",
-          enabled: signalRows.some((row) => row.enabled !== false) || runtimeSettings.signalRegistrationState === "registered",
-          configured: signalRows.length > 0 || Boolean(runtimeSettings.signalAccountId),
+          id: "web",
+          label: "Web/PWA",
+          enabled: true,
+          configured: true,
+          health: "ok",
+          healthMessage: "Primary DroidAgent interface.",
+          metadata: {}
+        })
+      ];
+
+      try {
+        const output = await this.execOpenClaw(["channels", "status", "--probe", "--json"]);
+        const parsed = JSON.parse(output) as { channels?: Array<Record<string, unknown>> };
+        const signalRows = (Array.isArray(parsed.channels) ? parsed.channels : []).filter((row) => row.channel === "signal");
+        statuses.push(
+          ChannelStatusSchema.parse({
+            id: "signal",
+            label: "Signal",
+            enabled: signalRows.some((row) => row.enabled !== false) || runtimeSettings.signalRegistrationState === "registered",
+            configured: signalRows.length > 0 || Boolean(runtimeSettings.signalAccountId),
+            health:
+              runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
+                ? "ok"
+                : runtimeSettings.signalLastError
+                  ? "warn"
+                  : signalRows.some((row) => row.ok === false)
+                    ? "warn"
+                    : "warn",
+            healthMessage:
+              runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
+                ? "Signal is linked through the local signal-cli HTTP daemon."
+                : runtimeSettings.signalLastError ??
+                  (signalRows.length > 0 ? "Signal channel detected in OpenClaw." : "Signal is not configured yet."),
+            metadata: {
+              daemonRunning: runtimeSettings.signalDaemonState === "running",
+              hasAccount: Boolean(runtimeSettings.signalAccountId)
+            }
+          })
+        );
+      } catch {
+        statuses.push(
+          ChannelStatusSchema.parse({
+            id: "signal",
+            label: "Signal",
+            enabled: runtimeSettings.signalRegistrationState === "registered",
+            configured: Boolean(runtimeSettings.signalAccountId),
+            health: "warn",
+            healthMessage: runtimeSettings.signalLastError ?? "Signal is not configured yet.",
+            metadata: {
+              daemonRunning: runtimeSettings.signalDaemonState === "running",
+              hasAccount: Boolean(runtimeSettings.signalAccountId)
+            }
+          })
+        );
+      }
+
+      const pendingPairings = await this.listPendingPairings("signal");
+      const healthChecks = [
+        SignalHealthCheckSchema.parse({
+          id: "cli",
+          label: "signal-cli",
+          health: runtimeSettings.signalCliPath && runtimeSettings.signalCliVersion ? "ok" : "warn",
+          message:
+            runtimeSettings.signalCliPath && runtimeSettings.signalCliVersion
+              ? `signal-cli ${runtimeSettings.signalCliVersion}`
+              : "signal-cli is not installed yet."
+        }),
+        SignalHealthCheckSchema.parse({
+          id: "java",
+          label: "Java",
+          health: runtimeSettings.signalJavaHome ? "ok" : "warn",
+          message: runtimeSettings.signalJavaHome ? runtimeSettings.signalJavaHome : "A compatible Java runtime is not configured."
+        }),
+        SignalHealthCheckSchema.parse({
+          id: "account",
+          label: "Account",
+          health: runtimeSettings.signalAccountId ? "ok" : "warn",
+          message: runtimeSettings.signalAccountId ?? "No Signal account is configured yet."
+        }),
+        SignalHealthCheckSchema.parse({
+          id: "daemon",
+          label: "Daemon",
+          health:
+            runtimeSettings.signalDaemonState === "running"
+              ? "ok"
+              : runtimeSettings.signalRegistrationState === "registered"
+                ? "warn"
+                : "warn",
+          message:
+            runtimeSettings.signalDaemonState === "running"
+              ? runtimeSettings.signalDaemonUrl ?? "Signal daemon is reachable."
+              : runtimeSettings.signalLastError ?? "Signal daemon is not running."
+        }),
+        SignalHealthCheckSchema.parse({
+          id: "channel",
+          label: "OpenClaw Channel",
           health:
             runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
               ? "ok"
-              : runtimeSettings.signalLastError
-                ? "warn"
-                : signalRows.some((row) => row.ok === false)
-                  ? "warn"
-                  : "warn",
-          healthMessage:
-            runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
-              ? "Signal is linked through the local signal-cli HTTP daemon."
-              : runtimeSettings.signalLastError ??
-                (signalRows.length > 0 ? "Signal channel detected in OpenClaw." : "Signal is not configured yet."),
-          metadata: {
-            daemonRunning: runtimeSettings.signalDaemonState === "running",
-            hasAccount: Boolean(runtimeSettings.signalAccountId)
-          }
-        })
-      );
-    } catch {
-      statuses.push(
-        ChannelStatusSchema.parse({
-          id: "signal",
-          label: "Signal",
-          enabled: runtimeSettings.signalRegistrationState === "registered",
-          configured: Boolean(runtimeSettings.signalAccountId),
-          health: "warn",
-          healthMessage: runtimeSettings.signalLastError ?? "Signal is not configured yet.",
-          metadata: {
-            daemonRunning: runtimeSettings.signalDaemonState === "running",
-            hasAccount: Boolean(runtimeSettings.signalAccountId)
-          }
-        })
-      );
-    }
-
-    const pendingPairings = await this.listPendingPairings("signal");
-    const healthChecks = [
-      SignalHealthCheckSchema.parse({
-        id: "cli",
-        label: "signal-cli",
-        health: runtimeSettings.signalCliPath && runtimeSettings.signalCliVersion ? "ok" : "warn",
-        message:
-          runtimeSettings.signalCliPath && runtimeSettings.signalCliVersion
-            ? `signal-cli ${runtimeSettings.signalCliVersion}`
-            : "signal-cli is not installed yet."
-      }),
-      SignalHealthCheckSchema.parse({
-        id: "java",
-        label: "Java",
-        health: runtimeSettings.signalJavaHome ? "ok" : "warn",
-        message: runtimeSettings.signalJavaHome ? runtimeSettings.signalJavaHome : "A compatible Java runtime is not configured."
-      }),
-      SignalHealthCheckSchema.parse({
-        id: "account",
-        label: "Account",
-        health: runtimeSettings.signalAccountId ? "ok" : "warn",
-        message: runtimeSettings.signalAccountId ?? "No Signal account is configured yet."
-      }),
-      SignalHealthCheckSchema.parse({
-        id: "daemon",
-        label: "Daemon",
-        health:
-          runtimeSettings.signalDaemonState === "running"
-            ? "ok"
-            : runtimeSettings.signalRegistrationState === "registered"
-              ? "warn"
               : "warn",
-        message:
-          runtimeSettings.signalDaemonState === "running"
-            ? runtimeSettings.signalDaemonUrl ?? "Signal daemon is reachable."
-            : runtimeSettings.signalLastError ?? "Signal daemon is not running."
-      }),
-      SignalHealthCheckSchema.parse({
-        id: "channel",
-        label: "OpenClaw Channel",
-        health:
-          runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
-            ? "ok"
-            : "warn",
-        message:
-          runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
-            ? "Signal is configured in OpenClaw."
-            : "OpenClaw Signal channel is not fully operational yet."
-      }),
-      SignalHealthCheckSchema.parse({
-        id: "pairing",
-        label: "Pairing Queue",
-        health: pendingPairings.length > 0 ? "warn" : "ok",
-        message: pendingPairings.length > 0 ? `${pendingPairings.length} pending pairing request(s).` : "No pending Signal pairing requests."
-      }),
-      SignalHealthCheckSchema.parse({
-        id: "compatibility",
-        label: "Compatibility",
-        health: runtimeSettings.signalCompatibilityWarning ? "warn" : "ok",
-        message: runtimeSettings.signalCompatibilityWarning ?? "signal-cli version looks current enough for routine use."
-      })
-    ];
+          message:
+            runtimeSettings.signalRegistrationState === "registered" && runtimeSettings.signalDaemonState === "running"
+              ? "Signal is configured in OpenClaw."
+              : "OpenClaw Signal channel is not fully operational yet."
+        }),
+        SignalHealthCheckSchema.parse({
+          id: "pairing",
+          label: "Pairing Queue",
+          health: pendingPairings.length > 0 ? "warn" : "ok",
+          message: pendingPairings.length > 0 ? `${pendingPairings.length} pending pairing request(s).` : "No pending Signal pairing requests."
+        }),
+        SignalHealthCheckSchema.parse({
+          id: "compatibility",
+          label: "Compatibility",
+          health: runtimeSettings.signalCompatibilityWarning ? "warn" : "ok",
+          message: runtimeSettings.signalCompatibilityWarning ?? "signal-cli version looks current enough for routine use."
+        })
+      ];
 
-    return {
-      statuses,
-      config: ChannelConfigSummarySchema.parse({
-        signal: {
-          installed: Boolean(runtimeSettings.signalCliPath),
-          binaryPath: runtimeSettings.signalCliPath,
-          javaHome: runtimeSettings.signalJavaHome,
-          accountId: runtimeSettings.signalAccountId,
-          phoneNumber: runtimeSettings.signalPhoneNumber,
-          deviceName: runtimeSettings.signalDeviceName,
-          cliVersion: runtimeSettings.signalCliVersion,
-          registrationMode: runtimeSettings.signalRegistrationMode,
-          registrationState: runtimeSettings.signalRegistrationState,
-          daemonState: runtimeSettings.signalDaemonState,
-          daemonUrl: runtimeSettings.signalDaemonUrl,
-          receiveMode: runtimeSettings.signalReceiveMode,
-          dmPolicy: "pairing",
-          allowGroups: false,
-          channelConfigured: runtimeSettings.signalRegistrationState === "registered",
-          pendingPairings,
-          linkUri: runtimeSettings.signalLinkUri,
-          lastError: runtimeSettings.signalLastError,
-          lastStartedAt: runtimeSettings.signalLastStartedAt,
-          compatibilityWarning: runtimeSettings.signalCompatibilityWarning,
-          healthChecks
-        }
-      })
-    };
+      return {
+        statuses,
+        config: ChannelConfigSummarySchema.parse({
+          signal: {
+            installed: Boolean(runtimeSettings.signalCliPath),
+            binaryPath: runtimeSettings.signalCliPath,
+            javaHome: runtimeSettings.signalJavaHome,
+            accountId: runtimeSettings.signalAccountId,
+            phoneNumber: runtimeSettings.signalPhoneNumber,
+            deviceName: runtimeSettings.signalDeviceName,
+            cliVersion: runtimeSettings.signalCliVersion,
+            registrationMode: runtimeSettings.signalRegistrationMode,
+            registrationState: runtimeSettings.signalRegistrationState,
+            daemonState: runtimeSettings.signalDaemonState,
+            daemonUrl: runtimeSettings.signalDaemonUrl,
+            receiveMode: runtimeSettings.signalReceiveMode,
+            dmPolicy: "pairing",
+            allowGroups: false,
+            channelConfigured: runtimeSettings.signalRegistrationState === "registered",
+            pendingPairings,
+            linkUri: runtimeSettings.signalLinkUri,
+            lastError: runtimeSettings.signalLastError,
+            lastStartedAt: runtimeSettings.signalLastStartedAt,
+            compatibilityWarning: runtimeSettings.signalCompatibilityWarning,
+            healthChecks
+          }
+        })
+      };
+    });
   }
 
   async listChannels(): Promise<{ statuses: ChannelStatus[]; config: ChannelConfigSummary }> {
@@ -1148,14 +1159,17 @@ export class OpenClawService {
       signalPhoneNumber: params.accountId.startsWith("+") ? params.accountId : null,
       signalDaemonUrl: params.httpUrl ?? null
     });
+    this.invalidateChannelStatusCache();
   }
 
   async removeSignalChannel(): Promise<void> {
     await this.execOpenClaw(["channels", "remove", "--channel", "signal", "--delete"], true);
+    this.invalidateChannelStatusCache();
   }
 
   async approveSignalPairing(code: string): Promise<void> {
     await this.execOpenClaw(["pairing", "approve", "signal", code, "--notify"]);
+    this.invalidateChannelStatusCache();
   }
 
   async resolveSignalPairing(code: string, resolution: "approved" | "denied"): Promise<void> {

@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getAccessSettings, updateAccessSettings, getNamedSecret, hasNamedSecret, setNamedSecret, spawnMock, runCommandMock } = vi.hoisted(() => ({
@@ -38,6 +40,7 @@ vi.mock("../lib/process.js", () => ({
   runCommand: runCommandMock
 }));
 
+import { paths } from "../env.js";
 import { CommandError } from "../lib/process.js";
 import { cloudflareRemoteAccessProvider, tailscaleRemoteAccessProvider } from "./remote-access-service.js";
 
@@ -164,6 +167,15 @@ describe("TailscaleRemoteAccessProvider", () => {
       CurrentTailnet: {}
     });
     const hasBinarySpy = vi.spyOn(tailscaleRemoteAccessProvider as never, "hasBinary" as never).mockResolvedValue(true);
+    const wakeSystemAppSpy = vi
+      .spyOn(tailscaleRemoteAccessProvider as never, "wakeSystemApp" as never)
+      .mockResolvedValue(false);
+    const existsSyncSpy = vi.spyOn(fs, "existsSync").mockImplementation((value) => {
+      if (value === paths.tailscaleSocketPath) {
+        return false;
+      }
+      return true;
+    });
     const userspaceSpy = vi
       .spyOn(tailscaleRemoteAccessProvider as never, "ensureUserspaceDaemon" as never)
       .mockResolvedValue("/tmp/droidagent-tailscaled.sock");
@@ -190,8 +202,57 @@ describe("TailscaleRemoteAccessProvider", () => {
     expect(status.healthMessage).toContain("userspace daemon");
 
     hasBinarySpy.mockRestore();
+    wakeSystemAppSpy.mockRestore();
+    existsSyncSpy.mockRestore();
     userspaceSpy.mockRestore();
     fallbackSpy.mockRestore();
+  });
+
+  it("falls back to the userspace daemon when the system status probe times out", async () => {
+    const timeoutError = new CommandError("tailscale status --json timed out", "", "", null);
+    const statusJson = JSON.stringify({
+      BackendState: "Running",
+      Self: {
+        HostName: "droidagent-mac",
+        DNSName: "droidagent-mac.taila06290.ts.net."
+      },
+      CurrentTailnet: {
+        Name: "taila06290.ts.net",
+        MagicDNSEnabled: true
+      }
+    });
+    const hasBinarySpy = vi.spyOn(tailscaleRemoteAccessProvider as never, "hasBinary" as never).mockResolvedValue(true);
+    const wakeSystemAppSpy = vi
+      .spyOn(tailscaleRemoteAccessProvider as never, "wakeSystemApp" as never)
+      .mockResolvedValue(false);
+    const existsSyncSpy = vi.spyOn(fs, "existsSync").mockImplementation((value) => {
+      if (value === paths.tailscaleSocketPath) {
+        return false;
+      }
+      return true;
+    });
+    const userspaceSpy = vi
+      .spyOn(tailscaleRemoteAccessProvider as never, "ensureUserspaceDaemon" as never)
+      .mockResolvedValue("/tmp/droidagent-tailscaled.sock");
+
+    runCommandMock
+      .mockResolvedValueOnce({ stdout: "1.96.3\n", stderr: "", exitCode: 0 })
+      .mockRejectedValueOnce(timeoutError)
+      .mockResolvedValueOnce({ stdout: statusJson, stderr: "", exitCode: 0 })
+      .mockResolvedValueOnce({ stdout: JSON.stringify(["https://droidagent-mac.taila06290.ts.net", "http://127.0.0.1:4318"]), stderr: "", exitCode: 0 });
+
+    const status = await tailscaleRemoteAccessProvider.getStatus();
+
+    expect(status.installed).toBe(true);
+    expect(status.running).toBe(true);
+    expect(status.authenticated).toBe(true);
+    expect(status.canonicalUrl).toBe("https://droidagent-mac.taila06290.ts.net");
+    expect(userspaceSpy).toHaveBeenCalledTimes(1);
+
+    hasBinarySpy.mockRestore();
+    wakeSystemAppSpy.mockRestore();
+    existsSyncSpy.mockRestore();
+    userspaceSpy.mockRestore();
   });
 
   it("surfaces the tailnet serve enable URL instead of hanging when Serve is disabled", async () => {
@@ -212,5 +273,43 @@ describe("TailscaleRemoteAccessProvider", () => {
     );
 
     userspaceSpy.mockRestore();
+  });
+
+  it("falls back to the last known Tailscale status when a fresh probe fails", async () => {
+    const hasBinarySpy = vi.spyOn(tailscaleRemoteAccessProvider as never, "hasBinary" as never).mockResolvedValue(true);
+    const readRawStatusSpy = vi.spyOn(tailscaleRemoteAccessProvider as never, "readRawStatus" as never);
+
+    readRawStatusSpy.mockResolvedValueOnce({
+      version: "1.96.3",
+      running: true,
+      mode: "system",
+      socketPath: null,
+      statusRaw: {
+        BackendState: "Running",
+        Self: {
+          HostName: "mac",
+          DNSName: "mac.taila06290.ts.net."
+        },
+        CurrentTailnet: {
+          Name: "taila06290.ts.net",
+          MagicDNSEnabled: true
+        }
+      },
+      serveRaw: ["https://mac.taila06290.ts.net", "http://127.0.0.1:4318"]
+    });
+
+    const first = await tailscaleRemoteAccessProvider.getStatus();
+    tailscaleRemoteAccessProvider.invalidateStatus();
+
+    readRawStatusSpy.mockRejectedValueOnce(new Error("probe failed"));
+
+    const second = await tailscaleRemoteAccessProvider.getStatus();
+
+    expect(first.canonicalUrl).toBe("https://mac.taila06290.ts.net");
+    expect(second.canonicalUrl).toBe(first.canonicalUrl);
+    expect(second.healthMessage).toBe(first.healthMessage);
+
+    hasBinarySpy.mockRestore();
+    readRawStatusSpy.mockRestore();
   });
 });

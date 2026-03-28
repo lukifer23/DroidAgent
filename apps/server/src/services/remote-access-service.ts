@@ -16,7 +16,9 @@ import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 import { keychainService } from "./keychain-service.js";
 
-const REMOTE_STATUS_TTL_MS = 5000;
+const REMOTE_STATUS_TTL_MS = 5_000;
+const TAILSCALE_STATUS_TIMEOUT_MS = 1_500;
+const STATUS_VERSION_TIMEOUT_MS = 1_000;
 
 function recursiveStrings(value: unknown, result: string[] = []): string[] {
   if (typeof value === "string") {
@@ -129,9 +131,19 @@ export interface RemoteAccessProvider<TStatus> {
   getStatus(): Promise<TStatus>;
 }
 
+type TailscaleRawStatus = {
+  version: string | null;
+  statusRaw: unknown;
+  serveRaw: unknown;
+  running: boolean;
+  mode: "system" | "userspace";
+  socketPath: string | null;
+};
+
 export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<TailscaleStatus> {
   private process: ChildProcess | null = null;
   private activeSocketPath: string | null = null;
+  private lastStatus: TailscaleStatus | null = null;
   private readonly statusCache = new TtlCache<TailscaleStatus>(REMOTE_STATUS_TTL_MS);
 
   invalidateStatus(): void {
@@ -163,11 +175,39 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
 
     const combined = `${error.message}\n${error.stdout}\n${error.stderr}`.toLowerCase();
     return (
+      combined.includes("timed out") ||
       combined.includes("failed to connect to local tailscale service") ||
       combined.includes("requires root") ||
       combined.includes("no such file") ||
       combined.includes("connection refused")
     );
+  }
+
+  private async wakeSystemApp(): Promise<boolean> {
+    try {
+      await runCommand("open", ["-g", "-a", "Tailscale"], {
+        timeoutMs: 2_000
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async waitForSystemDaemon(version: string | null): Promise<TailscaleRawStatus | null> {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        return await this.readRawStatusWithSocket({
+          version,
+          socketPath: null,
+          mode: "system"
+        });
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+
+    return null;
   }
 
   private async runTailscale(
@@ -200,16 +240,14 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
     version: string | null;
     socketPath: string | null;
     mode: "system" | "userspace";
-  }): Promise<{
-    version: string | null;
-    statusRaw: unknown;
-    serveRaw: unknown;
-    running: boolean;
-    mode: "system" | "userspace";
-    socketPath: string | null;
-  }> {
-    const statusOutput = await this.runTailscale(["status", "--json"], params.socketPath);
-    const serveOutput = await this.runTailscale(["serve", "status", "--json"], params.socketPath, { okExitCodes: [0, 1] });
+  }): Promise<TailscaleRawStatus> {
+    const statusOutput = await this.runTailscale(["status", "--json"], params.socketPath, {
+      timeoutMs: TAILSCALE_STATUS_TIMEOUT_MS
+    });
+    const serveOutput = await this.runTailscale(["serve", "status", "--json"], params.socketPath, {
+      okExitCodes: [0, 1],
+      timeoutMs: TAILSCALE_STATUS_TIMEOUT_MS
+    });
     return {
       version: params.version,
       statusRaw: safeJsonParse(statusOutput.stdout),
@@ -281,14 +319,7 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
     return null;
   }
 
-  private async readRawStatus(): Promise<{
-    version: string | null;
-    statusRaw: unknown;
-    serveRaw: unknown;
-    running: boolean;
-    mode: "system" | "userspace";
-    socketPath: string | null;
-  }> {
+  private async readRawStatus(): Promise<TailscaleRawStatus> {
     if (!(await this.hasBinary())) {
       return {
         version: null,
@@ -302,9 +333,33 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
 
     let version: string | null = null;
     try {
-      version = (await runCommand("tailscale", ["version"], { okExitCodes: [0, 1] })).stdout.trim().split("\n")[0] || null;
+      version = (await runCommand("tailscale", ["version"], {
+        okExitCodes: [0, 1],
+        timeoutMs: STATUS_VERSION_TIMEOUT_MS
+      })).stdout.trim().split("\n")[0] || null;
     } catch {
       version = null;
+    }
+
+    const preferredSocketPath =
+      this.activeSocketPath && fs.existsSync(this.activeSocketPath)
+        ? this.activeSocketPath
+        : fs.existsSync(paths.tailscaleSocketPath)
+          ? paths.tailscaleSocketPath
+          : null;
+
+    if (preferredSocketPath) {
+      try {
+        return await this.readRawStatusWithSocket({
+          version,
+          socketPath: preferredSocketPath,
+          mode: "userspace"
+        });
+      } catch {
+        if (preferredSocketPath === this.activeSocketPath) {
+          this.activeSocketPath = null;
+        }
+      }
     }
 
     try {
@@ -326,6 +381,11 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
           };
         }
         throw error;
+      }
+
+      const systemStatus = (await this.wakeSystemApp()) ? await this.waitForSystemDaemon(version) : null;
+      if (systemStatus) {
+        return systemStatus;
       }
 
       const socketPath = await this.ensureUserspaceDaemon();
@@ -391,80 +451,92 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
 
   async getStatus(): Promise<TailscaleStatus> {
     return await this.statusCache.get(async () => {
-      if (!(await this.hasBinary())) {
-        return TailscaleStatusSchema.parse({
-          installed: false,
-          running: false,
-          authenticated: false,
-          health: "warn",
-          healthMessage: "Tailscale is not installed on this host.",
-          version: null,
-          deviceName: null,
-          tailnetName: null,
-          dnsName: null,
-          magicDnsEnabled: false,
-          httpsEnabled: false,
-          serveCommand: null,
-          canonicalUrl: null,
+      try {
+        if (!(await this.hasBinary())) {
+          const status = TailscaleStatusSchema.parse({
+            installed: false,
+            running: false,
+            authenticated: false,
+            health: "warn",
+            healthMessage: "Tailscale is not installed on this host.",
+            version: null,
+            deviceName: null,
+            tailnetName: null,
+            dnsName: null,
+            magicDnsEnabled: false,
+            httpsEnabled: false,
+            serveCommand: null,
+            canonicalUrl: null,
+            lastCheckedAt: nowIso()
+          });
+          this.lastStatus = status;
+          return status;
+        }
+
+        const { version, statusRaw, serveRaw, running, mode, socketPath } = await this.readRawStatus();
+        this.activeSocketPath = mode === "userspace" ? socketPath : null;
+        const status = (statusRaw ?? {}) as Record<string, unknown>;
+        const self = (status.Self ?? {}) as Record<string, unknown>;
+        const currentTailnet = (status.CurrentTailnet ?? {}) as Record<string, unknown>;
+        const backendState = typeof status.BackendState === "string" ? status.BackendState : null;
+        const dnsName = cleanDnsName(self.DNSName ?? status.DNSName);
+        const deviceName = typeof self.HostName === "string" ? self.HostName : dnsName?.split(".")[0] ?? null;
+        const tailnetName =
+          typeof currentTailnet.Name === "string"
+            ? currentTailnet.Name
+            : dnsName && dnsName.split(".").length > 2
+              ? dnsName.split(".").slice(1).join(".")
+              : null;
+        const magicDnsEnabled = Boolean(currentTailnet.MagicDNSEnabled) || Boolean(dnsName);
+        const authenticated = running && backendState !== "NeedsLogin" && backendState !== "NoState" && backendState !== "Stopped";
+        const serveTarget = extractServeTarget(serveRaw);
+        const serveUrl = extractServeUrl(serveRaw) ?? (dnsName ? `https://${dnsName}` : null);
+        const httpsEnabled = Boolean(serveTarget && serveUrl);
+
+        const daemonLabel = mode === "userspace" ? "Tailscale userspace daemon" : "Tailscale";
+        const healthMessage = !running
+          ? mode === "userspace"
+            ? "Tailscale userspace daemon is not responding yet."
+            : "Tailscale is installed but not currently running."
+          : !authenticated
+            ? `${daemonLabel} is running but this device is not authenticated into a tailnet.`
+            : !magicDnsEnabled
+              ? `${daemonLabel} is connected, but MagicDNS is not available for a stable HTTPS host.`
+              : httpsEnabled
+                ? `${daemonLabel} Serve is exposing DroidAgent at ${serveUrl}.`
+                : `${daemonLabel} is connected, but Serve is not yet exposing DroidAgent.`;
+
+        const parsed = TailscaleStatusSchema.parse({
+          installed: true,
+          running,
+          authenticated,
+          health: httpsEnabled ? "ok" : authenticated ? "warn" : "warn",
+          healthMessage,
+          version,
+          deviceName,
+          tailnetName,
+          dnsName,
+          magicDnsEnabled,
+          httpsEnabled,
+          serveCommand: authenticated ? `tailscale serve --bg --https=443 ${SERVER_PORT}` : null,
+          canonicalUrl: authenticated && magicDnsEnabled ? serveUrl : null,
           lastCheckedAt: nowIso()
         });
+        this.lastStatus = parsed;
+        return parsed;
+      } catch {
+        if (this.lastStatus) {
+          return this.lastStatus;
+        }
+        throw new Error("Tailscale status could not be determined.");
       }
-
-      const { version, statusRaw, serveRaw, running, mode, socketPath } = await this.readRawStatus();
-      this.activeSocketPath = mode === "userspace" ? socketPath : null;
-      const status = (statusRaw ?? {}) as Record<string, unknown>;
-      const self = (status.Self ?? {}) as Record<string, unknown>;
-      const currentTailnet = (status.CurrentTailnet ?? {}) as Record<string, unknown>;
-      const backendState = typeof status.BackendState === "string" ? status.BackendState : null;
-      const dnsName = cleanDnsName(self.DNSName ?? status.DNSName);
-      const deviceName = typeof self.HostName === "string" ? self.HostName : dnsName?.split(".")[0] ?? null;
-      const tailnetName =
-        typeof currentTailnet.Name === "string"
-          ? currentTailnet.Name
-          : dnsName && dnsName.split(".").length > 2
-            ? dnsName.split(".").slice(1).join(".")
-            : null;
-      const magicDnsEnabled = Boolean(currentTailnet.MagicDNSEnabled) || Boolean(dnsName);
-      const authenticated = running && backendState !== "NeedsLogin" && backendState !== "NoState" && backendState !== "Stopped";
-      const serveTarget = extractServeTarget(serveRaw);
-      const serveUrl = extractServeUrl(serveRaw) ?? (dnsName ? `https://${dnsName}` : null);
-      const httpsEnabled = Boolean(serveTarget && serveUrl);
-
-      const daemonLabel = mode === "userspace" ? "Tailscale userspace daemon" : "Tailscale";
-      const healthMessage = !running
-        ? mode === "userspace"
-          ? "Tailscale userspace daemon is not responding yet."
-          : "Tailscale is installed but not currently running."
-        : !authenticated
-          ? `${daemonLabel} is running but this device is not authenticated into a tailnet.`
-          : !magicDnsEnabled
-            ? `${daemonLabel} is connected, but MagicDNS is not available for a stable HTTPS host.`
-            : httpsEnabled
-              ? `${daemonLabel} Serve is exposing DroidAgent at ${serveUrl}.`
-              : `${daemonLabel} is connected, but Serve is not yet exposing DroidAgent.`;
-
-      return TailscaleStatusSchema.parse({
-        installed: true,
-        running,
-        authenticated,
-        health: httpsEnabled ? "ok" : authenticated ? "warn" : "warn",
-        healthMessage,
-        version,
-        deviceName,
-        tailnetName,
-        dnsName,
-        magicDnsEnabled,
-        httpsEnabled,
-        serveCommand: authenticated ? `tailscale serve --bg --https=443 ${SERVER_PORT}` : null,
-        canonicalUrl: authenticated && magicDnsEnabled ? serveUrl : null,
-        lastCheckedAt: nowIso()
-      });
     });
   }
 }
 
 export class CloudflareRemoteAccessProvider implements RemoteAccessProvider<CloudflareStatus> {
   private process: ChildProcess | null = null;
+  private lastStatus: CloudflareStatus | null = null;
   private readonly statusCache = new TtlCache<CloudflareStatus>(REMOTE_STATUS_TTL_MS);
 
   invalidateStatus(): void {
@@ -565,47 +637,58 @@ export class CloudflareRemoteAccessProvider implements RemoteAccessProvider<Clou
 
   async getStatus(): Promise<CloudflareStatus> {
     return await this.statusCache.get(async () => {
-      const [binaryPath, accessSettings, tokenStored] = await Promise.all([
-        this.binaryPath(),
-        appStateService.getAccessSettings(),
-        keychainService.hasNamedSecret("cloudflareTunnelToken")
-      ]);
-      const hostname = accessSettings.cloudflareHostname;
+      try {
+        const [binaryPath, accessSettings, tokenStored] = await Promise.all([
+          this.binaryPath(),
+          appStateService.getAccessSettings(),
+          keychainService.hasNamedSecret("cloudflareTunnelToken")
+        ]);
+        const hostname = accessSettings.cloudflareHostname;
 
-      let version: string | null = null;
-      if (binaryPath) {
-        try {
-          version = (await runCommand(binaryPath, ["--version"])).stdout.trim().split("\n")[0] || null;
-        } catch {
-          version = null;
+        let version: string | null = null;
+        if (binaryPath) {
+          try {
+            version = (await runCommand(binaryPath, ["--version"], {
+              timeoutMs: STATUS_VERSION_TIMEOUT_MS
+            })).stdout.trim().split("\n")[0] || null;
+          } catch {
+            version = null;
+          }
         }
+
+        const canonicalUrl = hostname ? `https://${hostname}` : null;
+        const reachable = canonicalUrl ? await healthcheck(canonicalUrl) : false;
+        const running = reachable || Boolean(this.process && this.process.exitCode === null);
+
+        const healthMessage = !binaryPath
+          ? "cloudflared is not installed on this host."
+          : !hostname || !tokenStored
+            ? "Cloudflare tunnel is not configured yet."
+            : reachable
+              ? `Cloudflare Tunnel is exposing DroidAgent at ${canonicalUrl}.`
+              : "Cloudflare tunnel is configured but the public hostname is not reachable yet.";
+
+        const parsed = CloudflareStatusSchema.parse({
+          installed: Boolean(binaryPath),
+          configured: Boolean(hostname),
+          running,
+          tokenStored,
+          health: reachable ? "ok" : hostname && tokenStored ? "warn" : "warn",
+          healthMessage,
+          version,
+          hostname,
+          canonicalUrl,
+          lastStartedAt: accessSettings.cloudflareLastStartedAt,
+          lastCheckedAt: nowIso()
+        });
+        this.lastStatus = parsed;
+        return parsed;
+      } catch {
+        if (this.lastStatus) {
+          return this.lastStatus;
+        }
+        throw new Error("Cloudflare status could not be determined.");
       }
-
-      const canonicalUrl = hostname ? `https://${hostname}` : null;
-      const reachable = canonicalUrl ? await healthcheck(canonicalUrl) : false;
-      const running = reachable || Boolean(this.process && this.process.exitCode === null);
-
-      const healthMessage = !binaryPath
-        ? "cloudflared is not installed on this host."
-        : !hostname || !tokenStored
-          ? "Cloudflare tunnel is not configured yet."
-          : reachable
-            ? `Cloudflare Tunnel is exposing DroidAgent at ${canonicalUrl}.`
-            : "Cloudflare tunnel is configured but the public hostname is not reachable yet.";
-
-      return CloudflareStatusSchema.parse({
-        installed: Boolean(binaryPath),
-        configured: Boolean(hostname),
-        running,
-        tokenStored,
-        health: reachable ? "ok" : hostname && tokenStored ? "warn" : "warn",
-        healthMessage,
-        version,
-        hostname,
-        canonicalUrl,
-        lastStartedAt: accessSettings.cloudflareLastStartedAt,
-        lastCheckedAt: nowIso()
-      });
     });
   }
 }

@@ -22,7 +22,7 @@ import {
 } from "./remote-access-service.js";
 
 const BOOTSTRAP_TOKEN_TTL_MS = 1000 * 60 * 15;
-const ACCESS_SNAPSHOT_TTL_MS = 5000;
+const ACCESS_SNAPSHOT_TTL_MS = 5_000;
 
 function normalizeOrigin(value: string): string {
   return new URL(value).origin;

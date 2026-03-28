@@ -5,7 +5,7 @@ import {
   type StartupDiagnostic
 } from "@droidagent/shared";
 
-const STARTUP_DIAGNOSTICS_TTL_MS = 5000;
+const STARTUP_DIAGNOSTICS_TTL_MS = 15_000;
 
 import { accessService } from "./access-service.js";
 import { appStateService } from "./app-state-service.js";

@@ -221,7 +221,7 @@ function withMeasuredStreamRelay(
 }
 
 app.get("/api/health", async (c) => {
-  await signalService.refreshState();
+  signalService.refreshStateInBackground();
   const [runtimeSummary, setup, launchAgent, channels] = await Promise.all([
     runtimeService.getRuntimeStatuses(),
     appStateService.getSetupState(),
@@ -737,7 +737,7 @@ app.post("/api/providers/:providerId/select", async (c) => {
 app.get("/api/channels", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  await signalService.refreshState();
+  signalService.refreshStateInBackground();
   return c.json(await harnessService.listChannels());
 });
 
@@ -1201,7 +1201,7 @@ void (async () => {
       await startupService.restore();
     }
 
-    await Promise.all([
+    await Promise.allSettled([
       accessService.getBootstrapState(),
       accessService.getAccessSnapshot(),
       runtimeService.getRuntimeStatuses(),

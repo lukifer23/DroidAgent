@@ -13,7 +13,7 @@ import { runtimeService } from "./runtime-service.js";
 import { signalService } from "./signal-service.js";
 import { startupService } from "./startup-service.js";
 
-const DASHBOARD_SNAPSHOT_TTL_MS = 5000;
+const DASHBOARD_SNAPSHOT_TTL_MS = 15_000;
 
 export class DashboardService {
   private readonly snapshotCache = new TtlCache<ReturnType<typeof DashboardStateSchema.parse>>(DASHBOARD_SNAPSHOT_TTL_MS);
@@ -26,7 +26,7 @@ export class DashboardService {
     const metric = performanceService.start("server", "dashboard.snapshot");
     try {
       return await this.snapshotCache.get(async () => {
-        await signalService.refreshState();
+        signalService.refreshStateInBackground();
 
         const [
           setup,
