@@ -120,13 +120,15 @@ export function SetupScreen() {
 
   const passkeyConfigured = Boolean(dashboard?.setup.passkeyConfigured);
   const workspaceReady = Boolean(dashboard?.setup.workspaceRoot);
-  const memoryReady = Boolean(memoryStatus?.ready);
+  const memoryScaffoldReady = Boolean(memoryStatus?.ready);
+  const memoryReady = Boolean(memoryStatus?.semanticReady);
   const ollamaReady = ollamaRuntime?.state === "running";
   const openclawReady = openclawRuntime?.state === "running";
   const providerSelected = ollamaProvider?.enabled === true;
   const providerModelMatches = ollamaProvider?.model === setupModel;
   const hostReady =
     workspaceReady &&
+    memoryScaffoldReady &&
     memoryReady &&
     ollamaReady &&
     openclawReady &&
@@ -202,13 +204,26 @@ export function SetupScreen() {
       {
         label: "Workspace Memory",
         value: summarizeHealth(
-          memoryReady,
+          memoryScaffoldReady,
           "Bootstrapped",
           "Will be created automatically",
         ),
-        detail: memoryReady
+        detail: memoryScaffoldReady
           ? `MEMORY.md, skills, and daily notes are ready under ${memoryStatus?.effectiveWorkspaceRoot ?? dashboard?.setup.workspaceRoot ?? "the workspace"}.`
-          : "DroidAgent will seed durable memory files, daily notes, and workspace skills for you.",
+          : "DroidAgent will seed durable memory files, daily notes, workspace skills, and a personal preferences file for you.",
+        ready: memoryScaffoldReady,
+      },
+      {
+        label: "Semantic Memory",
+        value: summarizeHealth(
+          memoryReady,
+          "Local index live",
+          "Will be prepared automatically",
+        ),
+        detail: memoryReady
+          ? `${memoryStatus?.embeddingProvider ?? "unknown"}/${memoryStatus?.embeddingModel ?? "unknown"} • ${memoryStatus?.indexedFiles ?? 0} files • ${memoryStatus?.indexedChunks ?? 0} chunks`
+          : memoryStatus?.embeddingProbeError ??
+            "DroidAgent will pull a local embedding model and build the semantic index for memory, sessions, preferences, and skills.",
         ready: memoryReady,
       },
       {
@@ -261,7 +276,13 @@ export function SetupScreen() {
       providerSelected,
       setupModel,
       memoryReady,
+      memoryScaffoldReady,
       memoryStatus?.effectiveWorkspaceRoot,
+      memoryStatus?.embeddingModel,
+      memoryStatus?.embeddingProvider,
+      memoryStatus?.embeddingProbeError,
+      memoryStatus?.indexedChunks,
+      memoryStatus?.indexedFiles,
       workspaceReady,
     ],
   );
@@ -411,8 +432,9 @@ export function SetupScreen() {
             <h2>Make this Mac and your phone ready.</h2>
             <p className="setup-intro">
               DroidAgent should handle the normal path in one pass: shared
-              workspace, Ollama, OpenClaw, a 65k local context budget, then the
-              private Tailscale phone URL and a clean memory scaffold.
+              workspace, Ollama, OpenClaw, a 65k local context budget, local
+              semantic memory with embeddings, then the private Tailscale phone
+              URL.
             </p>
           </div>
           <div className="setup-hero-stats">

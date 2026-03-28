@@ -152,6 +152,7 @@ async function seedEnvironment(rootDir: string): Promise<E2EState> {
     selectedRuntime: "ollama",
     activeProviderId: "ollama-default",
     ollamaModel: "qwen3.5:4b",
+    ollamaEmbeddingModel: "embeddinggemma:300m-qat-q8_0",
     ollamaContextWindow: 65536,
     llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
     llamaCppContextWindow: 8192,

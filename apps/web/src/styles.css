@@ -1246,3 +1246,7 @@ button:active:not(:disabled),
     scroll-behavior: auto !important;
   }
 }
+
+.error-copy {
+  color: var(--danger-300, #ff9a84);
+}

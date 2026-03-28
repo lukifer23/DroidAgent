@@ -51,9 +51,33 @@ export function ModelsScreen() {
       </article>
 
       <article className="panel-card compact">
+        <strong>Semantic Memory</strong>
+        <span>
+          {dashboard?.memory.semanticReady
+            ? "Local semantic search live"
+            : "Semantic memory pending"}
+        </span>
+        <small>
+          {dashboard?.memory.embeddingProvider ?? "unknown"}/
+          {dashboard?.memory.embeddingModel ?? "unconfigured"} •{" "}
+          {dashboard?.memory.indexedFiles ?? 0} files •{" "}
+          {dashboard?.memory.indexedChunks ?? 0} chunks
+        </small>
+        <small>
+          {dashboard?.memory.embeddingProbeError
+            ? dashboard.memory.embeddingProbeError
+            : dashboard?.memory.dirty
+              ? "The semantic index is still warming or needs a reindex."
+              : "Local embeddings stay on-device and back semantic recall."}
+        </small>
+      </article>
+
+      <article className="panel-card compact">
         <strong>Workspace Context</strong>
         <span>
-          {dashboard?.memory.ready ? "Memory scaffold ready" : "Memory scaffold pending"}
+          {dashboard?.memory.ready
+            ? "Scaffold bootstrapped"
+            : "Scaffold pending"}
         </span>
         <small>
           {dashboard?.memory.bootstrapFilesReady ?? 0}/

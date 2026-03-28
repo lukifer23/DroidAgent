@@ -122,9 +122,9 @@ export function FilesScreen() {
           <div>
             <strong>Workspace memory</strong>
             <small>
-              {dashboard.memory.ready
-                ? "Durable memory files are ready in this workspace."
-                : "Prepare the workspace scaffold to seed durable memory and skills."}
+              {dashboard.memory.semanticReady
+                ? `Semantic memory is live with ${dashboard.memory.embeddingModel ?? "local embeddings"}.`
+                : "Prepare semantic memory to seed the workspace scaffold, preferences, and local embeddings."}
             </small>
           </div>
           <div className="button-row">
@@ -133,6 +133,12 @@ export function FilesScreen() {
               onClick={() => setDirectoryPath(".")}
             >
               Workspace Root
+            </button>
+            <button
+              className="secondary"
+              onClick={() => openFilePath("PREFERENCES.md")}
+            >
+              Open PREFERENCES.md
             </button>
             <button
               className="secondary"

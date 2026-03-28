@@ -434,8 +434,15 @@ app.post("/api/memory/prepare", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  const status = await openclawService.prepareWorkspaceContext();
+  const settings = await appStateService.getRuntimeSettings();
+  if (settings.selectedRuntime === "ollama") {
+    await runtimeService.ensureOllamaModel(settings.ollamaEmbeddingModel);
+  }
+  const status = await openclawService.prepareSemanticMemory({
+    reindex: true,
+  });
   await websocketHub.publishMemoryUpdated();
+  await websocketHub.publishSetupUpdated();
   return c.json(status);
 });
 

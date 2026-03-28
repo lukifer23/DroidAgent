@@ -53,6 +53,7 @@ describe("OpenClaw context management policy", () => {
   let runtimeSettings: {
     activeProviderId: string;
     ollamaModel: string;
+    ollamaEmbeddingModel: string;
     ollamaContextWindow: number;
     llamaCppModel: string;
     llamaCppContextWindow: number;
@@ -87,6 +88,7 @@ describe("OpenClaw context management policy", () => {
     runtimeSettings = {
       activeProviderId: "anthropic",
       ollamaModel: "qwen3.5:4b",
+      ollamaEmbeddingModel: "embeddinggemma:300m-qat-q8_0",
       ollamaContextWindow: 65536,
       llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
       llamaCppContextWindow: 8192,
@@ -234,6 +236,10 @@ describe("OpenClaw context management policy", () => {
           },
           thinkingDefault: "off",
           memorySearch: {
+            provider: "ollama",
+            fallback: "none",
+            model: "embeddinggemma:300m-qat-q8_0",
+            extraPaths: ["PREFERENCES.md", "skills/**/*.md"],
             cache: {
               enabled: true,
               maxEntries: 50000,
@@ -348,6 +354,10 @@ describe("OpenClaw context management policy", () => {
         defaults: {
           workspace: paths.workspaceRoot,
           memorySearch: {
+            provider: "ollama",
+            fallback: "none",
+            model: "embeddinggemma:300m-qat-q8_0",
+            extraPaths: ["PREFERENCES.md", "skills/**/*.md"],
             sync: {
               sessions: {
                 deltaMessages: 50,
@@ -622,6 +632,9 @@ describe("OpenClaw context management policy", () => {
       agents: {
         defaults: {
           memorySearch: {
+            provider: "ollama",
+            fallback: "none",
+            model: "embeddinggemma:300m-qat-q8_0",
             cache: {
               enabled: true,
             },
@@ -638,8 +651,71 @@ describe("OpenClaw context management policy", () => {
     expect(status.contextWindow).toBe(65536);
     expect(status.memorySearchEnabled).toBe(true);
     expect(status.sessionMemoryEnabled).toBe(true);
+    expect(status.embeddingRequestedProvider).toBe("ollama");
+    expect(status.embeddingModel).toBe("embeddinggemma:300m-qat-q8_0");
     expect(status.bootstrapFiles.some((file) => file.path === "MEMORY.md")).toBe(
       true,
     );
+  });
+
+  it("surfaces live local embedding status and index counts", async () => {
+    runtimeSettings.activeProviderId = "ollama-default";
+    vi.spyOn(
+      openclawService as never,
+      "readCurrentConfig" as never,
+    ).mockReturnValue({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "ollama",
+            fallback: "none",
+            model: "embeddinggemma:300m-qat-q8_0",
+            cache: {
+              enabled: true,
+            },
+            experimental: {
+              sessionMemory: true,
+            },
+          },
+        },
+      },
+    });
+    vi.spyOn(openclawService as never, "execOpenClaw" as never).mockResolvedValue(
+      JSON.stringify([
+        {
+          agentId: "main",
+          status: {
+            files: 4,
+            chunks: 18,
+            dirty: false,
+            provider: "ollama",
+            model: "embeddinggemma:300m-qat-q8_0",
+            requestedProvider: "ollama",
+            sourceCounts: [
+              { source: "memory", files: 2, chunks: 8 },
+              { source: "sessions", files: 2, chunks: 10 },
+            ],
+            vector: {
+              enabled: true,
+              available: true,
+            },
+          },
+          embeddingProbe: {
+            ok: true,
+          },
+        },
+      ]),
+    );
+
+    const status = await openclawService.memoryStatus();
+
+    expect(status.semanticReady).toBe(true);
+    expect(status.embeddingProvider).toBe("ollama");
+    expect(status.indexedFiles).toBe(4);
+    expect(status.indexedChunks).toBe(18);
+    expect(status.sourceCounts).toEqual([
+      { source: "memory", files: 2, chunks: 8 },
+      { source: "sessions", files: 2, chunks: 10 },
+    ]);
   });
 });

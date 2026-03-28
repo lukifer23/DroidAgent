@@ -449,10 +449,18 @@ export type WorkspaceBootstrapFileStatus = z.infer<
   typeof WorkspaceBootstrapFileStatusSchema
 >;
 
+export const MemorySourceCountSchema = z.object({
+  source: z.string(),
+  files: z.number().int().nonnegative(),
+  chunks: z.number().int().nonnegative(),
+});
+export type MemorySourceCount = z.infer<typeof MemorySourceCountSchema>;
+
 export const MemoryStatusSchema = z.object({
   configuredWorkspaceRoot: z.string().nullable(),
   effectiveWorkspaceRoot: z.string(),
   ready: z.boolean(),
+  semanticReady: z.boolean(),
   memoryDirectory: z.string(),
   memoryDirectoryReady: z.boolean(),
   skillsDirectory: z.string(),
@@ -464,6 +472,18 @@ export const MemoryStatusSchema = z.object({
   bootstrapFilesTotal: z.number().int().nonnegative(),
   memorySearchEnabled: z.boolean(),
   sessionMemoryEnabled: z.boolean(),
+  embeddingProvider: z.string().nullable(),
+  embeddingRequestedProvider: z.string().nullable(),
+  embeddingFallback: z.string().nullable(),
+  embeddingModel: z.string().nullable(),
+  indexedFiles: z.number().int().nonnegative(),
+  indexedChunks: z.number().int().nonnegative(),
+  dirty: z.boolean(),
+  vectorEnabled: z.boolean(),
+  vectorAvailable: z.boolean(),
+  embeddingProbeOk: z.boolean().nullable(),
+  embeddingProbeError: z.string().nullable(),
+  sourceCounts: z.array(MemorySourceCountSchema),
   contextWindow: z.number().int().positive(),
 });
 export type MemoryStatus = z.infer<typeof MemoryStatusSchema>;

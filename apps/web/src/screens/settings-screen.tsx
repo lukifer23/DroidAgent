@@ -63,7 +63,7 @@ export function SettingsScreen() {
   const tailscaleReady = Boolean(access?.tailscaleStatus.authenticated);
   const remoteReady = Boolean(access?.canonicalOrigin?.origin);
   const canGeneratePhoneLink = Boolean(access?.canonicalOrigin);
-  const memoryReady = Boolean(dashboard?.memory.ready);
+  const memoryReady = Boolean(dashboard?.memory.semanticReady);
 
   const overviewCards = [
     {
@@ -104,7 +104,7 @@ export function SettingsScreen() {
       label: "Runtime",
       value: runtimeCount > 0 ? `${runtimeCount} live` : "Not running",
       detail: dashboard?.setup.selectedModel
-        ? `${dashboard.setup.selectedModel} • ${formatTokenBudget(dashboard.memory.contextWindow)} context • ${memoryReady ? "memory ready" : "memory pending"}`
+        ? `${dashboard.setup.selectedModel} • ${formatTokenBudget(dashboard.memory.contextWindow)} context • ${memoryReady ? "semantic memory live" : "semantic memory pending"}`
         : "No default model is selected yet for the common local path.",
       progress: runtimeCount > 0 ? 100 : 26,
       tone: runtimeCount > 0 ? "good" : "warn",
@@ -335,17 +335,29 @@ export function SettingsScreen() {
           <div className="panel-heading">
             <h3>Workspace Memory</h3>
             <p>
-              DroidAgent keeps a simple durable memory scaffold in the
-              workspace so the local agent path starts clean and stays useful.
+              DroidAgent keeps both a durable workspace scaffold and a local
+              semantic index so the smaller local model can stay personal and
+              useful.
             </p>
           </div>
           <div className="status-list">
             <article className={`health-row${memoryReady ? " ready" : ""}`}>
               <div className="health-row-top">
-                <strong>Status</strong>
+                <strong>Semantic memory</strong>
                 <span className={`status-chip${memoryReady ? " ready" : ""}`}>
-                  {memoryReady ? "Ready" : "Needs prep"}
+                  {memoryReady ? "Live" : "Needs prep"}
                 </span>
+              </div>
+              <small>
+                {dashboard?.memory.embeddingModel
+                  ? `${dashboard.memory.embeddingProvider ?? "unknown"}/${dashboard.memory.embeddingModel} • ${dashboard.memory.indexedFiles} files • ${dashboard.memory.indexedChunks} chunks`
+                  : "No local embedding model is configured yet."}
+              </small>
+            </article>
+            <article className="health-row ready">
+              <div className="health-row-top">
+                <strong>Workspace scaffold</strong>
+                <span className="status-chip ready">Prepared</span>
               </div>
               <small>
                 {dashboard?.memory.effectiveWorkspaceRoot
@@ -355,10 +367,16 @@ export function SettingsScreen() {
             </article>
             <article className="health-row ready">
               <div className="health-row-top">
-                <strong>Daily note path</strong>
-                <span className="status-chip ready">Prepared</span>
+                <strong>Personal profile</strong>
+                <span className="status-chip ready">Editable</span>
               </div>
-              <small>{dashboard?.memory.todayNotePath ?? "Not available yet."}</small>
+              <small>
+                Keep stable operator preferences in{" "}
+                {dashboard?.memory.effectiveWorkspaceRoot
+                  ? `${dashboard.memory.effectiveWorkspaceRoot}/PREFERENCES.md`
+                  : "PREFERENCES.md"}
+                . The semantic index pulls that file in automatically.
+              </small>
             </article>
           </div>
           <div className="button-row">
@@ -374,10 +392,15 @@ export function SettingsScreen() {
             </button>
           </div>
           <small>
-            Session memory search:{" "}
-            {dashboard?.memory.sessionMemoryEnabled ? "on" : "off"} • Context:{" "}
+            Session memory: {dashboard?.memory.sessionMemoryEnabled ? "on" : "off"}{" "}
+            • Fallback: {dashboard?.memory.embeddingFallback ?? "none"} • Context:{" "}
             {formatTokenBudget(dashboard?.memory.contextWindow)}
           </small>
+          {dashboard?.memory.embeddingProbeError ? (
+            <small className="error-copy">
+              {dashboard.memory.embeddingProbeError}
+            </small>
+          ) : null}
         </article>
 
         <article className="panel-card">

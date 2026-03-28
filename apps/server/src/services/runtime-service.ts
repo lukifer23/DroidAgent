@@ -414,6 +414,17 @@ export class RuntimeService {
     }
   }
 
+  async ensureOllamaModel(modelId: string): Promise<boolean> {
+    const availableModels = await this.listModels("ollama");
+    if (availableModels.includes(modelId)) {
+      return false;
+    }
+
+    await runCommand("ollama", ["pull", modelId]);
+    this.invalidateCaches();
+    return true;
+  }
+
   async listProviderProfiles(): Promise<ProviderProfile[]> {
     return await this.providerProfilesCache.get(async () => {
       const statuses = await this.getRuntimeStatuses();

@@ -71,7 +71,7 @@ export function AppLayout() {
   const runtimeCount =
     dashboard?.runtimes.filter((runtime) => runtime.state === "running")
       .length ?? 0;
-  const memoryReady = Boolean(dashboard?.memory.ready);
+  const memoryReady = Boolean(dashboard?.memory.semanticReady);
   const pendingApprovals = dashboard?.approvals.length ?? 0;
   const activeProvider = dashboard?.providers.find((provider) => provider.enabled);
   const setupCompletion = meterPercent(
@@ -137,7 +137,7 @@ export function AppLayout() {
       label: "Runtime",
       value: runtimeCount > 0 ? `${runtimeCount} live` : "Not running",
       detail: activeProvider?.model
-        ? `${activeProvider.model} • ${formatTokenBudget(activeProvider.contextWindow)} context • ${memoryReady ? "memory ready" : "memory pending"}`
+        ? `${activeProvider.model} • ${formatTokenBudget(activeProvider.contextWindow)} context • ${memoryReady ? "semantic memory live" : "semantic memory pending"}`
         : "Select a local model to make the common path feel instant.",
       progress: runtimeCount > 0 ? hostCompletion : 24,
       tone: runtimeCount > 0 ? "good" : "warn",
@@ -172,7 +172,7 @@ export function AppLayout() {
             {remoteReady ? "Tailscale live" : "Local-first"} •{" "}
             {activeProvider?.model ?? dashboard?.setup.selectedModel ?? "No model"}{" "}
             • {formatTokenBudget(activeProvider?.contextWindow)} •{" "}
-            {memoryReady ? "memory ready" : "memory pending"}
+            {memoryReady ? "semantic memory live" : "semantic memory pending"}
           </small>
         </div>
         <button

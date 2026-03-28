@@ -9,11 +9,14 @@ const {
   startRuntime,
   listProviderProfiles,
   pullModel,
+  ensureOllamaModel,
   getBootstrapState,
   enableTailscaleServe,
   setCanonicalSource,
   startGateway,
+  memoryStatus,
   prepareWorkspaceContext,
+  prepareSemanticMemory,
   configureRuntimeModel,
 } = vi.hoisted(() => ({
   getRuntimeSettings: vi.fn(),
@@ -24,11 +27,14 @@ const {
   startRuntime: vi.fn(),
   listProviderProfiles: vi.fn(),
   pullModel: vi.fn(),
+  ensureOllamaModel: vi.fn(),
   getBootstrapState: vi.fn(),
   enableTailscaleServe: vi.fn(),
   setCanonicalSource: vi.fn(),
   startGateway: vi.fn(),
+  memoryStatus: vi.fn(),
   prepareWorkspaceContext: vi.fn(),
+  prepareSemanticMemory: vi.fn(),
   configureRuntimeModel: vi.fn(),
 }));
 
@@ -47,6 +53,7 @@ vi.mock("./runtime-service.js", () => ({
     startRuntime,
     listProviderProfiles,
     pullModel,
+    ensureOllamaModel,
   },
 }));
 
@@ -61,7 +68,9 @@ vi.mock("./access-service.js", () => ({
 vi.mock("./openclaw-service.js", () => ({
   openclawService: {
     startGateway,
+    memoryStatus,
     prepareWorkspaceContext,
+    prepareSemanticMemory,
   },
 }));
 
@@ -78,6 +87,7 @@ describe("QuickstartService", () => {
     selectedRuntime: "ollama" | "llamaCpp";
     activeProviderId: string;
     ollamaModel: string;
+    ollamaEmbeddingModel: string;
     ollamaContextWindow: number;
     workspaceRoot: string | null;
   };
@@ -113,6 +123,7 @@ describe("QuickstartService", () => {
       selectedRuntime: "llamaCpp",
       activeProviderId: "llamacpp-default",
       ollamaModel: "qwen3.5:4b",
+      ollamaEmbeddingModel: "embeddinggemma:300m-qat-q8_0",
       ollamaContextWindow: 65536,
       workspaceRoot: null,
     };
@@ -200,6 +211,37 @@ describe("QuickstartService", () => {
         );
       },
     );
+    ensureOllamaModel.mockResolvedValue(false);
+    prepareSemanticMemory.mockResolvedValue({
+      configuredWorkspaceRoot: "/tmp/droidagent",
+      effectiveWorkspaceRoot: "/tmp/droidagent",
+      ready: true,
+      semanticReady: true,
+      memoryDirectory: "/tmp/droidagent/memory",
+      memoryDirectoryReady: true,
+      skillsDirectory: "/tmp/droidagent/skills",
+      skillsDirectoryReady: true,
+      memoryFilePath: "/tmp/droidagent/MEMORY.md",
+      todayNotePath: "/tmp/droidagent/memory/2026-03-28.md",
+      bootstrapFiles: [],
+      bootstrapFilesReady: 0,
+      bootstrapFilesTotal: 0,
+      memorySearchEnabled: true,
+      sessionMemoryEnabled: true,
+      embeddingProvider: "ollama",
+      embeddingRequestedProvider: "ollama",
+      embeddingFallback: "none",
+      embeddingModel: "embeddinggemma:300m-qat-q8_0",
+      indexedFiles: 4,
+      indexedChunks: 12,
+      dirty: false,
+      vectorEnabled: true,
+      vectorAvailable: true,
+      embeddingProbeOk: true,
+      embeddingProbeError: null,
+      sourceCounts: [],
+      contextWindow: 65536,
+    });
 
     getBootstrapState.mockImplementation(async () => accessState);
     enableTailscaleServe.mockImplementation(async () => {
@@ -237,6 +279,36 @@ describe("QuickstartService", () => {
       );
     });
     prepareWorkspaceContext.mockResolvedValue(undefined);
+    memoryStatus.mockResolvedValue({
+      configuredWorkspaceRoot: "/tmp/droidagent",
+      effectiveWorkspaceRoot: "/tmp/droidagent",
+      ready: true,
+      semanticReady: false,
+      memoryDirectory: "/tmp/droidagent/memory",
+      memoryDirectoryReady: true,
+      skillsDirectory: "/tmp/droidagent/skills",
+      skillsDirectoryReady: true,
+      memoryFilePath: "/tmp/droidagent/MEMORY.md",
+      todayNotePath: "/tmp/droidagent/memory/2026-03-28.md",
+      bootstrapFiles: [],
+      bootstrapFilesReady: 0,
+      bootstrapFilesTotal: 0,
+      memorySearchEnabled: true,
+      sessionMemoryEnabled: true,
+      embeddingProvider: "ollama",
+      embeddingRequestedProvider: "ollama",
+      embeddingFallback: "none",
+      embeddingModel: "embeddinggemma:300m-qat-q8_0",
+      indexedFiles: 0,
+      indexedChunks: 0,
+      dirty: true,
+      vectorEnabled: true,
+      vectorAvailable: true,
+      embeddingProbeOk: null,
+      embeddingProbeError: null,
+      sourceCounts: [],
+      contextWindow: 65536,
+    });
     configureRuntimeModel.mockResolvedValue(undefined);
   });
 
@@ -294,6 +366,36 @@ describe("QuickstartService", () => {
         canonicalUrl: null,
       },
     };
+    memoryStatus.mockResolvedValue({
+      configuredWorkspaceRoot: process.cwd(),
+      effectiveWorkspaceRoot: process.cwd(),
+      ready: true,
+      semanticReady: true,
+      memoryDirectory: `${process.cwd()}/memory`,
+      memoryDirectoryReady: true,
+      skillsDirectory: `${process.cwd()}/skills`,
+      skillsDirectoryReady: true,
+      memoryFilePath: `${process.cwd()}/MEMORY.md`,
+      todayNotePath: `${process.cwd()}/memory/2026-03-28.md`,
+      bootstrapFiles: [],
+      bootstrapFilesReady: 0,
+      bootstrapFilesTotal: 0,
+      memorySearchEnabled: true,
+      sessionMemoryEnabled: true,
+      embeddingProvider: "ollama",
+      embeddingRequestedProvider: "ollama",
+      embeddingFallback: "none",
+      embeddingModel: "embeddinggemma:300m-qat-q8_0",
+      indexedFiles: 4,
+      indexedChunks: 12,
+      dirty: false,
+      vectorEnabled: true,
+      vectorAvailable: true,
+      embeddingProbeOk: true,
+      embeddingProbeError: null,
+      sourceCounts: [],
+      contextWindow: 65536,
+    });
 
     const result = await quickstartService.prepare({
       workspaceRoot: process.cwd(),

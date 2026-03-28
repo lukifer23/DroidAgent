@@ -17,7 +17,7 @@
     "better-sqlite3": "^12.8.0",
     "drizzle-orm": "^0.45.1",
     "hono": "^4.12.9",
-    "openclaw": "github:openclaw/openclaw#23772bb785731126d723fe1d82cf662ba625ab6c",
+    "openclaw": "2026.3.24",
     "set-cookie-parser": "^2.7.1",
     "ws": "^8.18.3",
     "zod": "^4.1.11"

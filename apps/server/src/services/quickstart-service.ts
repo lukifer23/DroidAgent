@@ -6,13 +6,15 @@ import {
   type QuickstartResult,
 } from "@droidagent/shared";
 
-import { appStateService } from "./app-state-service.js";
+import {
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  DEFAULT_OLLAMA_MODEL,
+  appStateService,
+} from "./app-state-service.js";
 import { accessService } from "./access-service.js";
 import { harnessService } from "./harness-service.js";
 import { openclawService } from "./openclaw-service.js";
 import { runtimeService } from "./runtime-service.js";
-
-const DEFAULT_OLLAMA_MODEL = "qwen3.5:4b";
 
 function expandHomePath(input: string): string {
   if (input === "~") {
@@ -58,6 +60,8 @@ export class QuickstartService {
       params.modelId?.trim() ||
       initialSettings.ollamaModel ||
       DEFAULT_OLLAMA_MODEL;
+    const embeddingModelId =
+      initialSettings.ollamaEmbeddingModel || DEFAULT_OLLAMA_EMBEDDING_MODEL;
 
     if (!isDirectory(workspaceRoot)) {
       throw new Error("Workspace root must be an existing directory.");
@@ -77,6 +81,7 @@ export class QuickstartService {
     }
 
     await openclawService.prepareWorkspaceContext();
+    const initialMemoryStatus = await openclawService.memoryStatus();
 
     let runtimes = await runtimeService.getRuntimeStatuses();
     let ollama = runtimes.find((runtime) => runtime.id === "ollama");
@@ -168,6 +173,22 @@ export class QuickstartService {
       });
     }
 
+    const embeddingPrepared = await runtimeService.ensureOllamaModel(
+      embeddingModelId,
+    );
+    if (embeddingPrepared) {
+      actions.push(`Prepared local embedding model ${embeddingModelId}.`);
+    }
+
+    const memoryStatus = await openclawService.prepareSemanticMemory({
+      reindex: true,
+    });
+    if (!initialMemoryStatus.semanticReady && memoryStatus.semanticReady) {
+      actions.push(
+        `Enabled local semantic memory with ${memoryStatus.embeddingModel ?? embeddingModelId}.`,
+      );
+    }
+
     let access = await accessService.getBootstrapState();
     let phoneUrl = access.canonicalOrigin?.origin ?? null;
     let remotePendingReason: string | null = null;
@@ -217,7 +238,8 @@ export class QuickstartService {
       finalOllama?.state === "running" &&
       finalOpenclaw?.state === "running" &&
       finalOllamaProvider?.enabled &&
-      finalOllamaProvider.model === modelId,
+      finalOllamaProvider.model === modelId &&
+      memoryStatus.semanticReady,
     );
     const remoteReady = Boolean(
       access.canonicalOrigin?.origin &&

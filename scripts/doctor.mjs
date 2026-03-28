@@ -157,6 +157,29 @@ async function main() {
     add("Access mode", "warn", `No response from ${baseUrl}/api/access`);
   }
 
+  try {
+    const response = await fetchJsonWithTimeout(`${baseUrl}/api/memory/status`);
+    if (response.ok && response.payload) {
+      const memory = response.payload;
+      add(
+        "Semantic memory",
+        memory.semanticReady ? "ok" : "warn",
+        memory.semanticReady
+          ? `${memory.embeddingProvider}/${memory.embeddingModel} • ${memory.indexedFiles} files • ${memory.indexedChunks} chunks`
+          : memory.embeddingProbeError ??
+              `${memory.embeddingRequestedProvider ?? "unconfigured"} embeddings are not ready yet`,
+      );
+    } else {
+      add(
+        "Semantic memory",
+        "warn",
+        `${baseUrl}/api/memory/status -> ${response.status}`,
+      );
+    }
+  } catch {
+    add("Semantic memory", "warn", `No response from ${baseUrl}/api/memory/status`);
+  }
+
   console.log("DroidAgent doctor");
   for (const check of checks) {
     console.log(`[${check.status.toUpperCase()}] ${check.label}: ${check.detail}`);

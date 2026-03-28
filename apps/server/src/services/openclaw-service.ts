@@ -49,6 +49,7 @@ const GATEWAY_READY_DELAY_MS = 800;
 const CHAT_COMPLETIONS_PATH = "/v1/chat/completions";
 const DEFAULT_CONTEXT_WINDOW = 200000;
 const CHANNEL_STATUS_TTL_MS = 5_000;
+const MEMORY_STATUS_TTL_MS = 5_000;
 const DEFAULT_WEB_SESSION_ID = "web:operator";
 const INTERNAL_SESSION_IDS = new Set(["agent:main:main"]);
 const AGENTS_TEMPLATE = `# DroidAgent Operator Rules
@@ -119,11 +120,30 @@ If nothing in this workspace needs periodic attention right now, reply HEARTBEAT
 
 When this file does contain tasks, follow them exactly and keep the heartbeat run terse.
 `;
+const PREFERENCES_TEMPLATE = `# Personal Preferences
+
+Use this file for stable operator preferences that should make DroidAgent feel more personal and more useful over time.
+
+## Good examples
+
+- recurring workflows
+- preferred tools and apps
+- response tone and formatting
+- project names and priorities
+- device-specific habits
+
+## Do not put here
+
+- API keys
+- passwords
+- temporary task notes
+`;
 const WORKSPACE_BOOTSTRAP_EXTRA_FILES = [
   "SOUL.md",
   "IDENTITY.md",
   "USER.md",
   "MEMORY.md",
+  "PREFERENCES.md",
   "HEARTBEAT.md",
   "memory/**/*.md",
   "skills/**/*.md",
@@ -135,10 +155,45 @@ const WORKSPACE_BOOTSTRAP_FILES = [
   ["USER.md", USER_TEMPLATE],
   ["SOUL.md", SOUL_TEMPLATE],
   ["MEMORY.md", MEMORY_TEMPLATE],
+  ["PREFERENCES.md", PREFERENCES_TEMPLATE],
   ["HEARTBEAT.md", HEARTBEAT_TEMPLATE],
   ["memory/README.md", MEMORY_README_TEMPLATE],
   ["skills/README.md", SKILLS_README_TEMPLATE],
 ] as const;
+
+interface OpenClawMemorySourceCount {
+  source: string;
+  files: number;
+  chunks: number;
+}
+
+interface OpenClawMemoryStatusRecord {
+  files?: number;
+  chunks?: number;
+  dirty?: boolean;
+  provider?: string;
+  model?: string;
+  requestedProvider?: string;
+  providerUnavailableReason?: string;
+  sourceCounts?: Array<{
+    source?: string;
+    files?: number;
+    chunks?: number;
+  }>;
+  vector?: {
+    enabled?: boolean;
+    available?: boolean;
+  };
+}
+
+interface OpenClawMemoryStatusEntry {
+  agentId?: string;
+  status?: OpenClawMemoryStatusRecord;
+  embeddingProbe?: {
+    ok?: boolean;
+    error?: string;
+  };
+}
 
 function stringifyConfigValue(value: unknown): string {
   return JSON.stringify(value);
@@ -569,9 +624,16 @@ export class OpenClawService {
     statuses: ChannelStatus[];
     config: ChannelConfigSummary;
   }>(CHANNEL_STATUS_TTL_MS);
+  private readonly memoryStatusCache = new TtlCache<MemoryStatus>(
+    MEMORY_STATUS_TTL_MS,
+  );
 
   invalidateChannelStatusCache(): void {
     this.channelStatusesCache.invalidate();
+  }
+
+  invalidateMemoryStatusCache(): void {
+    this.memoryStatusCache.invalidate();
   }
 
   private async gatewayHealthProbe(): Promise<{ version?: string }> {
@@ -810,8 +872,15 @@ export class OpenClawService {
     };
   }
 
-  private buildMemorySearchConfig() {
+  private buildMemorySearchConfig(
+    runtimeSettings: Awaited<
+      ReturnType<typeof appStateService.getRuntimeSettings>
+    >,
+  ) {
     return {
+      provider: "ollama",
+      fallback: "none",
+      model: runtimeSettings.ollamaEmbeddingModel,
       cache: {
         enabled: true,
         maxEntries: 50000,
@@ -819,6 +888,7 @@ export class OpenClawService {
       experimental: {
         sessionMemory: true,
       },
+      extraPaths: ["PREFERENCES.md", "skills/**/*.md"],
       sources: ["memory", "sessions"],
       sync: {
         sessions: {
@@ -827,6 +897,51 @@ export class OpenClawService {
         },
       },
     };
+  }
+
+  private parseMemoryStatusEntry(raw: string): OpenClawMemoryStatusEntry | null {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        return null;
+      }
+
+      const mainEntry =
+        parsed.find(
+          (entry) =>
+            entry &&
+            typeof entry === "object" &&
+            (entry as { agentId?: unknown }).agentId === "main",
+        ) ?? parsed[0];
+
+      return mainEntry &&
+        typeof mainEntry === "object" &&
+        !Array.isArray(mainEntry)
+        ? (mainEntry as OpenClawMemoryStatusEntry)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async loadOpenClawMemoryStatus(params: {
+    deep?: boolean;
+    index?: boolean;
+  } = {}): Promise<OpenClawMemoryStatusEntry | null> {
+    try {
+      const args = ["memory", "status"];
+      if (params.index) {
+        args.push("--index");
+      } else if (params.deep) {
+        args.push("--deep");
+      }
+      args.push("--json");
+
+      const output = await this.execOpenClaw(args, true);
+      return this.parseMemoryStatusEntry(output);
+    } catch {
+      return null;
+    }
   }
 
   private resolvePrimaryModel(
@@ -917,14 +1032,93 @@ export class OpenClawService {
       providerId: runtimeSettings.activeProviderId,
       runtimeSettings,
     });
+    const configuredProvider =
+      memorySearchConfig &&
+      typeof memorySearchConfig === "object" &&
+      !Array.isArray(memorySearchConfig) &&
+      typeof memorySearchConfig.provider === "string"
+        ? memorySearchConfig.provider
+        : null;
+    const configuredModel =
+      memorySearchConfig &&
+      typeof memorySearchConfig === "object" &&
+      !Array.isArray(memorySearchConfig) &&
+      typeof memorySearchConfig.model === "string"
+        ? memorySearchConfig.model
+        : null;
+    const configuredFallback =
+      memorySearchConfig &&
+      typeof memorySearchConfig === "object" &&
+      !Array.isArray(memorySearchConfig) &&
+      typeof memorySearchConfig.fallback === "string"
+        ? memorySearchConfig.fallback
+        : null;
+    const liveMemoryStatus = await this.loadOpenClawMemoryStatus({
+      deep: true,
+    });
+    const liveStatus = liveMemoryStatus?.status;
+    const sourceCounts: OpenClawMemorySourceCount[] =
+      liveStatus?.sourceCounts?.map((entry) => ({
+        source: entry.source ?? "unknown",
+        files:
+          typeof entry.files === "number" && Number.isFinite(entry.files)
+            ? Math.max(0, Math.trunc(entry.files))
+            : 0,
+        chunks:
+          typeof entry.chunks === "number" && Number.isFinite(entry.chunks)
+            ? Math.max(0, Math.trunc(entry.chunks))
+            : 0,
+      })) ?? [];
+    const indexedFiles =
+      typeof liveStatus?.files === "number" && Number.isFinite(liveStatus.files)
+        ? Math.max(0, Math.trunc(liveStatus.files))
+        : sourceCounts.reduce((total, entry) => total + entry.files, 0);
+    const indexedChunks =
+      typeof liveStatus?.chunks === "number" && Number.isFinite(liveStatus.chunks)
+        ? Math.max(0, Math.trunc(liveStatus.chunks))
+        : sourceCounts.reduce((total, entry) => total + entry.chunks, 0);
+    const embeddingProvider =
+      typeof liveStatus?.provider === "string"
+        ? liveStatus.provider
+        : configuredProvider;
+    const embeddingRequestedProvider =
+      typeof liveStatus?.requestedProvider === "string"
+        ? liveStatus.requestedProvider
+        : configuredProvider;
+    const embeddingModel =
+      typeof liveStatus?.model === "string" ? liveStatus.model : configuredModel;
+    const embeddingProbeOk =
+      typeof liveMemoryStatus?.embeddingProbe?.ok === "boolean"
+        ? liveMemoryStatus.embeddingProbe.ok
+        : null;
+    const embeddingProbeError =
+      typeof liveMemoryStatus?.embeddingProbe?.error === "string"
+        ? liveMemoryStatus.embeddingProbe.error
+        : typeof liveStatus?.providerUnavailableReason === "string"
+          ? liveStatus.providerUnavailableReason
+          : null;
+    const vectorEnabled = liveStatus?.vector?.enabled === true;
+    const vectorAvailable = liveStatus?.vector?.available === true;
+    const scaffoldReady =
+      memoryDirectoryReady &&
+      skillsDirectoryReady &&
+      bootstrapFilesReady === bootstrapFiles.length;
+    const semanticReady =
+      scaffoldReady &&
+      cacheConfig?.enabled === true &&
+      embeddingProvider === "ollama" &&
+      embeddingRequestedProvider === "ollama" &&
+      Boolean(embeddingModel) &&
+      vectorEnabled &&
+      vectorAvailable &&
+      embeddingProbeOk !== false &&
+      !embeddingProbeError;
 
     return MemoryStatusSchema.parse({
       configuredWorkspaceRoot: runtimeSettings.workspaceRoot ?? null,
       effectiveWorkspaceRoot: workspaceRoot,
-      ready:
-        memoryDirectoryReady &&
-        skillsDirectoryReady &&
-        bootstrapFilesReady === bootstrapFiles.length,
+      ready: scaffoldReady,
+      semanticReady,
       memoryDirectory,
       memoryDirectoryReady,
       skillsDirectory,
@@ -939,6 +1133,18 @@ export class OpenClawService {
       bootstrapFilesTotal: bootstrapFiles.length,
       memorySearchEnabled: cacheConfig?.enabled === true,
       sessionMemoryEnabled: experimentalConfig?.sessionMemory === true,
+      embeddingProvider,
+      embeddingRequestedProvider,
+      embeddingFallback: configuredFallback,
+      embeddingModel,
+      indexedFiles,
+      indexedChunks,
+      dirty: liveStatus?.dirty === true,
+      vectorEnabled,
+      vectorAvailable,
+      embeddingProbeOk,
+      embeddingProbeError,
+      sourceCounts,
       contextWindow,
     });
   }
@@ -1268,7 +1474,10 @@ export class OpenClawService {
         "models.providers.ollama",
         this.buildOllamaProviderConfig(runtimeSettings),
       ],
-      ["agents.defaults.memorySearch", this.buildMemorySearchConfig()],
+      [
+        "agents.defaults.memorySearch",
+        this.buildMemorySearchConfig(runtimeSettings),
+      ],
       ["tools.exec.host", "gateway"],
       ["tools.exec.security", "allowlist"],
       ["tools.exec.ask", "on-miss"],
@@ -1295,17 +1504,36 @@ export class OpenClawService {
     );
 
     await this.applyContextManagementPolicy({}, currentConfig);
+    this.invalidateMemoryStatusCache();
   }
 
   async prepareWorkspaceContext(): Promise<MemoryStatus> {
     const runtimeSettings = await appStateService.getRuntimeSettings();
     const workspaceRoot = this.resolveWorkspaceRoot(runtimeSettings);
     await this.ensureWorkspaceScaffold(workspaceRoot);
+    this.invalidateMemoryStatusCache();
+    return await this.currentMemoryStatus();
+  }
+
+  async prepareSemanticMemory(
+    params: { reindex?: boolean } = {},
+  ): Promise<MemoryStatus> {
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    const workspaceRoot = this.resolveWorkspaceRoot(runtimeSettings);
+    await this.ensureWorkspaceScaffold(workspaceRoot);
+    await this.ensureConfigured();
+    await this.loadOpenClawMemoryStatus({
+      deep: true,
+      index: params.reindex ?? false,
+    });
+    this.invalidateMemoryStatusCache();
     return await this.currentMemoryStatus();
   }
 
   async memoryStatus(): Promise<MemoryStatus> {
-    return await this.currentMemoryStatus();
+    return await this.memoryStatusCache.get(async () => {
+      return await this.currentMemoryStatus();
+    });
   }
 
   async ensureTodayMemoryNote(): Promise<string> {
@@ -1319,6 +1547,7 @@ export class OpenClawService {
     } catch {
       await fs.promises.writeFile(notePath, todayMemoryNoteTemplate(date), "utf8");
     }
+    this.invalidateMemoryStatusCache();
     return notePath;
   }
 

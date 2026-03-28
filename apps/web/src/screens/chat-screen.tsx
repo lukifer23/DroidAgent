@@ -128,7 +128,7 @@ export function ChatScreen() {
           </div>
           <small>
             {activeSession?.lastMessagePreview ||
-              `Start a clean operator conversation from the web shell. ${dashboard?.setup.selectedModel ?? "qwen3.5:4b"} • ${formatTokenBudget(dashboard?.memory.contextWindow)} • ${dashboard?.memory.ready ? "memory ready" : "memory pending"}`}
+              `Start a clean operator conversation from the web shell. ${dashboard?.setup.selectedModel ?? "qwen3.5:4b"} • ${formatTokenBudget(dashboard?.memory.contextWindow)} • ${dashboard?.memory.semanticReady ? "semantic memory live" : "semantic memory pending"}`}
           </small>
         </article>
 
