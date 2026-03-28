@@ -55,7 +55,8 @@ pnpm perf:report
 - Use Tailscale Serve when you want private tailnet-only phone access.
 - If the normal macOS Tailscale daemon is unavailable, DroidAgent can start a userspace `tailscaled` process under `~/.droidagent/tailscale` and operate against its socket instead.
 - After owner sign-in, the Setup route is the fast path: it prepares the default local runtime path and creates the Tailscale phone URL automatically when Tailscale is already authenticated.
-- The same quickstart path also seeds `MEMORY.md`, `HEARTBEAT.md`, daily notes under `memory/`, and the workspace `skills/` directory.
+- The same quickstart path also seeds `MEMORY.md`, `PREFERENCES.md`, `HEARTBEAT.md`, daily notes under `memory/`, and the workspace `skills/` directory.
+- Semantic memory defaults to local Ollama embeddings with `embeddinggemma:300m-qat-q8_0`; DroidAgent keeps fallback disabled so memory stays on-device instead of silently drifting to a cloud provider.
 - Use the canonical remote URL for daily access when the same passkey provider already syncs to the phone.
 - Generate a new bootstrap link only after the canonical remote URL is healthy and only when you need to enroll a new device-specific passkey.
 - Use localhost only for maintenance and recovery tasks after canonical setup.
@@ -64,7 +65,7 @@ pnpm perf:report
 
 - Server timings are exposed at `GET /api/diagnostics/performance` for the signed-in owner.
 - The Settings route shows a compact client/server diagnostics card.
-- The Settings route also shows workspace memory readiness and the current `65k` local context budget.
+- The Settings route also shows semantic-memory readiness, embedding/index status, and the current `65k` local context budget.
 - Performance artifacts are written under `artifacts/perf/`.
 - Access, dashboard, runtime, provider, and startup-status reads use short-lived in-memory caches with explicit invalidation on mutations so the mobile shell stays responsive without serving long-lived stale state.
 - OpenClaw runs with default thinking disabled unless you explicitly re-enable it in-session, while smart context management still controls compaction, pruning, and memory flush policy.

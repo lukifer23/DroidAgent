@@ -9,7 +9,7 @@
 - `packages/shared`
   - shared Zod contracts and event payloads
 
-The default local path is `Ollama + qwen3.5:4b + 65k context + smart context management + workspace memory scaffold`.
+The default local path is `Ollama + qwen3.5:4b + 65k context + embeddinggemma:300m-qat-q8_0 + smart context management + workspace memory scaffold`.
 
 ## Daily Commands
 

@@ -35,8 +35,8 @@ Run `pnpm doctor` after bootstrap when you want a non-mutating environment check
 
 1. Create the owner passkey on localhost.
 2. Open `Setup`.
-3. Use the quickstart action to let DroidAgent prepare the workspace, Ollama, OpenClaw, and the default local model automatically.
-4. The same quickstart pass also seeds the workspace memory and skills scaffold automatically.
+3. Use the quickstart action to let DroidAgent prepare the workspace, Ollama, OpenClaw, the default local chat model, and the default local embedding model automatically.
+4. The same quickstart pass also seeds the workspace memory, preferences, and skills scaffold automatically, then builds the local semantic-memory index.
 5. If Tailscale is already authenticated on the Mac, quickstart also creates the phone URL automatically.
 6. Use Manual Controls only when you want a different workspace, a different local model, or llama.cpp.
 7. Optionally enroll additional passkeys from Settings.
@@ -55,7 +55,7 @@ The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailsc
 5. If the same passkey provider already syncs to the phone, open the canonical remote URL directly and sign in.
 6. Use a one-time bootstrap link only when you need to enroll a new device-specific passkey after the canonical URL is healthy.
 7. Use the canonical remote URL for daily phone access.
-8. The default local model path is `qwen3.5:4b` at `65k` context with thinking disabled and smart context management enabled.
+8. The default local model path is `qwen3.5:4b` at `65k` context with thinking disabled, smart context management enabled, and `embeddinggemma:300m-qat-q8_0` handling semantic memory locally.
 
 ## Manual setup
 
