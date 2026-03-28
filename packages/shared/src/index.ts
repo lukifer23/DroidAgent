@@ -500,6 +500,37 @@ export type ContextManagementStatus = z.infer<
   typeof ContextManagementStatusSchema
 >;
 
+export const HarnessToolProfileSchema = z.enum([
+  "minimal",
+  "coding",
+  "messaging",
+  "full",
+  "custom",
+  "unknown",
+]);
+export type HarnessToolProfile = z.infer<typeof HarnessToolProfileSchema>;
+
+export const HarnessStatusSchema = z.object({
+  configured: z.boolean(),
+  agentId: z.string(),
+  defaultSessionId: z.string(),
+  gatewayAuthMode: z.string().nullable(),
+  gatewayBind: z.string().nullable(),
+  activeModel: z.string().nullable(),
+  contextWindow: z.number().int().positive().nullable(),
+  thinkingDefault: z.string().nullable(),
+  workspaceRoot: z.string().nullable(),
+  toolProfile: HarnessToolProfileSchema,
+  availableTools: z.array(z.string()),
+  workspaceOnlyFs: z.boolean(),
+  memorySearchEnabled: z.boolean(),
+  sessionMemoryEnabled: z.boolean(),
+  execHost: z.string().nullable(),
+  execSecurity: z.string().nullable(),
+  execAsk: z.string().nullable(),
+});
+export type HarnessStatus = z.infer<typeof HarnessStatusSchema>;
+
 export const LatencySourceSchema = z.enum(["server", "client"]);
 export type LatencySource = z.infer<typeof LatencySourceSchema>;
 
@@ -555,6 +586,7 @@ export const DashboardStateSchema = z.object({
   cloudProviders: z.array(CloudProviderSummarySchema),
   channels: z.array(ChannelStatusSchema),
   channelConfig: ChannelConfigSummarySchema,
+  harness: HarnessStatusSchema,
   memory: MemoryStatusSchema,
   contextManagement: ContextManagementStatusSchema,
   launchAgent: LaunchAgentStatusSchema,

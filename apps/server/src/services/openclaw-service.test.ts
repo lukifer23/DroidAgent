@@ -315,10 +315,14 @@ describe("OpenClaw context management policy", () => {
         },
       },
       tools: {
+        profile: "coding",
         exec: {
           host: "gateway",
           security: "allowlist",
           ask: "on-miss",
+        },
+        fs: {
+          workspaceOnly: true,
         },
       },
       channels: {
@@ -454,10 +458,14 @@ describe("OpenClaw context management policy", () => {
         },
       },
       tools: {
+        profile: "coding",
         exec: {
           ask: "on-miss",
           security: "allowlist",
           host: "gateway",
+        },
+        fs: {
+          workspaceOnly: true,
         },
       },
       channels: {
@@ -624,6 +632,78 @@ describe("OpenClaw context management policy", () => {
       role: "tool",
       text: "HEARTBEAT_OK",
     });
+  });
+
+  it("surfaces the live harness tool and session policy", async () => {
+    runtimeSettings.activeProviderId = "ollama-default";
+    runtimeSettings.ollamaModel = "qwen3.5:4b";
+    vi.spyOn(
+      openclawService as never,
+      "readCurrentConfig" as never,
+    ).mockReturnValue({
+      gateway: {
+        auth: {
+          mode: "token",
+        },
+        bind: "loopback",
+      },
+      agents: {
+        defaults: {
+          thinkingDefault: "off",
+          memorySearch: {
+            cache: {
+              enabled: true,
+            },
+            experimental: {
+              sessionMemory: true,
+            },
+          },
+        },
+      },
+      tools: {
+        profile: "coding",
+        exec: {
+          host: "gateway",
+          security: "allowlist",
+          ask: "on-miss",
+        },
+        fs: {
+          workspaceOnly: true,
+        },
+      },
+    });
+
+    const status = await openclawService.harnessStatus();
+
+    expect(status).toMatchObject({
+      configured: true,
+      agentId: "main",
+      defaultSessionId: "web:operator",
+      gatewayAuthMode: "token",
+      gatewayBind: "loopback",
+      activeModel: "ollama/qwen3.5:4b",
+      contextWindow: 65536,
+      toolProfile: "coding",
+      workspaceOnlyFs: true,
+      memorySearchEnabled: true,
+      sessionMemoryEnabled: true,
+      execHost: "gateway",
+      execSecurity: "allowlist",
+      execAsk: "on-miss",
+    });
+    expect(status.availableTools).toEqual(
+      expect.arrayContaining([
+        "read",
+        "write",
+        "edit",
+        "apply_patch",
+        "exec",
+        "process",
+        "sessions_history",
+        "subagents",
+        "memory_search",
+      ]),
+    );
   });
 
   it("reports workspace memory readiness with session memory enabled", async () => {

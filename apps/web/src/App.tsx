@@ -13,13 +13,19 @@ import { AppLayout } from "./app-layout";
 import { isOperatorReady } from "./lib/operator-readiness";
 import { ChatScreen } from "./screens/chat-screen";
 import { FilesScreen } from "./screens/files-screen";
-import { SetupScreen } from "./screens/setup-screen";
-import { SettingsScreen } from "./screens/settings-screen";
 
+const loadSetupScreen = () => import("./screens/setup-screen");
+const loadSettingsScreen = () => import("./screens/settings-screen");
 const loadJobsScreen = () => import("./screens/jobs-screen");
 const loadModelsScreen = () => import("./screens/models-screen");
 const loadChannelsScreen = () => import("./screens/channels-screen");
 
+const SetupScreen = lazy(async () => ({
+  default: (await loadSetupScreen()).SetupScreen,
+}));
+const SettingsScreen = lazy(async () => ({
+  default: (await loadSettingsScreen()).SettingsScreen,
+}));
 const JobsScreen = lazy(async () => ({
   default: (await loadJobsScreen()).JobsScreen,
 }));
@@ -30,7 +36,13 @@ const ChannelsScreen = lazy(async () => ({
   default: (await loadChannelsScreen()).ChannelsScreen,
 }));
 const preloadScreens = () =>
-  Promise.all([loadJobsScreen(), loadModelsScreen(), loadChannelsScreen()]);
+  Promise.all([
+    loadSetupScreen(),
+    loadSettingsScreen(),
+    loadJobsScreen(),
+    loadModelsScreen(),
+    loadChannelsScreen(),
+  ]);
 
 function withLazyScreen(Component: ComponentType) {
   return function LazyScreen() {

@@ -1,5 +1,6 @@
 :root {
   color-scheme: dark;
+  --shell-gutter: clamp(0.55rem, 2vw, 0.95rem);
   --bg: #080a0d;
   --panel: rgba(17, 22, 28, 0.86);
   --panel-strong: rgba(21, 27, 34, 0.96);
@@ -142,8 +143,8 @@ pre {
 .app-shell,
 .auth-screen {
   min-height: 100vh;
-  padding: 0.85rem;
-  max-width: 1080px;
+  padding: var(--shell-gutter);
+  max-width: 1180px;
   margin: 0 auto;
 }
 
@@ -433,7 +434,9 @@ small {
   .split-panel {
     grid-template-columns: minmax(240px, 320px) 1fr;
   }
+}
 
+@container main (min-width: 1120px) {
   .chat-panel {
     grid-template-columns: minmax(220px, 280px) 1fr;
     grid-template-areas:
@@ -797,7 +800,7 @@ small {
 
 .capability-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 0.7rem;
 }
 
@@ -821,6 +824,41 @@ small {
   color: var(--text);
   line-height: 1.45;
   font-size: 0.92rem;
+}
+
+.tool-pill-grid,
+.metric-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.tool-pill,
+.metric-chip {
+  display: inline-grid;
+  gap: 0.15rem;
+  padding: 0.65rem 0.78rem;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.tool-pill {
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.2;
+}
+
+.metric-chip strong {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+
+.metric-chip span {
+  color: var(--text);
+  font-size: 0.95rem;
 }
 
 .capability-chip.good {
@@ -892,7 +930,7 @@ small {
 .message-card {
   width: min(100%, 52rem);
   border-radius: 22px;
-  padding: 1rem 1.1rem;
+  padding: clamp(0.9rem, 2.4vw, 1.1rem);
   border: 1px solid var(--border);
   backface-visibility: hidden;
   transform: translateZ(0);
@@ -924,7 +962,19 @@ small {
   letter-spacing: 0.16em;
   font-size: 0.72rem;
   color: var(--accent);
-  margin-bottom: 0.45rem;
+}
+
+.message-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.55rem;
+}
+
+.message-meta span {
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .message-card p {
@@ -933,6 +983,80 @@ small {
   font-size: 1rem;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.message-markdown {
+  margin: 0;
+  line-height: 1.62;
+  font-size: 1rem;
+  word-break: break-word;
+}
+
+.message-markdown > :first-child {
+  margin-top: 0;
+}
+
+.message-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.message-markdown p,
+.message-markdown ul,
+.message-markdown ol,
+.message-markdown pre,
+.message-markdown blockquote,
+.message-markdown table {
+  margin: 0 0 0.85rem;
+}
+
+.message-markdown ul,
+.message-markdown ol {
+  padding-left: 1.25rem;
+}
+
+.message-markdown li + li {
+  margin-top: 0.3rem;
+}
+
+.message-markdown blockquote {
+  padding-left: 0.9rem;
+  border-left: 3px solid rgba(243, 197, 92, 0.35);
+  color: var(--muted);
+}
+
+.message-markdown a {
+  color: var(--accent);
+}
+
+.markdown-inline-code {
+  padding: 0.12rem 0.34rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.07);
+  font-family: "SFMono-Regular", ui-monospace, monospace;
+  font-size: 0.92em;
+}
+
+.markdown-pre,
+.message-details pre {
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.035);
+  padding: 0.85rem 0.95rem;
+}
+
+.message-details {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.message-details summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 600;
 }
 
 .thread-header,
@@ -960,7 +1084,7 @@ small {
   position: sticky;
   bottom: calc(5.6rem + env(safe-area-inset-bottom));
   z-index: 6;
-  padding: 0.9rem;
+  padding: clamp(0.8rem, 2vw, 0.95rem);
   border-radius: 24px;
   border: 1px solid var(--border);
   background:
@@ -1230,7 +1354,7 @@ button:active:not(:disabled),
 
   .app-shell,
   .auth-screen {
-    padding: 0.65rem;
+    padding: var(--shell-gutter);
   }
 
   .topbar {
@@ -1325,10 +1449,6 @@ button:active:not(:disabled),
 }
 
 @media (max-width: 560px) {
-  .capability-grid {
-    grid-template-columns: 1fr;
-  }
-
   .hero-card h1 {
     font-size: clamp(2.2rem, 12vw, 3.5rem);
   }
@@ -1355,6 +1475,11 @@ button:active:not(:disabled),
 
   .session-pill {
     min-width: 152px;
+  }
+
+  .message-meta {
+    align-items: start;
+    flex-direction: column;
   }
 }
 

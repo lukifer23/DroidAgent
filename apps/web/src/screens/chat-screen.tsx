@@ -1,9 +1,10 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { ChatMessage, LatencySummary } from "@droidagent/shared";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-import type { ChatMessage } from "@droidagent/shared";
-
-import { useAuthQuery, useDashboardQuery } from "../app-data";
+import { useAuthQuery, useDashboardQuery, usePerformanceQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { api, postJson } from "../lib/api";
 import { useStreamingRuns } from "../lib/chat-stream-store";
@@ -15,6 +16,95 @@ function roleLabel(role: ChatMessage["role"]): string {
   }
 
   return role;
+}
+
+function formatMessageTime(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function formatLatency(summary: LatencySummary | undefined): string {
+  if (!summary?.p95DurationMs || !Number.isFinite(summary.p95DurationMs)) {
+    return "n/a";
+  }
+
+  if (summary.p95DurationMs >= 1000) {
+    return `${(summary.p95DurationMs / 1000).toFixed(1)}s`;
+  }
+
+  return `${Math.round(summary.p95DurationMs)} ms`;
+}
+
+function formatToolName(value: string): string {
+  return value
+    .split(/[_:]/g)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function isToolTranscript(message: ChatMessage): boolean {
+  return (
+    message.role === "tool" ||
+    message.role === "system" ||
+    /^Tool (call|result)/.test(message.text)
+  );
+}
+
+function ChatMarkdown({ text }: { text: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a(props) {
+          return (
+            <a {...props} rel="noreferrer" target="_blank" />
+          );
+        },
+        code({ children, className }) {
+          const inline = !className;
+          return inline ? (
+            <code className="markdown-inline-code">{children}</code>
+          ) : (
+            <code className={className}>{children}</code>
+          );
+        },
+        pre({ children }) {
+          return <pre className="markdown-pre">{children}</pre>;
+        },
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
+}
+
+function MessageBody({ message }: { message: ChatMessage }) {
+  if (isToolTranscript(message)) {
+    return (
+      <details className="message-details" open={message.role === "tool"}>
+        <summary>
+          {message.role === "tool"
+            ? "Inspect tool output"
+            : "Inspect tool transcript"}
+        </summary>
+        <pre>{message.text}</pre>
+      </details>
+    );
+  }
+
+  return (
+    <div className="message-markdown">
+      <ChatMarkdown text={message.text} />
+    </div>
+  );
 }
 
 export function ChatScreen() {
@@ -29,7 +119,9 @@ export function ChatScreen() {
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const performanceQuery = usePerformanceQuery(Boolean(authQuery.data?.user));
   const dashboard = dashboardQuery.data;
+  const performance = performanceQuery.data;
   const streamingRuns = useStreamingRuns();
   const [chatInput, setChatInput] = useState("");
   const [pendingRun, setPendingRun] = useState<{
@@ -40,41 +132,48 @@ export function ChatScreen() {
   const sessions = dashboard?.sessions ?? [];
   const activeSession =
     sessions.find((session) => session.id === selectedSessionId) ?? sessions[0];
-  const streaming = streamingRuns[selectedSessionId];
-  const transportReady = wsStatus === "connected" && Boolean(selectedSessionId);
+  const selectedSessionKey = activeSession?.id ?? selectedSessionId;
+  const streaming = selectedSessionKey ? streamingRuns[selectedSessionKey] : undefined;
+  const transportReady = wsStatus === "connected" && Boolean(selectedSessionKey);
   const activeProvider = dashboard?.providers.find((provider) => provider.enabled);
   const openclawRuntime = dashboard?.runtimes.find(
     (runtime) => runtime.id === "openclaw",
   );
   const signalChannel = dashboard?.channels.find((channel) => channel.id === "signal");
+  const harness = dashboard?.harness;
   const hasMultipleSessions = sessions.length > 1;
 
   const messagesQuery = useQuery({
-    queryKey: ["sessions", selectedSessionId, "messages"],
+    queryKey: ["sessions", selectedSessionKey, "messages"],
     queryFn: () =>
       api<ChatMessage[]>(
-        `/api/sessions/${encodeURIComponent(selectedSessionId)}/messages`,
+        `/api/sessions/${encodeURIComponent(selectedSessionKey)}/messages`,
       ),
-    enabled: Boolean(authQuery.data?.user && selectedSessionId),
+    enabled: Boolean(authQuery.data?.user && selectedSessionKey),
     staleTime: 15_000,
   });
 
-  const messages = useMemo(
-    () => messagesQuery.data ?? [],
-    [messagesQuery.data],
-  );
+  const messages = useMemo(() => messagesQuery.data ?? [], [messagesQuery.data]);
   const agentReady =
     openclawRuntime?.state === "running" &&
     Boolean(activeProvider?.enabled) &&
-    transportReady;
+    transportReady &&
+    Boolean(harness?.configured);
   const capabilityChips = useMemo(
     () =>
       [
         {
           label: "Harness",
           value:
-            openclawRuntime?.state === "running" ? "OpenClaw live" : "Harness down",
+            openclawRuntime?.state === "running"
+              ? `OpenClaw • ${harness?.agentId ?? "main"}`
+              : "Harness down",
           tone: openclawRuntime?.state === "running" ? "good" : "warn",
+        },
+        {
+          label: "Session",
+          value: selectedSessionKey || harness?.defaultSessionId || "No session",
+          tone: selectedSessionKey ? "good" : "warn",
         },
         {
           label: "Runtime",
@@ -86,28 +185,55 @@ export function ChatScreen() {
         {
           label: "Context",
           value: formatTokenBudget(
-            activeProvider?.contextWindow ?? dashboard?.memory.contextWindow,
+            activeProvider?.contextWindow ??
+              harness?.contextWindow ??
+              dashboard?.memory.contextWindow,
           ),
           tone: "neutral",
         },
         {
-          label: "Memory",
-          value: dashboard?.memory.semanticReady
-            ? "Semantic recall on"
-            : "Semantic recall pending",
-          tone: dashboard?.memory.semanticReady ? "good" : "warn",
+          label: "Auth",
+          value:
+            harness?.gatewayAuthMode === "token"
+              ? "Gateway token + session key"
+              : "Auth path not ready",
+          tone: harness?.gatewayAuthMode === "token" ? "good" : "warn",
+        },
+        {
+          label: "Tools",
+          value: harness
+            ? `${harness.toolProfile} profile • ${harness.availableTools.length} tools`
+            : "Tool policy unknown",
+          tone: harness ? "good" : "warn",
         },
         {
           label: "Exec",
-          value: activeProvider?.toolSupport
-            ? "Approval-gated shell"
-            : "Tooling unavailable",
-          tone: activeProvider?.toolSupport ? "good" : "warn",
+          value:
+            harness?.execHost && harness?.execSecurity && harness?.execAsk
+              ? `${harness.execHost} • ${harness.execSecurity} • ${harness.execAsk}`
+              : "Exec policy unavailable",
+          tone:
+            harness?.execHost && harness?.execSecurity && harness?.execAsk
+              ? "good"
+              : "warn",
         },
         {
-          label: "Skills",
-          value: dashboard?.memory.ready ? "Prefs + skills loaded" : "Scaffold pending",
-          tone: dashboard?.memory.ready ? "good" : "warn",
+          label: "Memory",
+          value: dashboard?.memory.semanticReady
+            ? "Semantic + session memory on"
+            : "Memory indexing pending",
+          tone: dashboard?.memory.semanticReady ? "good" : "warn",
+        },
+        {
+          label: "Workspace",
+          value:
+            harness?.workspaceOnlyFs && dashboard?.setup.workspaceRoot
+              ? "Scoped to active repo"
+              : "Workspace guard missing",
+          tone:
+            harness?.workspaceOnlyFs && dashboard?.setup.workspaceRoot
+              ? "good"
+              : "warn",
         },
         ...(signalChannel?.configured
           ? [
@@ -122,15 +248,46 @@ export function ChatScreen() {
     [
       activeProvider,
       dashboard?.memory.contextWindow,
-      dashboard?.memory.ready,
       dashboard?.memory.semanticReady,
+      dashboard?.setup.workspaceRoot,
+      harness,
       openclawRuntime?.state,
+      selectedSessionKey,
       signalChannel?.configured,
     ],
   );
+  const metrics = useMemo(
+    () => [
+      {
+        label: "First token",
+        value: formatLatency(
+          performance?.metrics.find(
+            (metric) => metric.name === "client.chat.submit_to_first_token",
+          )?.summary,
+        ),
+      },
+      {
+        label: "Reply complete",
+        value: formatLatency(
+          performance?.metrics.find(
+            (metric) => metric.name === "client.chat.submit_to_done",
+          )?.summary,
+        ),
+      },
+      {
+        label: "Reconnect",
+        value: formatLatency(
+          performance?.metrics.find(
+            (metric) => metric.name === "client.ws.reconnect_to_resync",
+          )?.summary,
+        ),
+      },
+    ],
+    [performance?.metrics],
+  );
 
   useEffect(() => {
-    if (!pendingRun || pendingRun.sessionId !== selectedSessionId) {
+    if (!pendingRun || pendingRun.sessionId !== selectedSessionKey) {
       return;
     }
 
@@ -147,17 +304,17 @@ export function ChatScreen() {
     if (hasAssistantReply) {
       setPendingRun(null);
     }
-  }, [messages, pendingRun, selectedSessionId, streaming]);
+  }, [messages, pendingRun, selectedSessionKey, streaming]);
 
   async function handleSendChat() {
     const nextMessage = chatInput.trim();
-    if (!nextMessage || !selectedSessionId) {
+    if (!nextMessage || !selectedSessionKey) {
       return;
     }
 
     const optimisticMessage: ChatMessage = {
       id: `optimistic-${Date.now()}`,
-      sessionId: selectedSessionId,
+      sessionId: selectedSessionKey,
       role: "user",
       text: nextMessage,
       createdAt: new Date().toISOString(),
@@ -166,14 +323,14 @@ export function ChatScreen() {
     };
 
     queryClient.setQueryData<ChatMessage[]>(
-      ["sessions", selectedSessionId, "messages"],
+      ["sessions", selectedSessionKey, "messages"],
       [...messages, optimisticMessage],
     );
 
-    trackChatSubmit(selectedSessionId);
+    trackChatSubmit(selectedSessionKey);
     const startedAt = Date.now();
     setPendingRun({
-      sessionId: selectedSessionId,
+      sessionId: selectedSessionKey,
       sentAt: startedAt,
     });
     try {
@@ -182,13 +339,13 @@ export function ChatScreen() {
         sendRealtimeCommand({
           type: "chat.send",
           payload: {
-            sessionId: selectedSessionId,
+            sessionId: selectedSessionKey,
             text: nextMessage,
           },
         });
       if (!sentLive) {
         await postJson(
-          `/api/sessions/${encodeURIComponent(selectedSessionId)}/messages`,
+          `/api/sessions/${encodeURIComponent(selectedSessionKey)}/messages`,
           {
             text: nextMessage,
           },
@@ -208,7 +365,7 @@ export function ChatScreen() {
       <article className="panel-card compact chat-ops-card">
         <div className="chat-ops-header">
           <div>
-            <div className="journey-kicker">Operator Session</div>
+            <div className="journey-kicker">Live Agent Console</div>
             <h3>{activeSession?.title ?? "Operator Chat"}</h3>
           </div>
           <div className="status-chip-row">
@@ -222,17 +379,29 @@ export function ChatScreen() {
         </div>
         <p className="chat-ops-copy">
           {agentReady
-            ? "This route is talking to the live OpenClaw harness on your Mac."
-            : "The chat shell is up, but the live harness path still needs attention before control feels normal."}
+            ? "This tab is bound to the live OpenClaw gateway on your Mac, using the configured token-auth path and session key."
+            : "The shell is loaded, but the live OpenClaw path is not fully ready yet."}
         </p>
         <div className="capability-grid">
           {capabilityChips.map((chip) => (
-            <article key={`${chip.label}-${chip.value}`} className={`capability-chip ${chip.tone}`}>
+            <article
+              key={`${chip.label}-${chip.value}`}
+              className={`capability-chip ${chip.tone}`}
+            >
               <strong>{chip.label}</strong>
               <span>{chip.value}</span>
             </article>
           ))}
         </div>
+        {harness?.availableTools.length ? (
+          <div className="tool-pill-grid" aria-label="Available tools">
+            {harness.availableTools.map((tool) => (
+              <span key={tool} className="tool-pill">
+                {formatToolName(tool)}
+              </span>
+            ))}
+          </div>
+        ) : null}
       </article>
 
       {hasMultipleSessions ? (
@@ -240,7 +409,9 @@ export function ChatScreen() {
           {sessions.map((session) => (
             <button
               key={session.id}
-              className={`session-pill${session.id === selectedSessionId ? " active" : ""}`}
+              className={`session-pill${
+                session.id === selectedSessionKey ? " active" : ""
+              }`}
               onClick={() =>
                 startTransition(() => {
                   setSelectedSessionId(session.id);
@@ -258,7 +429,7 @@ export function ChatScreen() {
         <article className="panel-card compact thread-header">
           <div className="thread-header-row">
             <div>
-              <div className="journey-kicker">Now Running</div>
+              <div className="journey-kicker">Current Session</div>
               <h3>{activeSession?.title ?? "Operator Chat"}</h3>
             </div>
             <div className="status-chip-row">
@@ -266,9 +437,13 @@ export function ChatScreen() {
                 {transportReady ? "Connected" : "Reconnecting"}
               </span>
               <span
-                className={`status-chip${dashboard?.memory.semanticReady ? " ready" : ""}`}
+                className={`status-chip${
+                  dashboard?.memory.semanticReady ? " ready" : ""
+                }`}
               >
-                {dashboard?.memory.semanticReady ? "Memory ready" : "Memory pending"}
+                {dashboard?.memory.semanticReady
+                  ? "Memory ready"
+                  : "Memory pending"}
               </span>
             </div>
           </div>
@@ -278,6 +453,14 @@ export function ChatScreen() {
               : activeSession?.lastMessagePreview ||
                 "Start a clean operator conversation from the web shell."}
           </small>
+          <div className="metric-strip">
+            {metrics.map((metric) => (
+              <article key={metric.label} className="metric-chip">
+                <strong>{metric.label}</strong>
+                <span>{metric.value}</span>
+              </article>
+            ))}
+          </div>
         </article>
 
         {(dashboard?.approvals ?? []).length > 0 ? (
@@ -319,31 +502,47 @@ export function ChatScreen() {
           </article>
         ) : null}
 
-        {messages.length === 0 && !streaming ? (
+        {messagesQuery.isLoading && messages.length === 0 ? (
+          <article className="panel-card compact empty-thread">
+            <strong>Loading the live session</strong>
+            <small>Pulling the current OpenClaw thread from the gateway.</small>
+          </article>
+        ) : null}
+
+        {messages.length === 0 && !streaming && !messagesQuery.isLoading ? (
           <article className="panel-card compact empty-thread">
             <strong>Fresh operator thread</strong>
             <small>
-              Use this session for direct Mac control. DroidAgent keeps the
-              default path local-first with Ollama, OpenClaw, and the shared
-              workspace.
+              This session is scoped to the active workspace and the real
+              OpenClaw agent on your Mac. Ask it to inspect files, edit code,
+              search the repo, or run approved commands.
             </small>
           </article>
         ) : null}
 
         {messages.map((message) => (
           <article key={message.id} className={`message-card ${message.role}`}>
-            <header>{roleLabel(message.role)}</header>
-            <p>{message.text}</p>
+            <div className="message-meta">
+              <header>{roleLabel(message.role)}</header>
+              <span>{formatMessageTime(message.createdAt)}</span>
+            </div>
+            <MessageBody message={message} />
           </article>
         ))}
         {streaming ? (
           <article className="message-card assistant streaming">
-            <header>assistant</header>
+            <div className="message-meta">
+              <header>assistant</header>
+              <span>live</span>
+            </div>
             <p>{streaming.text || "Starting the run..."}</p>
           </article>
-        ) : pendingRun?.sessionId === selectedSessionId ? (
+        ) : pendingRun?.sessionId === selectedSessionKey ? (
           <article className="message-card assistant streaming pending">
-            <header>assistant</header>
+            <div className="message-meta">
+              <header>assistant</header>
+              <span>queued</span>
+            </div>
             <p>Starting the OpenClaw run…</p>
           </article>
         ) : null}
@@ -360,18 +559,16 @@ export function ChatScreen() {
           value={chatInput}
           onChange={(event) => setChatInput(event.target.value)}
           placeholder="Ask DroidAgent to inspect, edit, search, or operate on this Mac..."
-          disabled={!selectedSessionId}
+          disabled={!selectedSessionKey}
         />
         <small className="composer-status">
-          {transportReady
-            ? agentReady
-              ? "Live agent session ready. File access, semantic memory, and approval-gated shell exec are available."
-              : "Connected, but the live harness path needs attention."
-            : "Live connection is reconnecting before the next run can start."}
+          {agentReady
+            ? `Live OpenClaw session ready. ${harness?.toolProfile ?? "coding"} tools, ${harness?.execAsk ?? "on-miss"} exec approvals, and ${dashboard?.memory.semanticReady ? "semantic memory" : "memory indexing"} are active.`
+            : "The live agent path is not fully ready yet. Fix the harness/runtime path before sending the next run."}
         </small>
         <div className="button-row">
-          <button type="submit" disabled={!transportReady || !chatInput.trim()}>
-            {pendingRun?.sessionId === selectedSessionId || streaming
+          <button type="submit" disabled={!agentReady || !chatInput.trim()}>
+            {pendingRun?.sessionId === selectedSessionKey || streaming
               ? "Working…"
               : "Send"}
           </button>
@@ -386,12 +583,12 @@ export function ChatScreen() {
                     sendRealtimeCommand({
                       type: "chat.abort",
                       payload: {
-                        sessionId: selectedSessionId,
+                        sessionId: selectedSessionKey,
                       },
                     });
                   if (!aborted) {
                     await postJson(
-                      `/api/sessions/${encodeURIComponent(selectedSessionId)}/abort`,
+                      `/api/sessions/${encodeURIComponent(selectedSessionKey)}/abort`,
                       {},
                     );
                   }

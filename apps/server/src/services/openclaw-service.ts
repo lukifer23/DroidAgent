@@ -11,6 +11,7 @@ import {
   ChannelStatusSchema,
   ChatMessageSchema,
   ContextManagementStatusSchema,
+  HarnessStatusSchema,
   MemoryStatusSchema,
   RuntimeStatusSchema,
   SignalHealthCheckSchema,
@@ -22,6 +23,7 @@ import {
   type ChannelStatus,
   type ChatMessage,
   type ContextManagementStatus,
+  type HarnessStatus,
   type MemoryStatus,
   type SessionSummary,
 } from "@droidagent/shared";
@@ -52,6 +54,32 @@ const CHANNEL_STATUS_TTL_MS = 5_000;
 const MEMORY_STATUS_TTL_MS = 5_000;
 const DEFAULT_WEB_SESSION_ID = "web:operator";
 const INTERNAL_SESSION_IDS = new Set(["agent:main:main"]);
+const CODING_PROFILE_TOOLS = [
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "sessions_list",
+  "sessions_history",
+  "sessions_send",
+  "sessions_spawn",
+  "sessions_yield",
+  "session_status",
+  "subagents",
+  "memory_search",
+  "memory_get",
+  "image",
+] as const;
+const MESSAGING_PROFILE_TOOLS = [
+  "message",
+  "sessions_list",
+  "sessions_history",
+  "sessions_send",
+  "session_status",
+] as const;
+const MINIMAL_PROFILE_TOOLS = ["session_status"] as const;
 const AGENTS_TEMPLATE = `# DroidAgent Operator Rules
 
 - Treat this repository as the active workspace.
@@ -530,6 +558,41 @@ function operatorSession(updatedAt = nowIso()): SessionSummary {
     unreadCount: 0,
     lastMessagePreview: "Start a fresh DroidAgent session.",
   });
+}
+
+function resolveHarnessToolProfile(
+  profile: unknown,
+): HarnessStatus["toolProfile"] {
+  if (
+    profile === "minimal" ||
+    profile === "coding" ||
+    profile === "messaging" ||
+    profile === "full"
+  ) {
+    return profile;
+  }
+
+  if (profile === null || profile === undefined || profile === "") {
+    return "unknown";
+  }
+
+  return "custom";
+}
+
+function resolveProfileTools(profile: HarnessStatus["toolProfile"]): string[] {
+  if (profile === "minimal") {
+    return [...MINIMAL_PROFILE_TOOLS];
+  }
+
+  if (profile === "coding") {
+    return [...CODING_PROFILE_TOOLS];
+  }
+
+  if (profile === "messaging") {
+    return [...MESSAGING_PROFILE_TOOLS];
+  }
+
+  return [];
 }
 
 function parseHistoryMessage(
@@ -1484,6 +1547,7 @@ export class OpenClawService {
         this.resolvePrimaryModel(runtimeSettings),
       ],
       ["agents.defaults.thinkingDefault", "off"],
+      ["tools.profile", "coding"],
       [
         "models.providers.ollama",
         this.buildOllamaProviderConfig(runtimeSettings),
@@ -1495,6 +1559,7 @@ export class OpenClawService {
       ["tools.exec.host", "gateway"],
       ["tools.exec.security", "allowlist"],
       ["tools.exec.ask", "on-miss"],
+      ["tools.fs.workspaceOnly", true],
       [
         "hooks.internal.entries.bootstrap-extra-files.paths",
         WORKSPACE_BOOTSTRAP_EXTRA_FILES,
@@ -1563,6 +1628,79 @@ export class OpenClawService {
     }
     this.invalidateMemoryStatusCache();
     return notePath;
+  }
+
+  async harnessStatus(): Promise<HarnessStatus> {
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    const currentConfig = this.readCurrentConfig();
+    const toolProfile = resolveHarnessToolProfile(
+      getConfigPathValue(currentConfig, "tools.profile") ?? "coding",
+    );
+    const memorySearchConfig = getConfigPathValue(
+      currentConfig,
+      "agents.defaults.memorySearch",
+    ) as Record<string, unknown> | null;
+    const cacheConfig =
+      memorySearchConfig &&
+      typeof memorySearchConfig === "object" &&
+      !Array.isArray(memorySearchConfig)
+        ? (memorySearchConfig.cache as Record<string, unknown> | undefined)
+        : undefined;
+    const experimentalConfig =
+      memorySearchConfig &&
+      typeof memorySearchConfig === "object" &&
+      !Array.isArray(memorySearchConfig)
+        ? (memorySearchConfig.experimental as Record<string, unknown> | undefined)
+        : undefined;
+
+    return HarnessStatusSchema.parse({
+      configured: currentConfig !== null,
+      agentId: "main",
+      defaultSessionId: DEFAULT_WEB_SESSION_ID,
+      gatewayAuthMode:
+        typeof getConfigPathValue(currentConfig, "gateway.auth.mode") === "string"
+          ? (getConfigPathValue(currentConfig, "gateway.auth.mode") as string)
+          : "token",
+      gatewayBind:
+        typeof getConfigPathValue(currentConfig, "gateway.bind") === "string"
+          ? (getConfigPathValue(currentConfig, "gateway.bind") as string)
+          : "loopback",
+      activeModel: this.resolvePrimaryModel(runtimeSettings),
+      contextWindow: resolveContextWindow({
+        providerId: runtimeSettings.activeProviderId,
+        runtimeSettings,
+      }),
+      thinkingDefault:
+        typeof getConfigPathValue(
+          currentConfig,
+          "agents.defaults.thinkingDefault",
+        ) === "string"
+          ? (getConfigPathValue(
+              currentConfig,
+              "agents.defaults.thinkingDefault",
+            ) as string)
+          : "off",
+      workspaceRoot: this.resolveWorkspaceRoot(runtimeSettings),
+      toolProfile,
+      availableTools: resolveProfileTools(toolProfile),
+      workspaceOnlyFs:
+        getConfigPathValue(currentConfig, "tools.fs.workspaceOnly") === true,
+      memorySearchEnabled: cacheConfig?.enabled === true,
+      sessionMemoryEnabled: experimentalConfig?.sessionMemory === true,
+      execHost:
+        typeof getConfigPathValue(currentConfig, "tools.exec.host") === "string"
+          ? (getConfigPathValue(currentConfig, "tools.exec.host") as string)
+          : null,
+      execSecurity:
+        typeof getConfigPathValue(currentConfig, "tools.exec.security") ===
+        "string"
+          ? (getConfigPathValue(currentConfig, "tools.exec.security") as string)
+          : null,
+      execAsk:
+        typeof getConfigPathValue(currentConfig, "tools.exec.ask") === "string"
+          ? (getConfigPathValue(currentConfig, "tools.exec.ask") as string)
+          : null,
+    });
   }
 
   async status() {

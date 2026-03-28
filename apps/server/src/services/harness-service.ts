@@ -4,6 +4,7 @@ import type {
   ChannelConfigSummary,
   ChannelStatus,
   ChatMessage,
+  HarnessStatus,
   RuntimeStatus,
   SessionSummary
 } from "@droidagent/shared";
@@ -26,6 +27,7 @@ export interface HarnessRuntimeModelConfig {
 
 export interface HarnessAdapter {
   health(): Promise<RuntimeStatus>;
+  harnessStatus(): Promise<HarnessStatus>;
   listSessions(): Promise<SessionSummary[]>;
   loadHistory(sessionKey: string): Promise<ChatMessage[]>;
   sendMessage(sessionKey: string, message: string, relay: StreamRelayCallbacks): Promise<{ runId: string }>;

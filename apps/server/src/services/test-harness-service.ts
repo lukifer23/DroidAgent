@@ -4,6 +4,7 @@ import {
   ChannelConfigSummarySchema,
   ChannelStatusSchema,
   ChatMessageSchema,
+  HarnessStatusSchema,
   RuntimeStatusSchema,
   SessionSummarySchema,
   nowIso,
@@ -11,6 +12,7 @@ import {
   type ChannelConfigSummary,
   type ChannelStatus,
   type ChatMessage,
+  type HarnessStatus,
   type RuntimeStatus,
   type SessionSummary
 } from "@droidagent/shared";
@@ -56,14 +58,14 @@ export class TestHarnessService implements HarnessAdapter {
 
     const seededMessage = ChatMessageSchema.parse({
       id: randomUUID(),
-      sessionId: "main",
+      sessionId: "web:operator",
       role: "assistant",
       text: "DroidAgent test harness is ready.",
       createdAt: nowIso(),
       status: "complete",
       source: "openclaw"
     });
-    this.sessions.set("main", [seededMessage]);
+    this.sessions.set("web:operator", [seededMessage]);
   }
 
   async health(): Promise<RuntimeStatus> {
@@ -83,6 +85,45 @@ export class TestHarnessService implements HarnessAdapter {
       metadata: {
         testMode: true
       }
+    });
+  }
+
+  async harnessStatus(): Promise<HarnessStatus> {
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    return HarnessStatusSchema.parse({
+      configured: true,
+      agentId: "main",
+      defaultSessionId: "web:operator",
+      gatewayAuthMode: "token",
+      gatewayBind: "loopback",
+      activeModel: `ollama/${runtimeSettings.ollamaModel}`,
+      contextWindow: runtimeSettings.ollamaContextWindow,
+      thinkingDefault: "off",
+      workspaceRoot: runtimeSettings.workspaceRoot,
+      toolProfile: "coding",
+      availableTools: [
+        "read",
+        "write",
+        "edit",
+        "apply_patch",
+        "exec",
+        "process",
+        "sessions_list",
+        "sessions_history",
+        "sessions_send",
+        "sessions_spawn",
+        "sessions_yield",
+        "session_status",
+        "subagents",
+        "memory_search",
+        "memory_get"
+      ],
+      workspaceOnlyFs: true,
+      memorySearchEnabled: true,
+      sessionMemoryEnabled: true,
+      execHost: "gateway",
+      execSecurity: "allowlist",
+      execAsk: "on-miss"
     });
   }
 
@@ -113,8 +154,8 @@ export class TestHarnessService implements HarnessAdapter {
         const lastMessage = messages.at(-1);
         return SessionSummarySchema.parse({
           id: sessionId,
-          title: sessionId === "main" ? "Main" : sessionId,
-          scope: "main",
+          title: sessionId === "web:operator" ? "Operator Chat" : sessionId,
+          scope: sessionId === "web:operator" ? "web" : "main",
           updatedAt: lastMessage?.createdAt ?? nowIso(),
           unreadCount: 0,
           lastMessagePreview: lastMessage?.text ?? ""
