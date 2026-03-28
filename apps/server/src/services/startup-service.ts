@@ -74,11 +74,10 @@ export class StartupService {
 
   private async runRestore(applyChanges = true): Promise<StartupDiagnostic[]> {
     const diagnostics: StartupDiagnostic[] = [];
-    const [runtimeSettings, accessSettings, tailscale, cloudflare, runtimes, cloudProviders] = await Promise.all([
+    const [runtimeSettings, accessSettings, tailscale, runtimes, cloudProviders] = await Promise.all([
       appStateService.getRuntimeSettings(),
       appStateService.getAccessSettings(),
       accessService.getTailscaleStatus(),
-      accessService.getCloudflareStatus(),
       runtimeService.getRuntimeStatuses(),
       keychainService.listProviderSummaries()
     ]);
@@ -93,30 +92,46 @@ export class StartupService {
       })
     );
 
-    try {
-      if (applyChanges && accessSettings.cloudflareHostname && cloudflare.tokenStored) {
-        await cloudflareRemoteAccessProvider.start();
+    if (!accessSettings.cloudflareHostname) {
+      diagnostics.push(
+        StartupDiagnosticSchema.parse({
+          id: "cloudflare",
+          health: "warn",
+          blocking: false,
+          action:
+            "Configure a named Cloudflare tunnel only if you want a public remote path in addition to Tailscale.",
+          message: "Cloudflare tunnel is optional and not configured on this host."
+        })
+      );
+    } else {
+      try {
+        const cloudflare = await accessService.getCloudflareStatus();
+        if (applyChanges && cloudflare.tokenStored) {
+          await cloudflareRemoteAccessProvider.start();
+        }
+        const refreshedCloudflare = applyChanges
+          ? await accessService.getCloudflareStatus()
+          : cloudflare;
+        diagnostics.push(
+          StartupDiagnosticSchema.parse({
+            id: "cloudflare",
+            health: refreshedCloudflare.running ? "ok" : refreshedCloudflare.configured ? "warn" : "warn",
+            blocking: false,
+            action: refreshedCloudflare.configured ? null : "Configure a named Cloudflare tunnel only if you want a public remote path in addition to Tailscale.",
+            message: refreshedCloudflare.healthMessage
+          })
+        );
+      } catch (error) {
+        diagnostics.push(
+          StartupDiagnosticSchema.parse({
+            id: "cloudflare",
+            health: "error",
+            blocking: false,
+            action: "Repair the Cloudflare tunnel token or hostname from Settings.",
+            message: error instanceof Error ? error.message : "Cloudflare tunnel restore failed."
+          })
+        );
       }
-      const refreshedCloudflare = await accessService.getCloudflareStatus();
-      diagnostics.push(
-        StartupDiagnosticSchema.parse({
-          id: "cloudflare",
-          health: refreshedCloudflare.running ? "ok" : refreshedCloudflare.configured ? "warn" : "warn",
-          blocking: false,
-          action: refreshedCloudflare.configured ? null : "Configure a named Cloudflare tunnel only if you want a public remote path in addition to Tailscale.",
-          message: refreshedCloudflare.healthMessage
-        })
-      );
-    } catch (error) {
-      diagnostics.push(
-        StartupDiagnosticSchema.parse({
-          id: "cloudflare",
-          health: "error",
-          blocking: false,
-          action: "Repair the Cloudflare tunnel token or hostname from Settings.",
-          message: error instanceof Error ? error.message : "Cloudflare tunnel restore failed."
-        })
-      );
     }
 
     try {
@@ -198,35 +213,51 @@ export class StartupService {
       );
     }
 
-    try {
-      await signalService.refreshState();
-      const refreshedRuntimeSettings = await appStateService.getRuntimeSettings();
-      if (applyChanges && refreshedRuntimeSettings.signalRegistrationState === "registered") {
-        await signalService.startDaemon();
+    if (
+      runtimeSettings.signalRegistrationState === "registered" ||
+      runtimeSettings.signalRegistrationMode !== "none" ||
+      runtimeSettings.signalDaemonState !== "stopped"
+    ) {
+      try {
+        await signalService.refreshState();
+        const refreshedRuntimeSettings = await appStateService.getRuntimeSettings();
+        if (applyChanges && refreshedRuntimeSettings.signalRegistrationState === "registered") {
+          await signalService.startDaemon();
+        }
+        diagnostics.push(
+          StartupDiagnosticSchema.parse({
+            id: "signal",
+            health: refreshedRuntimeSettings.signalRegistrationState === "registered" ? "ok" : "warn",
+            blocking: false,
+            action:
+              refreshedRuntimeSettings.signalRegistrationState === "registered"
+                ? null
+                : "Configure Signal only if you need the secondary owner ingress.",
+            message:
+              refreshedRuntimeSettings.signalRegistrationState === "registered"
+                ? "Signal account is registered and eligible for daemon restore."
+                : "Signal is optional and not fully configured on this host."
+          })
+        );
+      } catch (error) {
+        diagnostics.push(
+          StartupDiagnosticSchema.parse({
+            id: "signal",
+            health: "error",
+            blocking: false,
+            action: "Re-validate the Signal account and daemon from the Channels tab.",
+            message: error instanceof Error ? error.message : "Signal restore failed."
+          })
+        );
       }
+    } else {
       diagnostics.push(
         StartupDiagnosticSchema.parse({
           id: "signal",
-          health: refreshedRuntimeSettings.signalRegistrationState === "registered" ? "ok" : "warn",
+          health: "warn",
           blocking: false,
-          action:
-            refreshedRuntimeSettings.signalRegistrationState === "registered"
-              ? null
-              : "Configure Signal only if you need the secondary owner ingress.",
-          message:
-            refreshedRuntimeSettings.signalRegistrationState === "registered"
-              ? "Signal account is registered and eligible for daemon restore."
-              : "Signal is optional and not fully configured on this host."
-        })
-      );
-    } catch (error) {
-      diagnostics.push(
-        StartupDiagnosticSchema.parse({
-          id: "signal",
-          health: "error",
-          blocking: false,
-          action: "Re-validate the Signal account and daemon from the Channels tab.",
-          message: error instanceof Error ? error.message : "Signal restore failed."
+          action: "Configure Signal only if you need the secondary owner ingress.",
+          message: "Signal is optional and not configured on this host."
         })
       );
     }

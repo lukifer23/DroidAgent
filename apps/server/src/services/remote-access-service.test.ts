@@ -58,6 +58,10 @@ describe("CloudflareRemoteAccessProvider", () => {
     spawnMock.mockReset();
     tailscaleRemoteAccessProvider.invalidateStatus();
     cloudflareRemoteAccessProvider.invalidateStatus();
+    Object.assign(cloudflareRemoteAccessProvider as never, {
+      process: null,
+      lastStatus: null
+    });
   });
 
   it("normalizes the hostname, reuses the stored token, and restarts the tunnel", async () => {
@@ -144,12 +148,48 @@ describe("CloudflareRemoteAccessProvider", () => {
     binarySpy.mockRestore();
     fetchSpy.mockRestore();
   });
+
+  it("skips version and reachability probes when Cloudflare is not configured", async () => {
+    const binarySpy = vi
+      .spyOn(cloudflareRemoteAccessProvider as never, "binaryPath" as never)
+      .mockResolvedValue("/opt/homebrew/bin/cloudflared");
+    const versionSpy = vi
+      .spyOn(cloudflareRemoteAccessProvider as never, "detectedVersion" as never)
+      .mockResolvedValue("cloudflared 2026.3.0");
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    getAccessSettings.mockResolvedValue({
+      cloudflareHostname: null,
+      cloudflareLastStartedAt: null
+    });
+    hasNamedSecret.mockResolvedValue(false);
+
+    const status = await cloudflareRemoteAccessProvider.getStatus();
+
+    expect(status.configured).toBe(false);
+    expect(status.running).toBe(false);
+    expect(versionSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+
+    binarySpy.mockRestore();
+    versionSpy.mockRestore();
+    fetchSpy.mockRestore();
+  });
 });
 
 describe("TailscaleRemoteAccessProvider", () => {
   beforeEach(() => {
     runCommandMock.mockReset();
     spawnMock.mockReset();
+    getAccessSettings.mockResolvedValue({
+      mode: "tailscale",
+      canonicalOrigin: null,
+      bootstrapTokenHash: null,
+      bootstrapTokenIssuedAt: null,
+      bootstrapTokenExpiresAt: null,
+      cloudflareHostname: null,
+      cloudflareLastStartedAt: null
+    });
     tailscaleRemoteAccessProvider.invalidateStatus();
     Object.assign(tailscaleRemoteAccessProvider as never, {
       process: null,
@@ -253,6 +293,45 @@ describe("TailscaleRemoteAccessProvider", () => {
     wakeSystemAppSpy.mockRestore();
     existsSyncSpy.mockRestore();
     userspaceSpy.mockRestore();
+  });
+
+  it("does not start a userspace daemon during a loopback-only cold status probe", async () => {
+    const timeoutError = new CommandError("tailscale status --json timed out", "", "", null);
+    const hasBinarySpy = vi
+      .spyOn(tailscaleRemoteAccessProvider as never, "hasBinary" as never)
+      .mockResolvedValue(true);
+    const wakeSystemAppSpy = vi
+      .spyOn(tailscaleRemoteAccessProvider as never, "wakeSystemApp" as never)
+      .mockResolvedValue(false);
+    const userspaceSpy = vi
+      .spyOn(tailscaleRemoteAccessProvider as never, "ensureUserspaceDaemon" as never)
+      .mockResolvedValue("/tmp/droidagent-tailscaled.sock");
+    const existsSyncSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+
+    getAccessSettings.mockResolvedValue({
+      mode: "loopback",
+      canonicalOrigin: null,
+      bootstrapTokenHash: null,
+      bootstrapTokenIssuedAt: null,
+      bootstrapTokenExpiresAt: null,
+      cloudflareHostname: null,
+      cloudflareLastStartedAt: null
+    });
+
+    runCommandMock
+      .mockResolvedValueOnce({ stdout: "1.96.3\n", stderr: "", exitCode: 0 })
+      .mockRejectedValueOnce(timeoutError);
+
+    const status = await tailscaleRemoteAccessProvider.getStatus();
+
+    expect(status.running).toBe(false);
+    expect(status.authenticated).toBe(false);
+    expect(userspaceSpy).not.toHaveBeenCalled();
+
+    hasBinarySpy.mockRestore();
+    wakeSystemAppSpy.mockRestore();
+    userspaceSpy.mockRestore();
+    existsSyncSpy.mockRestore();
   });
 
   it("surfaces the tailnet serve enable URL instead of hanging when Serve is disabled", async () => {

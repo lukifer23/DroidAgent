@@ -19,6 +19,7 @@ import { keychainService } from "./keychain-service.js";
 const REMOTE_STATUS_TTL_MS = 5_000;
 const TAILSCALE_STATUS_TIMEOUT_MS = 1_500;
 const STATUS_VERSION_TIMEOUT_MS = 1_000;
+const BINARY_METADATA_TTL_MS = 86_400_000;
 
 function recursiveStrings(value: unknown, result: string[] = []): string[] {
   if (typeof value === "string") {
@@ -145,27 +146,53 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
   private activeSocketPath: string | null = null;
   private lastStatus: TailscaleStatus | null = null;
   private readonly statusCache = new TtlCache<TailscaleStatus>(REMOTE_STATUS_TTL_MS);
+  private readonly binaryPathCache = new TtlCache<string | null>(BINARY_METADATA_TTL_MS);
+  private readonly daemonBinaryPathCache = new TtlCache<string | null>(BINARY_METADATA_TTL_MS);
+  private readonly versionCache = new TtlCache<string | null>(BINARY_METADATA_TTL_MS);
 
   invalidateStatus(): void {
     this.statusCache.invalidate();
   }
 
+  private async binaryPath(): Promise<string | null> {
+    return await this.binaryPathCache.get(async () => {
+      try {
+        const result = await runCommand("which", ["tailscale"]);
+        return result.stdout.trim().split("\n")[0] || null;
+      } catch {
+        return null;
+      }
+    });
+  }
+
   private async hasBinary(): Promise<boolean> {
-    try {
-      await runCommand("which", ["tailscale"]);
-      return true;
-    } catch {
-      return false;
-    }
+    return Boolean(await this.binaryPath());
+  }
+
+  private async detectedVersion(): Promise<string | null> {
+    return await this.versionCache.get(async () => {
+      try {
+        return (
+          await runCommand("tailscale", ["version"], {
+            okExitCodes: [0, 1],
+            timeoutMs: STATUS_VERSION_TIMEOUT_MS
+          })
+        ).stdout.trim().split("\n")[0] || null;
+      } catch {
+        return null;
+      }
+    });
   }
 
   private async daemonBinaryPath(): Promise<string | null> {
-    try {
-      const result = await runCommand("which", ["tailscaled"]);
-      return result.stdout.trim().split("\n")[0] || null;
-    } catch {
-      return null;
-    }
+    return await this.daemonBinaryPathCache.get(async () => {
+      try {
+        const result = await runCommand("which", ["tailscaled"]);
+        return result.stdout.trim().split("\n")[0] || null;
+      } catch {
+        return null;
+      }
+    });
   }
 
   private isUserspaceFallbackError(error: unknown): boolean {
@@ -319,7 +346,9 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
     return null;
   }
 
-  private async readRawStatus(): Promise<TailscaleRawStatus> {
+  private async readRawStatus(
+    options: { allowUserspaceStart?: boolean } = {},
+  ): Promise<TailscaleRawStatus> {
     if (!(await this.hasBinary())) {
       return {
         version: null,
@@ -332,14 +361,7 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
     }
 
     let version: string | null = null;
-    try {
-      version = (await runCommand("tailscale", ["version"], {
-        okExitCodes: [0, 1],
-        timeoutMs: STATUS_VERSION_TIMEOUT_MS
-      })).stdout.trim().split("\n")[0] || null;
-    } catch {
-      version = null;
-    }
+    version = await this.detectedVersion();
 
     const preferredSocketPath =
       this.activeSocketPath && fs.existsSync(this.activeSocketPath)
@@ -386,6 +408,17 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
       const systemStatus = (await this.wakeSystemApp()) ? await this.waitForSystemDaemon(version) : null;
       if (systemStatus) {
         return systemStatus;
+      }
+
+      if (!options.allowUserspaceStart) {
+        return {
+          version,
+          statusRaw: null,
+          serveRaw: null,
+          running: false,
+          mode: "system",
+          socketPath: null
+        };
       }
 
       const socketPath = await this.ensureUserspaceDaemon();
@@ -452,7 +485,11 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
   async getStatus(): Promise<TailscaleStatus> {
     return await this.statusCache.get(async () => {
       try {
-        if (!(await this.hasBinary())) {
+        const [installed, accessSettings] = await Promise.all([
+          this.hasBinary(),
+          appStateService.getAccessSettings(),
+        ]);
+        if (!installed) {
           const status = TailscaleStatusSchema.parse({
             installed: false,
             running: false,
@@ -473,7 +510,13 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
           return status;
         }
 
-        const { version, statusRaw, serveRaw, running, mode, socketPath } = await this.readRawStatus();
+        const shouldAllowUserspaceStart =
+          accessSettings.mode === "tailscale" ||
+          Boolean(this.activeSocketPath) ||
+          fs.existsSync(paths.tailscaleSocketPath);
+        const { version, statusRaw, serveRaw, running, mode, socketPath } = await this.readRawStatus({
+          allowUserspaceStart: shouldAllowUserspaceStart
+        });
         this.activeSocketPath = mode === "userspace" ? socketPath : null;
         const status = (statusRaw ?? {}) as Record<string, unknown>;
         const self = (status.Self ?? {}) as Record<string, unknown>;
@@ -538,22 +581,46 @@ export class CloudflareRemoteAccessProvider implements RemoteAccessProvider<Clou
   private process: ChildProcess | null = null;
   private lastStatus: CloudflareStatus | null = null;
   private readonly statusCache = new TtlCache<CloudflareStatus>(REMOTE_STATUS_TTL_MS);
+  private readonly binaryPathCache = new TtlCache<string | null>(BINARY_METADATA_TTL_MS);
+  private readonly versionCache = new TtlCache<string | null>(BINARY_METADATA_TTL_MS);
 
   invalidateStatus(): void {
     this.statusCache.invalidate();
   }
 
   private async binaryPath(): Promise<string | null> {
-    try {
-      const result = await runCommand("which", ["cloudflared"]);
-      return result.stdout.trim().split("\n")[0] || null;
-    } catch {
+    return await this.binaryPathCache.get(async () => {
+      try {
+        const result = await runCommand("which", ["cloudflared"]);
+        return result.stdout.trim().split("\n")[0] || null;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  private async detectedVersion(binaryPath: string | null): Promise<string | null> {
+    if (!binaryPath) {
       return null;
     }
+
+    return await this.versionCache.get(async () => {
+      try {
+        return (
+          await runCommand(binaryPath, ["--version"], {
+            timeoutMs: STATUS_VERSION_TIMEOUT_MS
+          })
+        ).stdout.trim().split("\n")[0] || null;
+      } catch {
+        return null;
+      }
+    });
   }
 
   async install(): Promise<void> {
     await runCommand("brew", ["install", "cloudflared"]);
+    this.binaryPathCache.invalidate();
+    this.versionCache.invalidate();
   }
 
   async enable(params: { hostname: string; tunnelToken: string }): Promise<void> {
@@ -638,26 +705,24 @@ export class CloudflareRemoteAccessProvider implements RemoteAccessProvider<Clou
   async getStatus(): Promise<CloudflareStatus> {
     return await this.statusCache.get(async () => {
       try {
-        const [binaryPath, accessSettings, tokenStored] = await Promise.all([
-          this.binaryPath(),
+        const [accessSettings, tokenStored] = await Promise.all([
           appStateService.getAccessSettings(),
           keychainService.hasNamedSecret("cloudflareTunnelToken")
         ]);
         const hostname = accessSettings.cloudflareHostname;
+        const binaryPath = await this.binaryPath();
+        const configuredOrActive =
+          Boolean(hostname) ||
+          tokenStored ||
+          Boolean(this.process && this.process.exitCode === null) ||
+          Boolean(this.lastStatus?.configured || this.lastStatus?.running);
 
-        let version: string | null = null;
-        if (binaryPath) {
-          try {
-            version = (await runCommand(binaryPath, ["--version"], {
-              timeoutMs: STATUS_VERSION_TIMEOUT_MS
-            })).stdout.trim().split("\n")[0] || null;
-          } catch {
-            version = null;
-          }
-        }
+        const version = configuredOrActive
+          ? await this.detectedVersion(binaryPath)
+          : this.lastStatus?.version ?? null;
 
         const canonicalUrl = hostname ? `https://${hostname}` : null;
-        const reachable = canonicalUrl ? await healthcheck(canonicalUrl) : false;
+        const reachable = canonicalUrl && configuredOrActive ? await healthcheck(canonicalUrl) : false;
         const running = reachable || Boolean(this.process && this.process.exitCode === null);
 
         const healthMessage = !binaryPath

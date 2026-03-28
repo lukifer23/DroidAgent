@@ -1339,7 +1339,6 @@ void (async () => {
       runtimeService.getRuntimeStatuses(),
       runtimeService.listProviderProfiles(),
       keychainService.listProviderSummaries(),
-      dashboardService.getDashboardState(),
     ]);
   } catch (error) {
     console.error("Failed to warm DroidAgent caches", error);

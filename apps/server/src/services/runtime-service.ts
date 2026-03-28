@@ -32,6 +32,7 @@ const HEALTH_CHECK_RETRIES = 3;
 const HEALTH_CHECK_DELAY_MS = 500;
 const RUNTIME_STATUS_TTL_MS = 15_000;
 const PROVIDER_PROFILE_TTL_MS = 15_000;
+const BINARY_METADATA_TTL_MS = 86_400_000;
 
 interface LlamaModelPreset {
   id: string;
@@ -66,20 +67,56 @@ export class RuntimeService {
   private readonly hostAccelerationCache = new TtlCache<
     Record<string, string | number | boolean>
   >(86_400_000);
+  private readonly binaryPathCaches = new Map<string, TtlCache<string | null>>();
+  private readonly binaryVersionCaches = new Map<string, TtlCache<string | null>>();
 
   invalidateCaches(): void {
     this.runtimeStatusesCache.invalidate();
     this.providerProfilesCache.invalidate();
   }
 
+  private binaryPathCacheFor(name: string): TtlCache<string | null> {
+    let cache = this.binaryPathCaches.get(name);
+    if (!cache) {
+      cache = new TtlCache<string | null>(BINARY_METADATA_TTL_MS);
+      this.binaryPathCaches.set(name, cache);
+    }
+    return cache;
+  }
+
+  private binaryVersionCacheFor(binaryPath: string): TtlCache<string | null> {
+    let cache = this.binaryVersionCaches.get(binaryPath);
+    if (!cache) {
+      cache = new TtlCache<string | null>(BINARY_METADATA_TTL_MS);
+      this.binaryVersionCaches.set(binaryPath, cache);
+    }
+    return cache;
+  }
+
   private async binaryPath(name: string): Promise<string | null> {
-    try {
-      const result = await runCommand("which", [name]);
-      const firstLine = result.stdout.trim().split("\n")[0];
-      return firstLine || null;
-    } catch {
+    return await this.binaryPathCacheFor(name).get(async () => {
+      try {
+        const result = await runCommand("which", [name]);
+        const firstLine = result.stdout.trim().split("\n")[0];
+        return firstLine || null;
+      } catch {
+        return null;
+      }
+    });
+  }
+
+  private async binaryVersion(binaryPath: string | null): Promise<string | null> {
+    if (!binaryPath) {
       return null;
     }
+
+    return await this.binaryVersionCacheFor(binaryPath).get(async () => {
+      try {
+        return (await runCommand(binaryPath, ["--version"])).stdout.trim() || null;
+      } catch {
+        return null;
+      }
+    });
   }
 
   private async fetchJson<T>(url: string): Promise<T> {
@@ -189,8 +226,7 @@ export class RuntimeService {
         state: "running",
         enabled: true,
         installMethod: "brew",
-        detectedVersion:
-          (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
+        detectedVersion: await this.binaryVersion(binaryPath),
         binaryPath,
         health: "ok",
         healthMessage: `Ollama is serving ${tags.models?.length ?? 0} model(s)${hostAcceleration.accelerationBackend === "metal" ? " with Metal available." : "."}`,
@@ -213,8 +249,7 @@ export class RuntimeService {
         state: "stopped",
         enabled: true,
         installMethod: "brew",
-        detectedVersion:
-          (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
+        detectedVersion: await this.binaryVersion(binaryPath),
         binaryPath,
         health: "warn",
         healthMessage:
@@ -269,8 +304,7 @@ export class RuntimeService {
         state: "running",
         enabled: true,
         installMethod: "brew",
-        detectedVersion:
-          (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
+        detectedVersion: await this.binaryVersion(binaryPath),
         binaryPath,
         health: "ok",
         healthMessage: `llama.cpp is serving ${models.data?.length ?? 0} model(s) with ${hostAcceleration.accelerationBackend === "metal" ? "Metal acceleration" : "CPU execution"}.`,
@@ -292,8 +326,7 @@ export class RuntimeService {
         state: "stopped",
         enabled: true,
         installMethod: "brew",
-        detectedVersion:
-          (await runCommand(binaryPath, ["--version"])).stdout.trim() || null,
+        detectedVersion: await this.binaryVersion(binaryPath),
         binaryPath,
         health: "warn",
         healthMessage: `llama.cpp is installed but its local server is not running. It will launch with ${hostAcceleration.accelerationBackend === "metal" ? "Metal acceleration" : "CPU execution"} defaults.`,
