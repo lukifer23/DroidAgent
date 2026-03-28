@@ -55,6 +55,7 @@ export function AppLayout() {
   const dashboard = dashboardQuery.data;
   const operatorReady = isOperatorReady(dashboard);
   const isSetupRoute = location.pathname === "/setup";
+  const isChatRoute = location.pathname === "/chat";
 
   useEffect(() => {
     finishRouteTransition(location.pathname);
@@ -167,12 +168,14 @@ export function AppLayout() {
       <header className="topbar">
         <div className="topbar-copy">
           <div className="eyebrow">DroidAgent</div>
-          <h1>Control Center</h1>
+          <h1>{isChatRoute ? "Operator Chat" : "Control Center"}</h1>
           <small className="topbar-meta">
             {remoteReady ? "Tailscale live" : "Local-first"} •{" "}
-            {activeProvider?.model ?? dashboard?.setup.selectedModel ?? "No model"}{" "}
-            • {formatTokenBudget(activeProvider?.contextWindow)} •{" "}
-            {memoryReady ? "semantic memory live" : "semantic memory pending"}
+            {activeProvider?.model ?? dashboard?.setup.selectedModel ?? "No model"}
+            {activeProvider?.contextWindow
+              ? ` • ${formatTokenBudget(activeProvider.contextWindow)}`
+              : ""}{" "}
+            • {memoryReady ? "memory ready" : "memory pending"}
           </small>
         </div>
         <button
@@ -203,8 +206,9 @@ export function AppLayout() {
         <section className="status-banner error">{errorMessage}</section>
       ) : null}
 
-      <section className="system-rail">
-        {systemCards.map((card) => {
+      {!isChatRoute ? (
+        <section className="system-rail">
+          {systemCards.map((card) => {
           const Icon = card.icon;
           return (
             <article
@@ -224,8 +228,9 @@ export function AppLayout() {
               <small>{card.detail}</small>
             </article>
           );
-        })}
-      </section>
+          })}
+        </section>
+      ) : null}
 
       {!operatorReady && !isSetupRoute ? (
         <section className="status-banner offline">

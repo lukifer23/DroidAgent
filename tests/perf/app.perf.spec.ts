@@ -18,7 +18,7 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
 
   const loadStart = performance.now();
   await page.goto(new URL("/chat", state.baseUrl).toString());
-  await expect(page.getByRole("heading", { name: "Control Center" })).toBeVisible();
+  await expect(page.locator(".topbar h1")).toBeVisible();
   metrics.push({
     name: "initial_load_ms",
     durationMs: Number((performance.now() - loadStart).toFixed(2))
@@ -33,12 +33,20 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   });
 
   await page.getByRole("link", { name: "Chat" }).click();
-  await expect(page.getByPlaceholder("Send a message to the current OpenClaw session...")).toBeVisible();
+  await expect(
+    page.getByPlaceholder(
+      "Ask DroidAgent to inspect, edit, search, or operate on this Mac...",
+    ),
+  ).toBeVisible();
 
   const prompt = `perf-${projectName}`;
   const assistantMessages = page.locator(".chat-thread .message-card.assistant p");
   const sendButton = page.getByRole("button", { name: "Send" });
-  await page.getByPlaceholder("Send a message to the current OpenClaw session...").fill(prompt);
+  await page
+    .getByPlaceholder(
+      "Ask DroidAgent to inspect, edit, search, or operate on this Mac...",
+    )
+    .fill(prompt);
   await expect(sendButton).toBeEnabled();
   const sendStart = performance.now();
   await sendButton.click();

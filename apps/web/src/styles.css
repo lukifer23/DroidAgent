@@ -429,14 +429,29 @@ small {
   align-items: start;
 }
 
-@container main (min-width: 640px) {
+@container main (min-width: 960px) {
   .split-panel {
     grid-template-columns: minmax(240px, 320px) 1fr;
   }
 
   .chat-panel {
-    grid-template-columns: minmax(200px, 280px) 1fr;
-    grid-template-areas: "sessions thread" "sessions composer";
+    grid-template-columns: minmax(220px, 280px) 1fr;
+    grid-template-areas:
+      "ops ops"
+      "sessions thread"
+      "sessions composer";
+  }
+
+  .chat-panel.single-session {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "ops"
+      "thread"
+      "composer";
+  }
+
+  .chat-ops-card {
+    grid-area: ops;
   }
 
   .session-strip {
@@ -754,6 +769,70 @@ small {
   gap: 1rem;
 }
 
+.chat-ops-card {
+  display: grid;
+  gap: 0.85rem;
+  background:
+    linear-gradient(180deg, rgba(243, 197, 92, 0.07), transparent 62%),
+    rgba(255, 255, 255, 0.035);
+}
+
+.chat-ops-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.chat-ops-header h3 {
+  margin: 0.18rem 0 0;
+  font-size: 1.18rem;
+}
+
+.chat-ops-copy {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.capability-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.capability-chip {
+  display: grid;
+  gap: 0.22rem;
+  padding: 0.78rem 0.84rem;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.capability-chip strong {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+
+.capability-chip span {
+  color: var(--text);
+  line-height: 1.45;
+  font-size: 0.92rem;
+}
+
+.capability-chip.good {
+  border-color: rgba(127, 215, 181, 0.24);
+  background: rgba(127, 215, 181, 0.08);
+}
+
+.capability-chip.warn {
+  border-color: rgba(255, 123, 89, 0.22);
+  background: rgba(255, 123, 89, 0.07);
+}
+
 .session-strip {
   display: flex;
   gap: 0.75rem;
@@ -764,8 +843,8 @@ small {
 .session-pill {
   display: grid;
   gap: 0.35rem;
-  min-width: 210px;
-  padding: 0.9rem 1rem;
+  min-width: 176px;
+  padding: 0.78rem 0.88rem;
   border: 1px solid var(--border);
   border-radius: 20px;
   text-align: left;
@@ -807,6 +886,7 @@ small {
   display: grid;
   gap: 0.8rem;
   align-content: start;
+  min-width: 0;
 }
 
 .message-card {
@@ -877,6 +957,17 @@ small {
 .composer {
   grid-template-columns: 1fr auto;
   align-items: end;
+  position: sticky;
+  bottom: calc(5.6rem + env(safe-area-inset-bottom));
+  z-index: 6;
+  padding: 0.9rem;
+  border-radius: 24px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 55%),
+    rgba(11, 15, 20, 0.92);
+  backdrop-filter: blur(24px);
+  box-shadow: var(--shadow-soft);
 }
 
 .composer-status {
@@ -981,6 +1072,12 @@ small {
     transform var(--motion-fast) var(--motion-ease),
     color var(--motion-base) var(--motion-ease),
     background-color var(--motion-base) var(--motion-ease);
+}
+
+.nav-link span,
+.bottom-nav button span {
+  font-size: 0.76rem;
+  line-height: 1.1;
 }
 
 .nav-link.active,
@@ -1150,7 +1247,20 @@ button:active:not(:disabled),
   }
 
   .system-rail {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    overflow-x: auto;
+    gap: 0.75rem;
+    padding-bottom: 0.1rem;
+    scrollbar-width: none;
+  }
+
+  .system-rail::-webkit-scrollbar {
+    display: none;
+  }
+
+  .system-rail-card {
+    min-width: 240px;
+    flex: 0 0 240px;
   }
 
   .summary-grid {
@@ -1208,14 +1318,14 @@ button:active:not(:disabled),
 
   .nav-link,
   .bottom-nav button {
-    min-width: 74px;
-    flex-basis: 74px;
-    padding: 0.6rem 0.5rem;
+    min-width: 68px;
+    flex-basis: 68px;
+    padding: 0.55rem 0.45rem;
   }
 }
 
 @media (max-width: 560px) {
-  .system-rail {
+  .capability-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1237,6 +1347,14 @@ button:active:not(:disabled),
 
   .message-card {
     width: 100%;
+  }
+
+  .chat-ops-header {
+    flex-direction: column;
+  }
+
+  .session-pill {
+    min-width: 152px;
   }
 }
 

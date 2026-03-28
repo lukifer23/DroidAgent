@@ -21,9 +21,7 @@ test("shows the passkey auth screen before sign-in", async ({
 test("loads the signed-in shell and bottom-nav routes", async ({ page }) => {
   await gotoSignedIn(page, "/chat");
 
-  await expect(
-    page.getByRole("heading", { name: "Control Center" }),
-  ).toBeVisible();
+  await expect(page.locator(".topbar h1")).toBeVisible();
   await page.getByRole("link", { name: "Files" }).click();
   await expect(
     page.getByRole("button", { name: "Create Directory" }),
@@ -60,7 +58,9 @@ test("streams chat replies through the real websocket path", async ({
   const sendButton = page.getByRole("button", { name: "Send" });
 
   await page
-    .getByPlaceholder("Send a message to the current OpenClaw session...")
+    .getByPlaceholder(
+      "Ask DroidAgent to inspect, edit, search, or operate on this Mac...",
+    )
     .fill(prompt);
   await expect(sendButton).toBeEnabled();
   await sendButton.click();
@@ -124,12 +124,12 @@ test("reconnects after a temporary offline period", async ({ page }) => {
     window.dispatchEvent(new Event("online"));
   });
   await expect(reconnectBanner).toHaveCount(0);
-  await expect(
-    page.getByRole("heading", { name: "Control Center" }),
-  ).toBeVisible();
+  await expect(page.locator(".topbar h1")).toBeVisible();
   const sendButton = page.getByRole("button", { name: "Send" });
   await page
-    .getByPlaceholder("Send a message to the current OpenClaw session...")
+    .getByPlaceholder(
+      "Ask DroidAgent to inspect, edit, search, or operate on this Mac...",
+    )
     .fill(prompt);
   await expect(sendButton).toBeEnabled();
   await sendButton.click();
