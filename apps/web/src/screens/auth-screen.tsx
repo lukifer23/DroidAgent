@@ -189,14 +189,23 @@ export function AuthScreen() {
   const bootstrapToken = new URLSearchParams(window.location.search).get(
     "bootstrap",
   );
+  const bootstrapEnrollment = Boolean(bootstrapToken);
   const passkeyActionSupported =
     passkeySupport.secureContext && passkeySupport.hasWebAuthn;
-  const authHeading = authQuery.data?.hasUser
-    ? "Sign in to DroidAgent."
-    : "Set up owner access.";
-  const authDescription = authQuery.data?.hasUser
-    ? "Use the passkey already enrolled for this DroidAgent instance."
-    : "Create the owner passkey once. DroidAgent can prepare the Mac and phone access after you are in.";
+  const authHeading = bootstrapEnrollment
+    ? authQuery.data?.hasUser
+      ? "Add this device."
+      : "Complete owner enrollment."
+    : authQuery.data?.hasUser
+      ? "Sign in to DroidAgent."
+      : "Set up owner access.";
+  const authDescription = bootstrapEnrollment
+    ? authQuery.data?.hasUser
+      ? "This link enrolls a new owner passkey on this phone. After that, daily sign-in can happen directly here."
+      : "Finish the owner passkey setup on this device so the remote phone path can work on its own."
+    : authQuery.data?.hasUser
+      ? "Use the passkey already enrolled for this DroidAgent instance."
+      : "Create the owner passkey once. DroidAgent can prepare the Mac and phone access after you are in.";
   const passkeyStatus = useMemo(() => {
     if (!passkeySupport.checked) {
       return "Checking passkey support on this browser.";
@@ -228,8 +237,9 @@ export function AuthScreen() {
             ) : null}
             {bootstrapToken ? (
               <small>
-                Phone enrollment link detected. Complete owner passkey setup on
-                this device.
+                Phone enrollment link detected. This flow adds a passkey on this
+                device instead of asking the Mac-only passkey to already exist
+                here.
               </small>
             ) : null}
           </section>
@@ -246,7 +256,7 @@ export function AuthScreen() {
           <p className="status-banner error">{errorMessage}</p>
         ) : null}
         <div className="hero-actions">
-          {authQuery.data?.hasUser ? (
+          {!bootstrapEnrollment && authQuery.data?.hasUser ? (
             <button
               type="button"
               disabled={pendingAction === "login" || !passkeyActionSupported}
@@ -263,9 +273,13 @@ export function AuthScreen() {
               onClick={() => void handleRegister()}
             >
               {pendingAction === "register"
-                ? "Starting Passkey Enrollment..."
-                : bootstrapToken
-                  ? "Complete Phone Enrollment"
+                ? bootstrapEnrollment
+                  ? "Enrolling This Device..."
+                  : "Starting Passkey Enrollment..."
+                : bootstrapEnrollment
+                  ? authQuery.data?.hasUser
+                    ? "Add This Device as a Passkey"
+                    : "Complete Phone Enrollment"
                   : "Create Owner Passkey"}
             </button>
           )}

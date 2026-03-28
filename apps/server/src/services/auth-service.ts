@@ -84,6 +84,18 @@ export class AuthService {
     return Boolean(firstUser);
   }
 
+  private toAuthUser(user: {
+    id: string;
+    username: string;
+    displayName: string;
+  }): AuthUser {
+    return {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+    };
+  }
+
   private async deleteChallenges(kind: ChallengeKind, userId?: string): Promise<void> {
     const rows = await db.query.authChallenges.findMany({
       where: userId
@@ -458,11 +470,27 @@ export class AuthService {
   }
 
   async beginRegistration(c: Context): Promise<ReturnType<AuthService["beginOwnerRegistration"]>> {
-    const ownerExists = await this.hasUser();
-    if (ownerExists) {
-      throw new Error("A passkey is already configured. Use sign in instead.");
-    }
     const token = new URL(c.req.url).searchParams.get("bootstrap");
+    const existingUser = await db.query.users.findFirst();
+
+    if (existingUser) {
+      if (!token) {
+        throw new Error(
+          "A passkey is already configured. Use sign in instead.",
+        );
+      }
+
+      const canonicalOrigin =
+        await accessService.assertBootstrapRegistrationRequest(c, token);
+      return await this.beginAdditionalPasskeyRegistration(
+        this.toAuthUser(existingUser),
+        {
+          rpId: canonicalOrigin.rpId,
+          origin: canonicalOrigin.origin,
+        },
+      );
+    }
+
     let canonicalOrigin: CanonicalOrigin | null = null;
     if (token) {
       canonicalOrigin = await accessService.assertBootstrapRegistrationRequest(c, token);
@@ -481,14 +509,45 @@ export class AuthService {
 
   async finishRegistration(c: Context, response: unknown): Promise<AuthUser> {
     const token = new URL(c.req.url).searchParams.get("bootstrap");
+    const existingUser = await db.query.users.findFirst();
+
     let canonicalOrigin: CanonicalOrigin | null = null;
     if (token) {
       canonicalOrigin = await accessService.assertBootstrapRegistrationRequest(c, token);
+      const requireSecureCookie = this.requireSecureCookie(c, canonicalOrigin);
+
+      if (existingUser) {
+        const user = await this.finishAdditionalPasskeyRegistration(
+          c,
+          this.toAuthUser(existingUser),
+          response,
+          requireSecureCookie,
+        );
+        await accessService.consumeBootstrapToken(token);
+        return user;
+      }
+
+      const user = await this.finishOwnerRegistration(
+        c,
+        response,
+        requireSecureCookie,
+      );
       await accessService.consumeBootstrapToken(token);
-    } else {
-      await accessService.assertLocalhostBootstrapRequest(c);
+      return user;
     }
-    return this.finishOwnerRegistration(c, response, this.requireSecureCookie(c, canonicalOrigin));
+
+    if (existingUser) {
+      throw new Error(
+        "A passkey is already configured. Use the canonical DroidAgent URL to sign in or use a bootstrap link to enroll another device.",
+      );
+    }
+
+    await accessService.assertLocalhostBootstrapRequest(c);
+    return this.finishOwnerRegistration(
+      c,
+      response,
+      this.requireSecureCookie(c, canonicalOrigin),
+    );
   }
 
   async finishAuthenticationFromContext(c: Context, response: unknown): Promise<AuthUser> {
