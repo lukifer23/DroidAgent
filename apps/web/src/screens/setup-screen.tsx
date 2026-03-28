@@ -114,17 +114,20 @@ export function SetupScreen() {
   const ollamaProvider = dashboard?.providers.find(
     (provider) => provider.id === "ollama-default",
   );
+  const memoryStatus = dashboard?.memory;
   const diagnostics =
     startupDiagnosticsQuery.data ?? dashboard?.startupDiagnostics ?? [];
 
   const passkeyConfigured = Boolean(dashboard?.setup.passkeyConfigured);
   const workspaceReady = Boolean(dashboard?.setup.workspaceRoot);
+  const memoryReady = Boolean(memoryStatus?.ready);
   const ollamaReady = ollamaRuntime?.state === "running";
   const openclawReady = openclawRuntime?.state === "running";
   const providerSelected = ollamaProvider?.enabled === true;
   const providerModelMatches = ollamaProvider?.model === setupModel;
   const hostReady =
     workspaceReady &&
+    memoryReady &&
     ollamaReady &&
     openclawReady &&
     providerSelected &&
@@ -150,7 +153,7 @@ export function SetupScreen() {
         label: "This Mac",
         value: hostReady ? "Ready" : "Needs prep",
         detail: hostReady
-          ? "Workspace, Ollama, OpenClaw, and the default model are in place."
+          ? "Workspace, memory, Ollama, OpenClaw, and the default model are in place."
           : "DroidAgent can prepare the common local path for you.",
         ready: hostReady,
       },
@@ -195,6 +198,18 @@ export function SetupScreen() {
           ? "Files, jobs, and editing are already scoped to the selected workspace."
           : "DroidAgent will use this repo root unless you override it below.",
         ready: workspaceReady,
+      },
+      {
+        label: "Workspace Memory",
+        value: summarizeHealth(
+          memoryReady,
+          "Bootstrapped",
+          "Will be created automatically",
+        ),
+        detail: memoryReady
+          ? `MEMORY.md, skills, and daily notes are ready under ${memoryStatus?.effectiveWorkspaceRoot ?? dashboard?.setup.workspaceRoot ?? "the workspace"}.`
+          : "DroidAgent will seed durable memory files, daily notes, and workspace skills for you.",
+        ready: memoryReady,
       },
       {
         label: "Ollama",
@@ -245,6 +260,8 @@ export function SetupScreen() {
       providerModelMatches,
       providerSelected,
       setupModel,
+      memoryReady,
+      memoryStatus?.effectiveWorkspaceRoot,
       workspaceReady,
     ],
   );
@@ -298,7 +315,7 @@ export function SetupScreen() {
   const primaryActionLabel = !hostReady
     ? "Prepare This Mac"
     : remoteReady
-      ? "Refresh Status"
+      ? "Everything Looks Ready"
       : "Finish Phone Access";
 
   async function refreshSetupQueries() {
@@ -395,7 +412,7 @@ export function SetupScreen() {
             <p className="setup-intro">
               DroidAgent should handle the normal path in one pass: shared
               workspace, Ollama, OpenClaw, a 65k local context budget, then the
-              private Tailscale phone URL.
+              private Tailscale phone URL and a clean memory scaffold.
             </p>
           </div>
           <div className="setup-hero-stats">
@@ -495,8 +512,8 @@ export function SetupScreen() {
                 <>
                   <small>
                     Scan this QR from the Mac or open this one-time link on the
-                    Fold. It enrolls a passkey on that phone instead of asking
-                    the Mac-only passkey to already exist there.
+                    Fold. It adds a passkey on that phone directly, so daily
+                    sign-in can happen there without the Mac passkey.
                   </small>
                   {phoneUrl ? (
                     <div className="link-preview-row secondary-row">
@@ -513,8 +530,8 @@ export function SetupScreen() {
                     </div>
                   ) : null}
                   <small>
-                    After enrollment, daily sign-in uses the Tailscale URL
-                    above. You do not need to keep the one-time link.
+                    After enrollment, daily use is just the Tailscale URL
+                    above. The one-time device link can be discarded.
                   </small>
                 </>
               ) : (
@@ -624,6 +641,11 @@ export function SetupScreen() {
               Override the default workspace or local model only when you need
               something different than the quickstart path.
             </p>
+            <small>
+              Local default: {setupModel} with{" "}
+              {formatTokenBudget(ollamaProvider?.contextWindow)} context, smart
+              trimming, and workspace memory bootstrap.
+            </small>
             <div className="field-stack">
               <label>
                 Workspace root

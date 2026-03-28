@@ -1,6 +1,6 @@
 # DroidAgent
 
-DroidAgent is a macOS-first, single-owner control plane for OpenClaw with a mobile-first PWA shell for chat, files, jobs, runtime control, passkeys, remote phone access, and optional Signal ingress.
+DroidAgent is a macOS-first, single-owner control plane for OpenClaw with a mobile-first PWA shell for chat, files, jobs, runtime control, passkeys, Tailscale phone access, and optional Signal ingress.
 
 ## What Ships In V1
 
@@ -48,12 +48,13 @@ After the owner passkey is enrolled, the `Setup` route now drives the common pat
 - browser traffic never talks directly to OpenClaw
 - single owner, multiple passkeys
 - Ollama is the default local runtime path
+- the default local Ollama context budget is `65k`
 - llama.cpp remains the advanced local runtime path
 - Tailscale Serve is the primary and only remote path exposed in the main UI right now
-- Cloudflare named tunnel support remains available in the backend, but is intentionally hidden from the current streamlined operator flow
 - Tailscale may run through the system daemon or a DroidAgent-managed userspace daemon on macOS when the system daemon is unavailable
 - Signal stays optional and secondary to the web shell
 - Smart Context Management is on by default
+- the workspace is seeded with `AGENTS.md`, `TOOLS.md`, `MEMORY.md`, `HEARTBEAT.md`, a `memory/` folder, and a `skills/` folder
 
 ## Docs
 

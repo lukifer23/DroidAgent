@@ -5,11 +5,6 @@
 - `Tailscale Serve`
   - private-first default
   - best fit when the phone can join the same tailnet
-- `Cloudflare named tunnel`
-  - backend-capable public path for v1
-  - requires a stable hostname and tunnel token
-  - intentionally hidden from the current streamlined main UI while the operator flow stays Tailscale-first
-  - DroidAgent still stays loopback-only on the Mac; `cloudflared` proxies to `http://127.0.0.1:4318`
 
 ## Unsupported paths in v1
 
@@ -34,37 +29,20 @@ Notes:
 - The userspace fallback stores its state under `~/.droidagent/tailscale` and writes logs to `~/.droidagent/logs/tailscaled.log`.
 - If the userspace daemon starts but is not authenticated yet, run the Tailscale login flow before expecting a canonical URL.
 
-## Cloudflare flow
-
-Cloudflare remains documented here for the backend capability, but the current primary operator flow and main UI are Tailscale-first.
-
-1. Create a named Cloudflare Tunnel and a stable public hostname in your Cloudflare account.
-2. Copy the tunnel token for that named tunnel.
-3. Use the backend/API path or a future advanced UI surface to provide the public hostname and tunnel token.
-4. Enable the Cloudflare tunnel.
-5. After the public URL is healthy, set Cloudflare as canonical.
-6. Open the canonical Cloudflare URL directly when your passkey provider already syncs to the phone, or generate a one-time bootstrap link only when a new device-specific passkey is required.
-
-Notes:
-
-- DroidAgent normalizes the hostname server-side.
-- After the first successful enable, you can reuse the stored Keychain token without pasting it again.
-- If Cloudflare is the active canonical origin for an enrolled owner, DroidAgent refuses to stop that tunnel until you switch canonical access elsewhere.
-
 ## Canonical origin rules
 
 - DroidAgent tracks one canonical daily-use origin at a time.
 - State-changing requests must originate from that canonical URL.
 - Localhost remains allowed only for explicit bootstrap and maintenance flows.
-- Switching the canonical source between Tailscale and Cloudflare is supported from the PWA.
 - Phone bootstrap links are only issued when the current canonical URL is reachable.
 - Switching the canonical source clears any previously issued bootstrap link.
 
-## Secrets and logs
+## Notes
 
-- Cloudflare tunnel tokens are stored in the macOS login Keychain.
-- Only non-secret Cloudflare metadata is stored in DroidAgent state.
-- Cloudflare tunnel logs are written to `~/.droidagent/logs/cloudflared.log`.
+- The streamlined v1 operator flow assumes Tailscale as the only guided remote path.
+- The phone should either use a synced passkey provider or be enrolled once through a one-time device link from the Mac.
+- DroidAgent keeps the app itself on loopback and only exposes the canonical remote URL through Tailscale Serve.
+- The workspace and OpenClaw bootstrap remain local on the Mac; the phone is only the control surface.
 
 Further reading:
 

@@ -13,6 +13,7 @@ const {
   enableTailscaleServe,
   setCanonicalSource,
   startGateway,
+  prepareWorkspaceContext,
   configureRuntimeModel,
 } = vi.hoisted(() => ({
   getRuntimeSettings: vi.fn(),
@@ -27,6 +28,7 @@ const {
   enableTailscaleServe: vi.fn(),
   setCanonicalSource: vi.fn(),
   startGateway: vi.fn(),
+  prepareWorkspaceContext: vi.fn(),
   configureRuntimeModel: vi.fn(),
 }));
 
@@ -59,6 +61,7 @@ vi.mock("./access-service.js", () => ({
 vi.mock("./openclaw-service.js", () => ({
   openclawService: {
     startGateway,
+    prepareWorkspaceContext,
   },
 }));
 
@@ -233,6 +236,7 @@ describe("QuickstartService", () => {
         runtime.id === "openclaw" ? { ...runtime, state: "running" } : runtime,
       );
     });
+    prepareWorkspaceContext.mockResolvedValue(undefined);
     configureRuntimeModel.mockResolvedValue(undefined);
   });
 

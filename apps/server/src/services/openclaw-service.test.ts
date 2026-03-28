@@ -233,6 +233,22 @@ describe("OpenClaw context management policy", () => {
             primary: "ollama/qwen3.5:4b",
           },
           thinkingDefault: "off",
+          memorySearch: {
+            cache: {
+              enabled: true,
+              maxEntries: 50000,
+            },
+            experimental: {
+              sessionMemory: true,
+            },
+            sources: ["memory", "sessions"],
+            sync: {
+              sessions: {
+                deltaBytes: 100000,
+                deltaMessages: 50,
+              },
+            },
+          },
           compaction: {
             mode: "safeguard",
             timeoutSeconds: 900,
@@ -278,13 +294,13 @@ describe("OpenClaw context management policy", () => {
           entries: {
             "bootstrap-extra-files": {
               paths: [
-                "AGENTS.md",
-                "TOOLS.md",
                 "SOUL.md",
                 "IDENTITY.md",
                 "USER.md",
                 "MEMORY.md",
+                "HEARTBEAT.md",
                 "memory/**/*.md",
+                "skills/**/*.md",
               ],
             },
           },
@@ -331,6 +347,22 @@ describe("OpenClaw context management policy", () => {
       agents: {
         defaults: {
           workspace: paths.workspaceRoot,
+          memorySearch: {
+            sync: {
+              sessions: {
+                deltaMessages: 50,
+                deltaBytes: 100000,
+              },
+            },
+            sources: ["memory", "sessions"],
+            experimental: {
+              sessionMemory: true,
+            },
+            cache: {
+              maxEntries: 50000,
+              enabled: true,
+            },
+          },
           compaction: {
             mode: "safeguard",
             reserveTokensFloor: 16384,
@@ -396,13 +428,13 @@ describe("OpenClaw context management policy", () => {
           entries: {
             "bootstrap-extra-files": {
               paths: [
-                "AGENTS.md",
-                "TOOLS.md",
                 "SOUL.md",
                 "IDENTITY.md",
                 "USER.md",
                 "MEMORY.md",
+                "HEARTBEAT.md",
                 "memory/**/*.md",
+                "skills/**/*.md",
               ],
             },
           },
@@ -579,5 +611,35 @@ describe("OpenClaw context management policy", () => {
       role: "tool",
       text: "HEARTBEAT_OK",
     });
+  });
+
+  it("reports workspace memory readiness with session memory enabled", async () => {
+    runtimeSettings.activeProviderId = "ollama-default";
+    vi.spyOn(
+      openclawService as never,
+      "readCurrentConfig" as never,
+    ).mockReturnValue({
+      agents: {
+        defaults: {
+          memorySearch: {
+            cache: {
+              enabled: true,
+            },
+            experimental: {
+              sessionMemory: true,
+            },
+          },
+        },
+      },
+    });
+
+    const status = await openclawService.memoryStatus();
+
+    expect(status.contextWindow).toBe(65536);
+    expect(status.memorySearchEnabled).toBe(true);
+    expect(status.sessionMemoryEnabled).toBe(true);
+    expect(status.bootstrapFiles.some((file) => file.path === "MEMORY.md")).toBe(
+      true,
+    );
   });
 });

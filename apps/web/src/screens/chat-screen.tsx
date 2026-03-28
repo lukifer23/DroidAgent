@@ -7,6 +7,7 @@ import { useAuthQuery, useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { api, postJson } from "../lib/api";
 import { useStreamingRuns } from "../lib/chat-stream-store";
+import { formatTokenBudget } from "../lib/formatters";
 
 function roleLabel(role: ChatMessage["role"]): string {
   if (role === "tool") {
@@ -127,7 +128,7 @@ export function ChatScreen() {
           </div>
           <small>
             {activeSession?.lastMessagePreview ||
-              "Start a clean operator conversation from the web shell."}
+              `Start a clean operator conversation from the web shell. ${dashboard?.setup.selectedModel ?? "qwen3.5:4b"} • ${formatTokenBudget(dashboard?.memory.contextWindow)} • ${dashboard?.memory.ready ? "memory ready" : "memory pending"}`}
           </small>
         </article>
 

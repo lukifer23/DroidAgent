@@ -3,10 +3,12 @@
   --bg: #080a0d;
   --panel: rgba(17, 22, 28, 0.86);
   --panel-strong: rgba(21, 27, 34, 0.96);
+  --panel-soft: rgba(24, 30, 37, 0.88);
   --text: #f6f1e8;
   --muted: #a4aeb8;
   --accent: #f3c55c;
   --accent-strong: #ff7b59;
+  --good: #7fd7b5;
   --border: rgba(255, 255, 255, 0.09);
   --shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
   --shadow-soft: 0 14px 32px rgba(0, 0, 0, 0.26);
@@ -229,7 +231,19 @@ small {
 .topbar {
   align-items: center;
   grid-template-columns: 1fr auto;
-  margin-bottom: 0.2rem;
+  margin-bottom: 0.35rem;
+  padding: 0.35rem 0.1rem 0.15rem;
+}
+
+.topbar-copy {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.topbar-meta {
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
 }
 
 .system-rail,
@@ -374,6 +388,11 @@ small {
     box-shadow var(--motion-base) var(--motion-ease);
 }
 
+.panel-card:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 24px 56px rgba(0, 0, 0, 0.34);
+}
+
 .active-card {
   border-color: rgba(242, 193, 78, 0.35);
   background: linear-gradient(
@@ -489,6 +508,12 @@ small {
   border-color: rgba(242, 193, 78, 0.3);
   background: rgba(242, 193, 78, 0.12);
   color: var(--text);
+}
+
+.status-chip.good {
+  border-color: rgba(127, 215, 181, 0.3);
+  background: rgba(127, 215, 181, 0.12);
+  color: var(--good);
 }
 
 .setup-status-grid {
@@ -876,6 +901,19 @@ small {
   color: var(--text);
 }
 
+.files-context-card {
+  display: grid;
+  gap: 0.85rem;
+  background:
+    linear-gradient(180deg, rgba(127, 215, 181, 0.08), transparent 60%),
+    var(--panel-soft);
+}
+
+.files-context-card > div:first-child {
+  display: grid;
+  gap: 0.28rem;
+}
+
 .editor-panel {
   display: grid;
   gap: 0.8rem;
@@ -946,6 +984,7 @@ small {
   color: var(--text);
   background: rgba(243, 197, 92, 0.14);
   transform: translateY(-1px);
+  box-shadow: inset 0 0 0 1px rgba(243, 197, 92, 0.16);
 }
 
 label {
@@ -1026,6 +1065,7 @@ label {
 
 .ghost-button {
   padding: 0.72rem 0.95rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 button:hover:not(:disabled),
@@ -1034,6 +1074,13 @@ button:hover:not(:disabled),
 .file-row:hover,
 .selectable:hover {
   transform: translateY(-1px);
+}
+
+button:active:not(:disabled),
+.nav-link:active,
+.session-pill:active,
+.file-row:active {
+  transform: translateY(0);
 }
 
 @keyframes panel-enter {
@@ -1087,6 +1134,10 @@ button:hover:not(:disabled),
 
   .topbar {
     grid-template-columns: 1fr;
+  }
+
+  .topbar-meta {
+    max-width: 100%;
   }
 
   .thread-header-row {
@@ -1174,6 +1225,10 @@ button:hover:not(:disabled),
 
   .panel-card {
     padding: 1rem;
+  }
+
+  .topbar-meta {
+    font-size: 0.8rem;
   }
 
   .message-card {

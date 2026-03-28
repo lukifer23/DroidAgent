@@ -27,6 +27,11 @@ function normalizePasskeyError(
   error: unknown,
   action: "registration" | "login",
 ): string {
+  const remoteRequest =
+    typeof window !== "undefined" &&
+    !["localhost", "127.0.0.1", "::1", "[::1]"].includes(
+      window.location.hostname,
+    );
   const name =
     typeof error === "object" && error && "name" in error
       ? String(error.name)
@@ -47,7 +52,9 @@ function normalizePasskeyError(
   ) {
     return action === "registration"
       ? "Passkey enrollment was canceled or blocked. If no browser prompt appeared, try Safari or Chrome on the Mac and confirm Touch ID or your passkey prompt is available."
-      : "Passkey sign-in was canceled or blocked. If no browser prompt appeared, try Safari or Chrome on the Mac and confirm your passkey prompt is available.";
+      : remoteRequest
+        ? "Passkey sign-in was canceled or blocked. If this phone does not already have its own owner passkey, return to the Mac and open a one-time device enrollment link first."
+        : "Passkey sign-in was canceled or blocked. If no browser prompt appeared, try Safari or Chrome on the Mac and confirm your passkey prompt is available.";
   }
 
   if (
@@ -201,7 +208,7 @@ export function AuthScreen() {
       : "Set up owner access.";
   const authDescription = bootstrapEnrollment
     ? authQuery.data?.hasUser
-      ? "This link enrolls a new owner passkey on this phone. After that, daily sign-in can happen directly here."
+      ? "This link adds a new owner passkey on this device. Save it here once, then daily sign-in can happen directly on this phone."
       : "Finish the owner passkey setup on this device so the remote phone path can work on its own."
     : authQuery.data?.hasUser
       ? "Use the passkey already enrolled for this DroidAgent instance."
@@ -237,9 +244,9 @@ export function AuthScreen() {
             ) : null}
             {bootstrapToken ? (
               <small>
-                Phone enrollment link detected. This flow adds a passkey on this
-                device instead of asking the Mac-only passkey to already exist
-                here.
+                Phone enrollment link detected. This flow should save a passkey
+                on this device instead of asking the Mac-only passkey to exist
+                here already.
               </small>
             ) : authQuery.data?.hasUser && access.canonicalOrigin ? (
               <small>

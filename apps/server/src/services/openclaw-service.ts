@@ -11,6 +11,7 @@ import {
   ChannelStatusSchema,
   ChatMessageSchema,
   ContextManagementStatusSchema,
+  MemoryStatusSchema,
   RuntimeStatusSchema,
   SignalHealthCheckSchema,
   SignalPendingPairingSchema,
@@ -21,6 +22,7 @@ import {
   type ChannelStatus,
   type ChatMessage,
   type ContextManagementStatus,
+  type MemoryStatus,
   type SessionSummary,
 } from "@droidagent/shared";
 
@@ -75,6 +77,17 @@ const SOUL_TEMPLATE = `# Tone
 
 Be calm, precise, concise, and operationally useful. Prefer clarity over flourish.
 `;
+const MEMORY_README_TEMPLATE = `# Workspace Memory Notes
+
+- Use this folder for dated durable notes and session summaries.
+- Prefer one file per day: \`YYYY-MM-DD.md\`.
+- Keep secrets out of memory files.
+`;
+const SKILLS_README_TEMPLATE = `# Workspace Skills
+
+- Put reusable operator skills and repo-specific runbooks here.
+- Keep files short, concrete, and safe for automatic bootstrap context.
+`;
 const MEMORY_TEMPLATE = `# Durable Memory
 
 Use this file for stable facts DroidAgent and OpenClaw should retain across sessions.
@@ -106,14 +119,14 @@ If nothing in this workspace needs periodic attention right now, reply HEARTBEAT
 
 When this file does contain tasks, follow them exactly and keep the heartbeat run terse.
 `;
-const MEMORY_BOOTSTRAP_PATTERNS = [
-  "AGENTS.md",
-  "TOOLS.md",
+const WORKSPACE_BOOTSTRAP_EXTRA_FILES = [
   "SOUL.md",
   "IDENTITY.md",
   "USER.md",
   "MEMORY.md",
+  "HEARTBEAT.md",
   "memory/**/*.md",
+  "skills/**/*.md",
 ];
 const WORKSPACE_BOOTSTRAP_FILES = [
   ["AGENTS.md", AGENTS_TEMPLATE],
@@ -123,6 +136,8 @@ const WORKSPACE_BOOTSTRAP_FILES = [
   ["SOUL.md", SOUL_TEMPLATE],
   ["MEMORY.md", MEMORY_TEMPLATE],
   ["HEARTBEAT.md", HEARTBEAT_TEMPLATE],
+  ["memory/README.md", MEMORY_README_TEMPLATE],
+  ["skills/README.md", SKILLS_README_TEMPLATE],
 ] as const;
 
 function stringifyConfigValue(value: unknown): string {
@@ -535,6 +550,14 @@ function buildContextManagementStatus(params: {
   });
 }
 
+function todayMemoryNoteName(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function todayMemoryNoteTemplate(date: string): string {
+  return `# ${date}\n\n- Durable notes for this day.\n`;
+}
+
 export class OpenClawService {
   private gatewayProcess: ChildProcess | null = null;
   private gatewayToken: string | null = null;
@@ -752,6 +775,7 @@ export class OpenClawService {
 
     for (const [relativePath, contents] of WORKSPACE_BOOTSTRAP_FILES) {
       const targetPath = path.join(workspaceRoot, relativePath);
+      await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
       try {
         await fs.promises.access(targetPath, fs.constants.F_OK);
       } catch {
@@ -783,6 +807,25 @@ export class OpenClawService {
           maxTokens: contextWindow,
         },
       ],
+    };
+  }
+
+  private buildMemorySearchConfig() {
+    return {
+      cache: {
+        enabled: true,
+        maxEntries: 50000,
+      },
+      experimental: {
+        sessionMemory: true,
+      },
+      sources: ["memory", "sessions"],
+      sync: {
+        sessions: {
+          deltaBytes: 100000,
+          deltaMessages: 50,
+        },
+      },
     };
   }
 
@@ -832,6 +875,70 @@ export class OpenClawService {
       enabled: runtimeSettings.smartContextManagementEnabled,
       providerId,
       modelId,
+      contextWindow,
+    });
+  }
+
+  private async currentMemoryStatus(): Promise<MemoryStatus> {
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    const workspaceRoot = this.resolveWorkspaceRoot(runtimeSettings);
+    const currentConfig = this.readCurrentConfig();
+    const bootstrapFiles = WORKSPACE_BOOTSTRAP_FILES.map(([relativePath]) => {
+      const targetPath = path.join(workspaceRoot, relativePath);
+      return {
+        path: relativePath,
+        exists: fs.existsSync(targetPath),
+      };
+    });
+    const memoryDirectory = path.join(workspaceRoot, "memory");
+    const skillsDirectory = path.join(workspaceRoot, "skills");
+    const memoryDirectoryReady = fs.existsSync(memoryDirectory);
+    const skillsDirectoryReady = fs.existsSync(skillsDirectory);
+    const bootstrapFilesReady = bootstrapFiles.filter(
+      (file) => file.exists,
+    ).length;
+    const memorySearchConfig = getConfigPathValue(
+      currentConfig,
+      "agents.defaults.memorySearch",
+    ) as Record<string, unknown> | undefined;
+    const cacheConfig =
+      memorySearchConfig &&
+      typeof memorySearchConfig === "object" &&
+      !Array.isArray(memorySearchConfig)
+        ? (memorySearchConfig.cache as Record<string, unknown> | undefined)
+        : undefined;
+    const experimentalConfig =
+      memorySearchConfig &&
+      typeof memorySearchConfig === "object" &&
+      !Array.isArray(memorySearchConfig)
+        ? (memorySearchConfig.experimental as Record<string, unknown> | undefined)
+        : undefined;
+    const contextWindow = resolveContextWindow({
+      providerId: runtimeSettings.activeProviderId,
+      runtimeSettings,
+    });
+
+    return MemoryStatusSchema.parse({
+      configuredWorkspaceRoot: runtimeSettings.workspaceRoot ?? null,
+      effectiveWorkspaceRoot: workspaceRoot,
+      ready:
+        memoryDirectoryReady &&
+        skillsDirectoryReady &&
+        bootstrapFilesReady === bootstrapFiles.length,
+      memoryDirectory,
+      memoryDirectoryReady,
+      skillsDirectory,
+      skillsDirectoryReady,
+      memoryFilePath: path.join(workspaceRoot, "MEMORY.md"),
+      todayNotePath: path.join(
+        memoryDirectory,
+        `${todayMemoryNoteName()}.md`,
+      ),
+      bootstrapFiles,
+      bootstrapFilesReady,
+      bootstrapFilesTotal: bootstrapFiles.length,
+      memorySearchEnabled: cacheConfig?.enabled === true,
+      sessionMemoryEnabled: experimentalConfig?.sessionMemory === true,
       contextWindow,
     });
   }
@@ -1161,12 +1268,13 @@ export class OpenClawService {
         "models.providers.ollama",
         this.buildOllamaProviderConfig(runtimeSettings),
       ],
+      ["agents.defaults.memorySearch", this.buildMemorySearchConfig()],
       ["tools.exec.host", "gateway"],
       ["tools.exec.security", "allowlist"],
       ["tools.exec.ask", "on-miss"],
       [
         "hooks.internal.entries.bootstrap-extra-files.paths",
-        MEMORY_BOOTSTRAP_PATTERNS,
+        WORKSPACE_BOOTSTRAP_EXTRA_FILES,
       ],
       ["channels.signal.dmPolicy", "pairing"],
       ["channels.signal.groupPolicy", "disabled"],
@@ -1187,6 +1295,31 @@ export class OpenClawService {
     );
 
     await this.applyContextManagementPolicy({}, currentConfig);
+  }
+
+  async prepareWorkspaceContext(): Promise<MemoryStatus> {
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    const workspaceRoot = this.resolveWorkspaceRoot(runtimeSettings);
+    await this.ensureWorkspaceScaffold(workspaceRoot);
+    return await this.currentMemoryStatus();
+  }
+
+  async memoryStatus(): Promise<MemoryStatus> {
+    return await this.currentMemoryStatus();
+  }
+
+  async ensureTodayMemoryNote(): Promise<string> {
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    const workspaceRoot = this.resolveWorkspaceRoot(runtimeSettings);
+    await this.ensureWorkspaceScaffold(workspaceRoot);
+    const date = todayMemoryNoteName();
+    const notePath = path.join(workspaceRoot, "memory", `${date}.md`);
+    try {
+      await fs.promises.access(notePath, fs.constants.F_OK);
+    } catch {
+      await fs.promises.writeFile(notePath, todayMemoryNoteTemplate(date), "utf8");
+    }
+    return notePath;
   }
 
   async status() {

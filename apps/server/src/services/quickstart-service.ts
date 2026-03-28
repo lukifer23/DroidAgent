@@ -76,6 +76,8 @@ export class QuickstartService {
       actions.push(`Workspace set to ${workspaceRoot}.`);
     }
 
+    await openclawService.prepareWorkspaceContext();
+
     let runtimes = await runtimeService.getRuntimeStatuses();
     let ollama = runtimes.find((runtime) => runtime.id === "ollama");
     let openclaw = runtimes.find((runtime) => runtime.id === "openclaw");
@@ -184,24 +186,6 @@ export class QuickstartService {
       } else {
         phoneUrl =
           access.canonicalOrigin?.origin ?? access.tailscaleStatus.canonicalUrl;
-      }
-    } else if (
-      access.cloudflareStatus.running &&
-      access.cloudflareStatus.canonicalUrl
-    ) {
-      const cloudflareReady =
-        access.canonicalOrigin?.source === "cloudflareTunnel" &&
-        access.serveStatus.enabled &&
-        access.serveStatus.source === "cloudflare";
-      if (!cloudflareReady) {
-        const canonicalOrigin =
-          await accessService.setCanonicalSource("cloudflare");
-        phoneUrl = canonicalOrigin.origin;
-        actions.push("Selected the Cloudflare phone URL.");
-      } else {
-        phoneUrl =
-          access.canonicalOrigin?.origin ??
-          access.cloudflareStatus.canonicalUrl;
       }
     } else {
       remotePendingReason =

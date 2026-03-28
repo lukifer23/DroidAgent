@@ -74,6 +74,13 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
     };
   }
 
+  if (event.type === "memory.updated") {
+    return {
+      ...current,
+      memory: event.payload
+    };
+  }
+
   if (event.type === "sessions.updated") {
     return {
       ...current,
@@ -263,6 +270,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
           payload.type === "providers.updated" ||
           payload.type === "channel.updated" ||
           payload.type === "launchAgent.updated" ||
+          payload.type === "memory.updated" ||
           payload.type === "context.updated" ||
           payload.type === "sessions.updated" ||
           payload.type === "job.updated" ||
@@ -277,6 +285,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
             payload.type === "providers.updated" ||
             payload.type === "channel.updated" ||
             payload.type === "launchAgent.updated" ||
+            payload.type === "memory.updated" ||
             payload.type === "context.updated"
           ) {
             void queryClient.invalidateQueries({ queryKey: ["startupDiagnostics"] });

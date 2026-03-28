@@ -44,6 +44,22 @@ export function ModelsScreen() {
           thinking off • smart context trimming{" "}
           {dashboard?.contextManagement.enabled ? "on" : "off"}
         </small>
+        <small>
+          Session memory {dashboard?.memory.sessionMemoryEnabled ? "on" : "off"}{" "}
+          • Workspace notes at {dashboard?.memory.memoryFilePath ?? "MEMORY.md"}
+        </small>
+      </article>
+
+      <article className="panel-card compact">
+        <strong>Workspace Context</strong>
+        <span>
+          {dashboard?.memory.ready ? "Memory scaffold ready" : "Memory scaffold pending"}
+        </span>
+        <small>
+          {dashboard?.memory.bootstrapFilesReady ?? 0}/
+          {dashboard?.memory.bootstrapFilesTotal ?? 0} bootstrap files • daily
+          note {dashboard?.memory.todayNotePath ?? "unavailable"}
+        </small>
       </article>
 
       {(dashboard?.runtimes ?? []).map((runtime: RuntimeStatus) => (

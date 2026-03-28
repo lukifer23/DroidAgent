@@ -423,6 +423,37 @@ app.get("/api/diagnostics/performance", async (c) => {
   return c.json(performanceService.serverSnapshot());
 });
 
+app.get("/api/memory/status", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await openclawService.memoryStatus());
+});
+
+app.post("/api/memory/prepare", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const status = await openclawService.prepareWorkspaceContext();
+  await websocketHub.publishMemoryUpdated();
+  return c.json(status);
+});
+
+app.post("/api/memory/today-note", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const [notePath, status] = await Promise.all([
+    openclawService.ensureTodayMemoryNote(),
+    openclawService.memoryStatus(),
+  ]);
+  await websocketHub.publishMemoryUpdated();
+  return c.json({
+    path: path.relative(status.effectiveWorkspaceRoot, notePath) || ".",
+  });
+});
+
 app.get("/api/setup", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -448,6 +479,7 @@ app.post("/api/setup/quickstart", async (c) => {
     websocketHub.publishAccessUpdated(),
     websocketHub.publishRuntimeUpdated(),
     websocketHub.publishProvidersUpdated(),
+    websocketHub.publishMemoryUpdated(),
     websocketHub.publishContextUpdated(),
   ]);
   return c.json(result);
@@ -464,10 +496,12 @@ app.post("/api/setup/workspace", async (c) => {
     return c.json({ error: "Workspace root does not exist." }, 400);
   }
   await appStateService.updateRuntimeSettings({ workspaceRoot });
+  await openclawService.prepareWorkspaceContext();
   const state = await appStateService.markSetupStepCompleted("workspace", {
     workspaceRoot,
   });
   await websocketHub.publishSetupUpdated();
+  await websocketHub.publishMemoryUpdated();
   return c.json(state);
 });
 
@@ -509,6 +543,7 @@ app.post("/api/setup/model", async (c) => {
   await websocketHub.publishSetupUpdated();
   await websocketHub.publishRuntimeUpdated();
   await websocketHub.publishProvidersUpdated();
+  await websocketHub.publishMemoryUpdated();
   await websocketHub.publishContextUpdated();
   return c.json(state);
 });
@@ -607,6 +642,7 @@ app.post("/api/runtime/:runtimeId/models", async (c) => {
   );
   await websocketHub.publishRuntimeUpdated();
   await websocketHub.publishProvidersUpdated();
+  await websocketHub.publishMemoryUpdated();
   await websocketHub.publishContextUpdated();
   return c.json({ ok: true });
 });
@@ -618,6 +654,7 @@ app.post("/api/runtime/context-management", async (c) => {
   if (unauthorized) return unauthorized;
   const body = (await c.req.json()) as { enabled: boolean };
   const status = await openclawService.setSmartContextManagement(body.enabled);
+  await websocketHub.publishMemoryUpdated();
   await websocketHub.publishContextUpdated();
   return c.json(status);
 });
@@ -708,6 +745,7 @@ app.delete("/api/providers/secrets/:providerId", async (c) => {
   runtimeService.invalidateCaches();
   await websocketHub.publishRuntimeUpdated();
   await websocketHub.publishProvidersUpdated();
+  await websocketHub.publishMemoryUpdated();
   await websocketHub.publishContextUpdated();
   return c.json(await keychainService.listProviderSummaries());
 });
@@ -751,6 +789,7 @@ app.post("/api/providers/:providerId/select", async (c) => {
   runtimeService.invalidateCaches();
   await websocketHub.publishSetupUpdated();
   await websocketHub.publishProvidersUpdated();
+  await websocketHub.publishMemoryUpdated();
   await websocketHub.publishContextUpdated();
   return c.json(await runtimeService.listProviderProfiles());
 });

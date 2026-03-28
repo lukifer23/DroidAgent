@@ -441,6 +441,33 @@ export const QuickstartResultSchema = z.object({
 });
 export type QuickstartResult = z.infer<typeof QuickstartResultSchema>;
 
+export const WorkspaceBootstrapFileStatusSchema = z.object({
+  path: z.string(),
+  exists: z.boolean(),
+});
+export type WorkspaceBootstrapFileStatus = z.infer<
+  typeof WorkspaceBootstrapFileStatusSchema
+>;
+
+export const MemoryStatusSchema = z.object({
+  configuredWorkspaceRoot: z.string().nullable(),
+  effectiveWorkspaceRoot: z.string(),
+  ready: z.boolean(),
+  memoryDirectory: z.string(),
+  memoryDirectoryReady: z.boolean(),
+  skillsDirectory: z.string(),
+  skillsDirectoryReady: z.boolean(),
+  memoryFilePath: z.string(),
+  todayNotePath: z.string(),
+  bootstrapFiles: z.array(WorkspaceBootstrapFileStatusSchema),
+  bootstrapFilesReady: z.number().int().nonnegative(),
+  bootstrapFilesTotal: z.number().int().nonnegative(),
+  memorySearchEnabled: z.boolean(),
+  sessionMemoryEnabled: z.boolean(),
+  contextWindow: z.number().int().positive(),
+});
+export type MemoryStatus = z.infer<typeof MemoryStatusSchema>;
+
 export const ContextManagementStatusSchema = z.object({
   enabled: z.boolean(),
   compactionMode: z.enum(["off", "default", "safeguard"]),
@@ -508,6 +535,7 @@ export const DashboardStateSchema = z.object({
   cloudProviders: z.array(CloudProviderSummarySchema),
   channels: z.array(ChannelStatusSchema),
   channelConfig: ChannelConfigSummarySchema,
+  memory: MemoryStatusSchema,
   contextManagement: ContextManagementStatusSchema,
   launchAgent: LaunchAgentStatusSchema,
   sessions: z.array(SessionSummarySchema),
@@ -658,6 +686,10 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("context.updated"),
     payload: ContextManagementStatusSchema,
+  }),
+  z.object({
+    type: z.literal("memory.updated"),
+    payload: MemoryStatusSchema,
   }),
   z.object({
     type: z.literal("error"),

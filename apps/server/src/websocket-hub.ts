@@ -150,6 +150,17 @@ export class WebsocketHub {
     );
   }
 
+  async publishMemoryUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    startupService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "memory.updated",
+        payload: await openclawService.memoryStatus()
+      })
+    );
+  }
+
   async publishPerformanceUpdated(): Promise<void> {
     this.broadcast(
       ServerEventSchema.parse({

@@ -65,6 +65,8 @@ Model generation time is recorded separately from DroidAgent overhead.
 
 OpenClaw is configured with `agents.defaults.thinkingDefault = "off"` by default in DroidAgent to reduce avoidable latency on models that expose a reasoning or thinking mode.
 
+The default local baseline also assumes `qwen3.5:4b` on Ollama with a `65k` context budget, smart context management enabled, and workspace memory search enabled.
+
 ## Baseline Procedure
 
 1. Run `pnpm build`.

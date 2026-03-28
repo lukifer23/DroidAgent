@@ -3,7 +3,6 @@ import {
   startRegistration,
   type PublicKeyCredentialCreationOptionsJSON as BrowserRegistrationOptions,
 } from "@simplewebauthn/browser";
-import { Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 
 import type {
@@ -20,6 +19,7 @@ import {
 } from "../app-data";
 import { useClientPerformanceSnapshot, useDroidAgentApp } from "../app-context";
 import { api, postJson } from "../lib/api";
+import { formatTokenBudget } from "../lib/formatters";
 
 function metricDescription(
   snapshot: PerformanceSnapshot | undefined,
@@ -63,6 +63,7 @@ export function SettingsScreen() {
   const tailscaleReady = Boolean(access?.tailscaleStatus.authenticated);
   const remoteReady = Boolean(access?.canonicalOrigin?.origin);
   const canGeneratePhoneLink = Boolean(access?.canonicalOrigin);
+  const memoryReady = Boolean(dashboard?.memory.ready);
 
   const overviewCards = [
     {
@@ -102,9 +103,9 @@ export function SettingsScreen() {
       key: "runtime",
       label: "Runtime",
       value: runtimeCount > 0 ? `${runtimeCount} live` : "Not running",
-      detail:
-        dashboard?.setup.selectedModel ??
-        "No default model is selected yet for the common local path.",
+      detail: dashboard?.setup.selectedModel
+        ? `${dashboard.setup.selectedModel} • ${formatTokenBudget(dashboard.memory.contextWindow)} context • ${memoryReady ? "memory ready" : "memory pending"}`
+        : "No default model is selected yet for the common local path.",
       progress: runtimeCount > 0 ? 100 : 26,
       tone: runtimeCount > 0 ? "good" : "warn",
     },
@@ -320,16 +321,65 @@ export function SettingsScreen() {
                     {},
                   );
                   setBootstrapLink(link);
-                }, "Device enrollment link generated.")
+                }, "Phone enrollment link generated.")
               }
             >
-              Generate Device Link
+              Add a Phone
             </button>
           </div>
         </article>
       </section>
 
       <section className="settings-grid">
+        <article className="panel-card">
+          <div className="panel-heading">
+            <h3>Workspace Memory</h3>
+            <p>
+              DroidAgent keeps a simple durable memory scaffold in the
+              workspace so the local agent path starts clean and stays useful.
+            </p>
+          </div>
+          <div className="status-list">
+            <article className={`health-row${memoryReady ? " ready" : ""}`}>
+              <div className="health-row-top">
+                <strong>Status</strong>
+                <span className={`status-chip${memoryReady ? " ready" : ""}`}>
+                  {memoryReady ? "Ready" : "Needs prep"}
+                </span>
+              </div>
+              <small>
+                {dashboard?.memory.effectiveWorkspaceRoot
+                  ? `${dashboard.memory.bootstrapFilesReady}/${dashboard.memory.bootstrapFilesTotal} bootstrap files are in place under ${dashboard.memory.effectiveWorkspaceRoot}.`
+                  : "No workspace root is configured yet."}
+              </small>
+            </article>
+            <article className="health-row ready">
+              <div className="health-row-top">
+                <strong>Daily note path</strong>
+                <span className="status-chip ready">Prepared</span>
+              </div>
+              <small>{dashboard?.memory.todayNotePath ?? "Not available yet."}</small>
+            </article>
+          </div>
+          <div className="button-row">
+            <button
+              className="secondary"
+              onClick={() =>
+                void runAction(async () => {
+                  await postJson("/api/memory/prepare", {});
+                }, "Workspace memory prepared.")
+              }
+            >
+              Prepare Memory
+            </button>
+          </div>
+          <small>
+            Session memory search:{" "}
+            {dashboard?.memory.sessionMemoryEnabled ? "on" : "off"} • Context:{" "}
+            {formatTokenBudget(dashboard?.memory.contextWindow)}
+          </small>
+        </article>
+
         <article className="panel-card">
           <div className="panel-heading">
             <h3>Passkeys</h3>
@@ -371,8 +421,9 @@ export function SettingsScreen() {
           <div className="panel-heading">
             <h3>App Shell</h3>
             <p>
-              Install the PWA when you want a cleaner full-screen phone shell,
-              then use Channels only if you actually need Signal.
+              Install the PWA when you want the cleaner full-screen phone shell.
+              The core operator path stays in Setup, Chat, Files, Jobs, Models,
+              and Settings.
             </p>
           </div>
           <div className="button-row">
@@ -384,13 +435,10 @@ export function SettingsScreen() {
             >
               Install App
             </button>
-            <Link className="button-link secondary" to="/channels">
-              Open Optional Channels
-            </Link>
           </div>
           <small>
-            The core operator flow is Setup, Chat, Files, Jobs, Models, and
-            Settings. Signal stays secondary.
+            Signal remains optional and secondary. The default experience is the
+            web shell plus the Tailscale phone URL.
           </small>
         </article>
       </section>
@@ -523,6 +571,8 @@ export function SettingsScreen() {
           {" • "}
           Memory flush:{" "}
           {dashboard?.contextManagement.memoryFlushEnabled ? "on" : "off"}
+          {" • "}
+          Session memory: {dashboard?.memory.sessionMemoryEnabled ? "on" : "off"}
         </small>
       </article>
 

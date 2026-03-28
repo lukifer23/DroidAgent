@@ -15,6 +15,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { useAccessQuery, useAuthQuery, useDashboardQuery } from "./app-data";
 import { useDroidAgentApp } from "./app-context";
+import { formatTokenBudget } from "./lib/formatters";
 import { isOperatorReady } from "./lib/operator-readiness";
 import { AuthScreen } from "./screens/auth-screen";
 import { postJson } from "./lib/api";
@@ -70,26 +71,30 @@ export function AppLayout() {
   const runtimeCount =
     dashboard?.runtimes.filter((runtime) => runtime.state === "running")
       .length ?? 0;
+  const memoryReady = Boolean(dashboard?.memory.ready);
   const pendingApprovals = dashboard?.approvals.length ?? 0;
+  const activeProvider = dashboard?.providers.find((provider) => provider.enabled);
   const setupCompletion = meterPercent(
     [
       dashboard?.setup.passkeyConfigured,
       dashboard?.setup.workspaceRoot,
+      memoryReady,
       dashboard?.setup.selectedRuntime,
       dashboard?.setup.selectedModel,
       dashboard?.setup.remoteAccessEnabled,
       dashboard?.canonicalUrl,
     ].filter(Boolean).length,
-    6,
+    7,
   );
   const hostCompletion = meterPercent(
     [
       dashboard?.setup.workspaceRoot,
+      memoryReady,
       runtimeCount > 0,
       dashboard?.launchAgent.running,
       dashboard?.setup.selectedModel,
     ].filter(Boolean).length,
-    4,
+    5,
   );
   const remoteReady = Boolean(access?.canonicalOrigin?.origin);
   const remoteCompletion = remoteReady
@@ -131,9 +136,9 @@ export function AppLayout() {
       icon: Bot,
       label: "Runtime",
       value: runtimeCount > 0 ? `${runtimeCount} live` : "Not running",
-      detail:
-        dashboard?.setup.selectedModel ??
-        "Select a local model to make the common path feel instant.",
+      detail: activeProvider?.model
+        ? `${activeProvider.model} • ${formatTokenBudget(activeProvider.contextWindow)} context • ${memoryReady ? "memory ready" : "memory pending"}`
+        : "Select a local model to make the common path feel instant.",
       progress: runtimeCount > 0 ? hostCompletion : 24,
       tone: runtimeCount > 0 ? "good" : "warn",
     },
@@ -160,9 +165,15 @@ export function AppLayout() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
+        <div className="topbar-copy">
           <div className="eyebrow">DroidAgent</div>
           <h1>Control Center</h1>
+          <small className="topbar-meta">
+            {remoteReady ? "Tailscale live" : "Local-first"} •{" "}
+            {activeProvider?.model ?? dashboard?.setup.selectedModel ?? "No model"}{" "}
+            • {formatTokenBudget(activeProvider?.contextWindow)} •{" "}
+            {memoryReady ? "memory ready" : "memory pending"}
+          </small>
         </div>
         <button
           className="ghost-button"

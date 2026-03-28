@@ -105,8 +105,59 @@ export function FilesScreen() {
     }
   }
 
+  function openFilePath(filePath: string) {
+    setFileOpenMetric(
+      clientPerformance.start("client.file.open", {
+        path: filePath,
+      }),
+    );
+    setSelectedFile(filePath);
+    setDirty(false);
+  }
+
   return (
     <section className="files-panel">
+      {dashboard?.memory ? (
+        <article className="panel-card compact files-context-card">
+          <div>
+            <strong>Workspace memory</strong>
+            <small>
+              {dashboard.memory.ready
+                ? "Durable memory files are ready in this workspace."
+                : "Prepare the workspace scaffold to seed durable memory and skills."}
+            </small>
+          </div>
+          <div className="button-row">
+            <button
+              className="secondary"
+              onClick={() => setDirectoryPath(".")}
+            >
+              Workspace Root
+            </button>
+            <button
+              className="secondary"
+              onClick={() => openFilePath("MEMORY.md")}
+            >
+              Open MEMORY.md
+            </button>
+            <button
+              className="secondary"
+              onClick={() =>
+                void runAction(async () => {
+                  const note = await postJson<{ path: string }>(
+                    "/api/memory/today-note",
+                    {},
+                  );
+                  openFilePath(note.path);
+                })
+              }
+            >
+              Open Today&apos;s Note
+            </button>
+          </div>
+        </article>
+      ) : null}
+
       <div className="toolbar">
         <input value={directoryPath} onChange={(event) => setDirectoryPath(event.target.value)} />
         <button onClick={() => void filesQuery.refetch()}>Open</button>
@@ -143,13 +194,7 @@ export function FilesScreen() {
                   setDirty(false);
                   return;
                 }
-                setFileOpenMetric(
-                  clientPerformance.start("client.file.open", {
-                    path: entry.path
-                  })
-                );
-                setSelectedFile(entry.path);
-                setDirty(false);
+                openFilePath(entry.path);
               }}
             >
               <strong>{entry.name}</strong>

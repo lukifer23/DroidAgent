@@ -10,6 +10,7 @@ export function isOperatorReady(
   return Boolean(
     dashboard.setup.passkeyConfigured &&
     dashboard.setup.workspaceRoot &&
+    dashboard.memory.ready &&
     dashboard.setup.selectedRuntime &&
     dashboard.setup.selectedModel &&
     dashboard.setup.remoteAccessEnabled &&

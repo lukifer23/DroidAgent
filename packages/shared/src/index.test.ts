@@ -92,6 +92,28 @@ describe("DashboardStateSchema", () => {
           healthChecks: [],
         },
       },
+      memory: {
+        configuredWorkspaceRoot: "/tmp/droidagent",
+        effectiveWorkspaceRoot: "/tmp/droidagent",
+        ready: true,
+        memoryDirectory: "/tmp/droidagent/memory",
+        memoryDirectoryReady: true,
+        skillsDirectory: "/tmp/droidagent/skills",
+        skillsDirectoryReady: true,
+        memoryFilePath: "/tmp/droidagent/MEMORY.md",
+        todayNotePath: "/tmp/droidagent/memory/2026-03-28.md",
+        bootstrapFiles: [
+          {
+            path: "AGENTS.md",
+            exists: true,
+          },
+        ],
+        bootstrapFilesReady: 1,
+        bootstrapFilesTotal: 1,
+        memorySearchEnabled: true,
+        sessionMemoryEnabled: true,
+        contextWindow: 65536,
+      },
       contextManagement: {
         enabled: true,
         compactionMode: "safeguard",
@@ -240,9 +262,30 @@ describe("DashboardStateSchema", () => {
         softThresholdTokens: 6000,
       },
     });
+    const memoryEvent = ServerEventSchema.parse({
+      type: "memory.updated",
+      payload: {
+        configuredWorkspaceRoot: "/tmp/droidagent",
+        effectiveWorkspaceRoot: "/tmp/droidagent",
+        ready: true,
+        memoryDirectory: "/tmp/droidagent/memory",
+        memoryDirectoryReady: true,
+        skillsDirectory: "/tmp/droidagent/skills",
+        skillsDirectoryReady: true,
+        memoryFilePath: "/tmp/droidagent/MEMORY.md",
+        todayNotePath: "/tmp/droidagent/memory/2026-03-28.md",
+        bootstrapFiles: [],
+        bootstrapFilesReady: 0,
+        bootstrapFilesTotal: 0,
+        memorySearchEnabled: true,
+        sessionMemoryEnabled: true,
+        contextWindow: 65536,
+      },
+    });
 
     expect(providerEvent.type).toBe("providers.updated");
     expect(contextEvent.type).toBe("context.updated");
+    expect(memoryEvent.type).toBe("memory.updated");
   });
 
   it("accepts performance snapshots and performance events", () => {
