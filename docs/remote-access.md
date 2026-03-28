@@ -6,8 +6,9 @@
   - private-first default
   - best fit when the phone can join the same tailnet
 - `Cloudflare named tunnel`
-  - supported public path for v1
+  - backend-capable public path for v1
   - requires a stable hostname and tunnel token
+  - intentionally hidden from the current streamlined main UI while the operator flow stays Tailscale-first
   - DroidAgent still stays loopback-only on the Mac; `cloudflared` proxies to `http://127.0.0.1:4318`
 
 ## Unsupported paths in v1
@@ -35,9 +36,11 @@ Notes:
 
 ## Cloudflare flow
 
+Cloudflare remains documented here for the backend capability, but the current primary operator flow and main UI are Tailscale-first.
+
 1. Create a named Cloudflare Tunnel and a stable public hostname in your Cloudflare account.
 2. Copy the tunnel token for that named tunnel.
-3. In Setup Advanced or Settings, enter the public hostname and tunnel token.
+3. Use the backend/API path or a future advanced UI surface to provide the public hostname and tunnel token.
 4. Enable the Cloudflare tunnel.
 5. After the public URL is healthy, set Cloudflare as canonical.
 6. Open the canonical Cloudflare URL directly when your passkey provider already syncs to the phone, or generate a one-time bootstrap link only when a new device-specific passkey is required.

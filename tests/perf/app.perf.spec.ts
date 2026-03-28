@@ -18,7 +18,7 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
 
   const loadStart = performance.now();
   await page.goto(new URL("/chat", state.baseUrl).toString());
-  await expect(page.getByRole("heading", { name: "Operator Console" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Control Center" })).toBeVisible();
   metrics.push({
     name: "initial_load_ms",
     durationMs: Number((performance.now() - loadStart).toFixed(2))

@@ -49,7 +49,8 @@ After the owner passkey is enrolled, the `Setup` route now drives the common pat
 - single owner, multiple passkeys
 - Ollama is the default local runtime path
 - llama.cpp remains the advanced local runtime path
-- supported remote paths are Tailscale Serve and a Cloudflare named tunnel only
+- Tailscale Serve is the primary and only remote path exposed in the main UI right now
+- Cloudflare named tunnel support remains available in the backend, but is intentionally hidden from the current streamlined operator flow
 - Tailscale may run through the system daemon or a DroidAgent-managed userspace daemon on macOS when the system daemon is unavailable
 - Signal stays optional and secondary to the web shell
 - Smart Context Management is on by default

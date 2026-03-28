@@ -22,7 +22,7 @@ test("loads the signed-in shell and bottom-nav routes", async ({ page }) => {
   await gotoSignedIn(page, "/chat");
 
   await expect(
-    page.getByRole("heading", { name: "Operator Console" }),
+    page.getByRole("heading", { name: "Control Center" }),
   ).toBeVisible();
   await page.getByRole("link", { name: "Files" }).click();
   await expect(
@@ -42,7 +42,7 @@ test("loads the simplified setup screen", async ({ page }) => {
   ).toBeVisible();
   await expect(
     page.getByRole("button", {
-      name: /Preparing DroidAgent|Prepare DroidAgent|Finish Setup|Refresh Setup/i,
+      name: /Preparing DroidAgent|Prepare This Mac|Finish Phone Access|Refresh Status/i,
     }),
   ).toBeVisible();
 });
@@ -125,7 +125,7 @@ test("reconnects after a temporary offline period", async ({ page }) => {
   });
   await expect(reconnectBanner).toHaveCount(0);
   await expect(
-    page.getByRole("heading", { name: "Operator Console" }),
+    page.getByRole("heading", { name: "Control Center" }),
   ).toBeVisible();
   const sendButton = page.getByRole("button", { name: "Send" });
   await page

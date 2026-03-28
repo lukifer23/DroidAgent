@@ -2,16 +2,18 @@ import { useEffect } from "react";
 import {
   Bot,
   FolderTree,
+  Gauge,
   Hammer,
   MessagesSquare,
-  Radio,
   Settings2,
+  ShieldCheck,
+  Smartphone,
   Sparkles,
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 
-import { useAuthQuery, useDashboardQuery } from "./app-data";
+import { useAccessQuery, useAuthQuery, useDashboardQuery } from "./app-data";
 import { useDroidAgentApp } from "./app-context";
 import { isOperatorReady } from "./lib/operator-readiness";
 import { AuthScreen } from "./screens/auth-screen";
@@ -23,9 +25,16 @@ const navItems = [
   { to: "/files", label: "Files", icon: FolderTree },
   { to: "/jobs", label: "Jobs", icon: Hammer },
   { to: "/models", label: "Models", icon: Bot },
-  { to: "/channels", label: "Channels", icon: Radio },
   { to: "/settings", label: "Settings", icon: Settings2 },
 ] as const;
+
+function meterPercent(completed: number, total: number): number {
+  if (total === 0) {
+    return 0;
+  }
+
+  return Math.round((completed / total) * 100);
+}
 
 export function AppLayout() {
   const location = useLocation();
@@ -39,7 +48,9 @@ export function AppLayout() {
     finishRouteTransition,
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
+  const accessQuery = useAccessQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const access = accessQuery.data;
   const dashboard = dashboardQuery.data;
   const operatorReady = isOperatorReady(dashboard);
   const isSetupRoute = location.pathname === "/setup";
@@ -56,29 +67,102 @@ export function AppLayout() {
     return <AuthScreen />;
   }
 
-  const setup = dashboard?.setup;
   const runtimeCount =
     dashboard?.runtimes.filter((runtime) => runtime.state === "running")
       .length ?? 0;
-  const summaryCards = [
-    { label: "Status", value: operatorReady ? "Ready" : "Needs Setup" },
-    { label: "Live Runtimes", value: String(runtimeCount) },
+  const pendingApprovals = dashboard?.approvals.length ?? 0;
+  const setupCompletion = meterPercent(
+    [
+      dashboard?.setup.passkeyConfigured,
+      dashboard?.setup.workspaceRoot,
+      dashboard?.setup.selectedRuntime,
+      dashboard?.setup.selectedModel,
+      dashboard?.setup.remoteAccessEnabled,
+      dashboard?.canonicalUrl,
+    ].filter(Boolean).length,
+    6,
+  );
+  const hostCompletion = meterPercent(
+    [
+      dashboard?.setup.workspaceRoot,
+      runtimeCount > 0,
+      dashboard?.launchAgent.running,
+      dashboard?.setup.selectedModel,
+    ].filter(Boolean).length,
+    4,
+  );
+  const remoteReady = Boolean(access?.canonicalOrigin?.origin);
+  const remoteCompletion = remoteReady
+    ? 100
+    : access?.tailscaleStatus.authenticated
+      ? 68
+      : 20;
+  const systemCards = [
     {
-      label: "LaunchAgent",
-      value: dashboard?.launchAgent.running
-        ? "Running"
-        : dashboard?.launchAgent.installed
-          ? "Loaded"
-          : "Off",
+      key: "system",
+      icon: ShieldCheck,
+      label: "System",
+      value: operatorReady ? "Ready" : "Needs attention",
+      detail: operatorReady
+        ? "Core setup is in place and DroidAgent is ready to operate."
+        : `${setupCompletion}% of the guided setup path is complete.`,
+      progress: operatorReady ? 100 : setupCompletion,
+      tone: operatorReady ? "good" : "warn",
     },
-  ];
+    {
+      key: "remote",
+      icon: Smartphone,
+      label: "Phone access",
+      value: remoteReady ? "Tailscale live" : "Local only",
+      detail: remoteReady
+        ? (access?.canonicalOrigin?.origin ?? dashboard?.canonicalUrl)
+        : access?.tailscaleStatus.authenticated
+          ? "Enable the Tailscale URL from Setup or Settings to finish phone access."
+          : "Sign in to Tailscale on this Mac to publish a private phone URL.",
+      progress: remoteCompletion,
+      tone: remoteReady
+        ? "good"
+        : access?.tailscaleStatus.authenticated
+          ? "warn"
+          : "muted",
+    },
+    {
+      key: "runtime",
+      icon: Bot,
+      label: "Runtime",
+      value: runtimeCount > 0 ? `${runtimeCount} live` : "Not running",
+      detail:
+        dashboard?.setup.selectedModel ??
+        "Select a local model to make the common path feel instant.",
+      progress: runtimeCount > 0 ? hostCompletion : 24,
+      tone: runtimeCount > 0 ? "good" : "warn",
+    },
+    {
+      key: "activity",
+      icon: Gauge,
+      label: pendingApprovals > 0 ? "Approvals" : "Sessions",
+      value:
+        pendingApprovals > 0
+          ? `${pendingApprovals} waiting`
+          : `${dashboard?.sessions.length ?? 0} active`,
+      detail:
+        pendingApprovals > 0
+          ? "The approval queue needs attention before agent exec can continue."
+          : "Chat, files, jobs, and models stay one tap away in the bottom bar.",
+      progress:
+        pendingApprovals > 0
+          ? 56
+          : Math.min(100, 36 + (dashboard?.sessions.length ?? 0) * 18),
+      tone: pendingApprovals > 0 ? "warn" : "good",
+    },
+  ] as const;
 
   return (
     <main className="app-shell">
       <header className="topbar">
         <div>
           <div className="eyebrow">DroidAgent</div>
-          <h1>Operator Console</h1>
+          <h1>Control Center</h1>
         </div>
         <button
           className="ghost-button"
@@ -108,21 +192,41 @@ export function AppLayout() {
         <section className="status-banner error">{errorMessage}</section>
       ) : null}
 
-      {!isSetupRoute ? (
-        <section className="summary-grid">
-          {summaryCards.map((card) => (
-            <article key={card.label} className="summary-card">
-              <span>{card.label}</span>
+      <section className="system-rail">
+        {systemCards.map((card) => {
+          const Icon = card.icon;
+          return (
+            <article
+              key={card.key}
+              className={`panel-card compact system-rail-card ${card.tone}`}
+            >
+              <div className="system-rail-head">
+                <div className={`system-rail-icon ${card.tone}`}>
+                  <Icon size={18} />
+                </div>
+                <span>{card.label}</span>
+              </div>
               <strong>{card.value}</strong>
+              <div className="health-meter">
+                <span style={{ width: `${card.progress}%` }} />
+              </div>
+              <small>{card.detail}</small>
             </article>
-          ))}
-        </section>
-      ) : null}
+          );
+        })}
+      </section>
 
       {!operatorReady && !isSetupRoute ? (
         <section className="status-banner offline">
           DroidAgent still needs a quick setup pass before phone control feels
           normal. <Link to="/setup">Finish setup</Link>
+        </section>
+      ) : null}
+
+      {location.pathname === "/channels" ? (
+        <section className="status-banner offline">
+          Signal is available, but the primary path stays in the web shell. Use
+          Channels only when you need the optional Signal integration.
         </section>
       ) : null}
 
