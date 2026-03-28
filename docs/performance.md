@@ -37,6 +37,8 @@ Server-side:
 - `file.write`
 - `job.start`
 - `job.firstOutput`
+- `memory.prepare`
+- `memory.todayNote`
 
 Client-side:
 
@@ -50,6 +52,7 @@ Client-side:
 - `client.ws.reconnect_to_resync`
 - `client.file.open`
 - `client.file.save`
+- `client.memory.prepare`
 - `client.job.start_to_first_output`
 
 ## Advisory Budgets

@@ -68,7 +68,7 @@ export function ModelsScreen() {
             ? dashboard.memory.embeddingProbeError
             : dashboard?.memory.dirty
               ? "The semantic index is still warming or needs a reindex."
-              : "Local embeddings stay on-device and back semantic recall."}
+              : "Local embeddings stay on-device and back semantic recall for memory, preferences, skills, and session history."}
         </small>
       </article>
 

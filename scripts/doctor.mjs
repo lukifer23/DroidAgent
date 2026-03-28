@@ -61,11 +61,13 @@ async function main() {
   add("Homebrew", commandVersion("brew", ["--version"]) ? "ok" : "warn", commandVersion("brew", ["--version"])?.split("\n")[0] ?? "brew not found");
 
   const bundledOpenclawPath = path.join(repoRoot, "apps", "server", "node_modules", ".bin", "openclaw");
-  const openclawVersion = commandVersion("openclaw") ?? commandVersion(bundledOpenclawPath);
+  const openclawOnPath = commandVersion("openclaw");
+  const openclawVersion = openclawOnPath ?? commandVersion(bundledOpenclawPath);
+  const openclawBinary = openclawOnPath ? "openclaw" : bundledOpenclawPath;
   add(
     "openclaw",
     openclawVersion ? "ok" : "warn",
-    openclawVersion ? `${openclawVersion} (${commandVersion("openclaw") ? "PATH" : "bundled"})` : "openclaw not found"
+    openclawVersion ? `${openclawVersion} (${openclawOnPath ? "PATH" : "bundled"})` : "openclaw not found"
   );
 
   for (const binary of ["ollama", "tailscale", "cloudflared", "signal-cli"]) {
@@ -157,27 +159,26 @@ async function main() {
     add("Access mode", "warn", `No response from ${baseUrl}/api/access`);
   }
 
-  try {
-    const response = await fetchJsonWithTimeout(`${baseUrl}/api/memory/status`);
-    if (response.ok && response.payload) {
-      const memory = response.payload;
+  if (openclawVersion) {
+    try {
+      const result = spawnSync(
+        openclawBinary,
+        ["--profile", "droidagent", "memory", "status", "--deep", "--json"],
+        { encoding: "utf8" }
+      );
+      const payload = JSON.parse(result.stdout || "[]");
+      const status = Array.isArray(payload) ? payload[0]?.status : null;
+      const probe = Array.isArray(payload) ? payload[0]?.embeddingProbe : null;
       add(
         "Semantic memory",
-        memory.semanticReady ? "ok" : "warn",
-        memory.semanticReady
-          ? `${memory.embeddingProvider}/${memory.embeddingModel} • ${memory.indexedFiles} files • ${memory.indexedChunks} chunks`
-          : memory.embeddingProbeError ??
-              `${memory.embeddingRequestedProvider ?? "unconfigured"} embeddings are not ready yet`,
+        status?.provider === "ollama" && probe?.ok !== false ? "ok" : "warn",
+        status?.provider
+          ? `${status.provider}/${status.model} • ${status.files ?? 0} files • ${status.chunks ?? 0} chunks`
+          : probe?.error ?? "Semantic memory is not ready yet"
       );
-    } else {
-      add(
-        "Semantic memory",
-        "warn",
-        `${baseUrl}/api/memory/status -> ${response.status}`,
-      );
+    } catch {
+      add("Semantic memory", "warn", "Unable to read OpenClaw memory status");
     }
-  } catch {
-    add("Semantic memory", "warn", `No response from ${baseUrl}/api/memory/status`);
   }
 
   console.log("DroidAgent doctor");

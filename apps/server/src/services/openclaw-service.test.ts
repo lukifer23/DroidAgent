@@ -80,6 +80,7 @@ describe("OpenClaw context management policy", () => {
     (
       openclawService as unknown as { activeRuns: Map<string, unknown> }
     ).activeRuns = new Map();
+    openclawService.invalidateMemoryStatusCache();
     vi.spyOn(
       openclawService as never,
       "ensureWorkspaceScaffold" as never,

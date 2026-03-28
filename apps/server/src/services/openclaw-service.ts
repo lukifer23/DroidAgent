@@ -57,6 +57,7 @@ const AGENTS_TEMPLATE = `# DroidAgent Operator Rules
 - Treat this repository as the active workspace.
 - Keep operator replies short, direct, and action-oriented.
 - Prefer workspace-relative paths when practical.
+- Check PREFERENCES.md for stable operator preferences before settling on tone, formatting, or recurring workflow choices.
 - Persist durable facts in MEMORY.md or memory/YYYY-MM-DD.md.
 - Avoid dumping raw tool payloads when a readable summary is clearer.
 `;
@@ -124,13 +125,26 @@ const PREFERENCES_TEMPLATE = `# Personal Preferences
 
 Use this file for stable operator preferences that should make DroidAgent feel more personal and more useful over time.
 
-## Good examples
+## Keep updated
 
-- recurring workflows
-- preferred tools and apps
-- response tone and formatting
-- project names and priorities
-- device-specific habits
+- preferred tone and formatting
+- recurring commands and workflows
+- favorite apps, tools, and editors
+- project priorities and long-running goals
+- device habits, time windows, and interruption preferences
+
+## Example starter blocks
+
+### Tone
+
+- terse, direct, high-signal replies
+- summarize first, then details when needed
+
+### Workflow
+
+- prefer local runtimes first
+- keep commands copyable and non-interactive
+- treat the current repo as the primary workspace unless stated otherwise
 
 ## Do not put here
 

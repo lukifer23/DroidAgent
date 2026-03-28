@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   startRegistration,
   type PublicKeyCredentialCreationOptionsJSON as BrowserRegistrationOptions,
@@ -19,6 +20,7 @@ import {
 } from "../app-data";
 import { useClientPerformanceSnapshot, useDroidAgentApp } from "../app-context";
 import { api, postJson } from "../lib/api";
+import { clientPerformance } from "../lib/client-performance";
 import { formatTokenBudget } from "../lib/formatters";
 
 function metricDescription(
@@ -124,6 +126,24 @@ export function SettingsScreen() {
       queryClient.invalidateQueries({ queryKey: ["passkeys"] }),
       queryClient.invalidateQueries({ queryKey: ["auth"] }),
     ]);
+  }
+
+  async function handlePrepareMemory() {
+    const metric = clientPerformance.start("client.memory.prepare", {
+      embeddingModel: dashboard?.memory.embeddingModel ?? "pending",
+    });
+
+    try {
+      await postJson("/api/memory/prepare", {});
+      metric.finish({
+        outcome: "ok",
+      });
+    } catch (error) {
+      metric.finish({
+        outcome: "error",
+      });
+      throw error;
+    }
   }
 
   return (
@@ -375,7 +395,8 @@ export function SettingsScreen() {
                 {dashboard?.memory.effectiveWorkspaceRoot
                   ? `${dashboard.memory.effectiveWorkspaceRoot}/PREFERENCES.md`
                   : "PREFERENCES.md"}
-                . The semantic index pulls that file in automatically.
+                . The semantic index pulls that file, workspace skills, and
+                session memory in automatically.
               </small>
             </article>
           </div>
@@ -384,12 +405,15 @@ export function SettingsScreen() {
               className="secondary"
               onClick={() =>
                 void runAction(async () => {
-                  await postJson("/api/memory/prepare", {});
+                  await handlePrepareMemory();
                 }, "Workspace memory prepared.")
               }
             >
-              Prepare Memory
+              Prepare / Reindex Memory
             </button>
+            <Link className="button-link secondary" to="/files">
+              Open Memory Files
+            </Link>
           </div>
           <small>
             Session memory: {dashboard?.memory.sessionMemoryEnabled ? "on" : "off"}{" "}
@@ -401,6 +425,44 @@ export function SettingsScreen() {
               {dashboard.memory.embeddingProbeError}
             </small>
           ) : null}
+        </article>
+
+        <article className="panel-card">
+          <div className="panel-heading">
+            <h3>Personalization</h3>
+            <p>
+              Smaller local models become more useful when DroidAgent keeps the
+              long-lived operator context explicit, local, and searchable.
+            </p>
+          </div>
+          <div className="status-list">
+            <article className="health-row ready">
+              <div className="health-row-top">
+                <strong>Preferences</strong>
+                <span className="status-chip ready">Loaded</span>
+              </div>
+              <small>
+                PREFERENCES.md is part of semantic recall, so response style,
+                workflow habits, and tool preferences can stay personal over
+                time.
+              </small>
+            </article>
+            <article className="health-row ready">
+              <div className="health-row-top">
+                <strong>Durable memory</strong>
+                <span className="status-chip ready">Loaded</span>
+              </div>
+              <small>
+                MEMORY.md and the daily memory notes stay on-device and feed the
+                local embedding index without falling back to a cloud provider.
+              </small>
+            </article>
+          </div>
+          <div className="button-row">
+            <Link className="button-link secondary" to="/files">
+              Review Memory Files
+            </Link>
+          </div>
         </article>
 
         <article className="panel-card">
@@ -646,6 +708,13 @@ export function SettingsScreen() {
             <small>
               {metricDescription(
                 clientPerformanceSnapshot,
+                "client.memory.prepare",
+                "Memory prepare",
+              )}
+            </small>
+            <small>
+              {metricDescription(
+                clientPerformanceSnapshot,
                 "client.job.start_to_first_output",
                 "Job to first output",
               )}
@@ -686,6 +755,20 @@ export function SettingsScreen() {
                 performanceQuery.data,
                 "job.firstOutput",
                 "Job first output",
+              )}
+            </small>
+            <small>
+              {metricDescription(
+                performanceQuery.data,
+                "memory.prepare",
+                "Memory prepare",
+              )}
+            </small>
+            <small>
+              {metricDescription(
+                performanceQuery.data,
+                "memory.todayNote",
+                "Today note",
               )}
             </small>
           </article>

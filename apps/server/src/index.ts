@@ -435,15 +435,34 @@ app.post("/api/memory/prepare", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const settings = await appStateService.getRuntimeSettings();
-  if (settings.selectedRuntime === "ollama") {
-    await runtimeService.ensureOllamaModel(settings.ollamaEmbeddingModel);
-  }
-  const status = await openclawService.prepareSemanticMemory({
+  const metric = performanceService.start("server", "memory.prepare", {
+    runtime: settings.selectedRuntime,
+    embeddingModel: settings.ollamaEmbeddingModel,
     reindex: true,
   });
-  await websocketHub.publishMemoryUpdated();
-  await websocketHub.publishSetupUpdated();
-  return c.json(status);
+  if (settings.selectedRuntime === "ollama") {
+    await runtimeService.startRuntime("ollama");
+    await runtimeService.ensureOllamaModel(settings.ollamaEmbeddingModel);
+  }
+  try {
+    const status = await openclawService.prepareSemanticMemory({
+      reindex: true,
+    });
+    metric.finish({
+      semanticReady: status.semanticReady,
+      indexedFiles: status.indexedFiles,
+      indexedChunks: status.indexedChunks,
+      dirty: status.dirty,
+    });
+    await websocketHub.publishMemoryUpdated();
+    await websocketHub.publishSetupUpdated();
+    return c.json(status);
+  } catch (error) {
+    metric.finish({
+      outcome: "error",
+    });
+    throw error;
+  }
 });
 
 app.post("/api/memory/today-note", async (c) => {
@@ -451,14 +470,25 @@ app.post("/api/memory/today-note", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  const [notePath, status] = await Promise.all([
-    openclawService.ensureTodayMemoryNote(),
-    openclawService.memoryStatus(),
-  ]);
-  await websocketHub.publishMemoryUpdated();
-  return c.json({
-    path: path.relative(status.effectiveWorkspaceRoot, notePath) || ".",
-  });
+  const metric = performanceService.start("server", "memory.todayNote");
+  try {
+    const [notePath, status] = await Promise.all([
+      openclawService.ensureTodayMemoryNote(),
+      openclawService.memoryStatus(),
+    ]);
+    metric.finish({
+      workspaceRoot: status.effectiveWorkspaceRoot,
+    });
+    await websocketHub.publishMemoryUpdated();
+    return c.json({
+      path: path.relative(status.effectiveWorkspaceRoot, notePath) || ".",
+    });
+  } catch (error) {
+    metric.finish({
+      outcome: "error",
+    });
+    throw error;
+  }
 });
 
 app.get("/api/setup", async (c) => {

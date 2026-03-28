@@ -50,12 +50,14 @@ After the owner passkey is enrolled, the `Setup` route now drives the common pat
 - Ollama is the default local runtime path
 - the default local Ollama context budget is `65k`
 - the default local semantic-memory embedding model is `embeddinggemma:300m-qat-q8_0` on Ollama
+- semantic memory stays local-first with fallback disabled, so embeddings do not silently drift to a cloud provider
 - llama.cpp remains the advanced local runtime path
 - Tailscale Serve is the primary and only remote path exposed in the main UI right now
 - Tailscale may run through the system daemon or a DroidAgent-managed userspace daemon on macOS when the system daemon is unavailable
 - Signal stays optional and secondary to the web shell
 - Smart Context Management is on by default
 - the workspace is seeded with `AGENTS.md`, `TOOLS.md`, `MEMORY.md`, `PREFERENCES.md`, `HEARTBEAT.md`, a `memory/` folder, and a `skills/` folder
+- `PREFERENCES.md` is part of semantic recall so the operator can make a smaller local model feel more personal over time
 
 ## Docs
 
