@@ -1990,7 +1990,9 @@ export class OpenClawService {
     relay: StreamRelayCallbacks,
   ): Promise<{ runId: string }> {
     await this.ensureConfigured();
-    await this.abortMessage(sessionKey);
+    if (this.activeRuns.has(sessionKey)) {
+      await this.abortMessage(sessionKey);
+    }
 
     const runId = randomUUID();
     const controller = new AbortController();

@@ -232,11 +232,20 @@ export function useWebSocket(options: UseWebSocketOptions) {
         }
         if (payload.type === "chat.stream.delta") {
           const existing = pendingStreamRunsRef.current[payload.payload.sessionId] ?? chatStreamStore.getSnapshot()[payload.payload.sessionId];
-          pendingStreamRunsRef.current[payload.payload.sessionId] = {
+          const nextRun = {
             runId: payload.payload.runId,
             text: `${existing?.runId === payload.payload.runId ? existing.text : ""}${payload.payload.delta}`
           };
-          scheduleFlush();
+          if (!existing || existing.runId !== payload.payload.runId) {
+            chatStreamStore.setRuns({
+              ...chatStreamStore.getSnapshot(),
+              [payload.payload.sessionId]: nextRun
+            });
+            delete pendingStreamRunsRef.current[payload.payload.sessionId];
+          } else {
+            pendingStreamRunsRef.current[payload.payload.sessionId] = nextRun;
+            scheduleFlush();
+          }
         }
         if (payload.type === "chat.stream.done" || payload.type === "chat.stream.error") {
           if (flushHandleRef.current !== null) {

@@ -801,4 +801,58 @@ describe("OpenClaw context management policy", () => {
       { source: "sessions", files: 2, chunks: 10 },
     ]);
   });
+
+  it("skips aborting the gateway when starting a fresh session run", async () => {
+    const ensureConfiguredSpy = vi
+      .spyOn(openclawService as never, "ensureConfigured" as never)
+      .mockResolvedValue(undefined);
+    const abortMessageSpy = vi
+      .spyOn(openclawService, "abortMessage")
+      .mockResolvedValue(undefined);
+    const streamMessageRunSpy = vi
+      .spyOn(openclawService as never, "streamMessageRun" as never)
+      .mockResolvedValue(undefined);
+
+    await openclawService.sendMessage("web:operator", "hello", {
+      onDelta: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    expect(ensureConfiguredSpy).toHaveBeenCalledTimes(1);
+    expect(abortMessageSpy).not.toHaveBeenCalled();
+    expect(streamMessageRunSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the previous run before replacing an active session run", async () => {
+    const ensureConfiguredSpy = vi
+      .spyOn(openclawService as never, "ensureConfigured" as never)
+      .mockResolvedValue(undefined);
+    const abortMessageSpy = vi
+      .spyOn(openclawService, "abortMessage")
+      .mockResolvedValue(undefined);
+    const streamMessageRunSpy = vi
+      .spyOn(openclawService as never, "streamMessageRun" as never)
+      .mockResolvedValue(undefined);
+
+    (
+      openclawService as unknown as {
+        activeRuns: Map<string, unknown>;
+      }
+    ).activeRuns.set("web:operator", {
+      runId: "existing-run",
+      controller: new AbortController(),
+    });
+
+    await openclawService.sendMessage("web:operator", "hello again", {
+      onDelta: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    expect(ensureConfiguredSpy).toHaveBeenCalledTimes(1);
+    expect(abortMessageSpy).toHaveBeenCalledTimes(1);
+    expect(abortMessageSpy).toHaveBeenCalledWith("web:operator");
+    expect(streamMessageRunSpy).toHaveBeenCalledTimes(1);
+  });
 });
