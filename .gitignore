@@ -14,3 +14,4 @@ apps/server/drizzle
 *.tsbuildinfo
 .env
 .env.*
+.openclaw/
