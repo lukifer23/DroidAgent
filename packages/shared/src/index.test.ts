@@ -12,6 +12,13 @@ import {
 describe("DashboardStateSchema", () => {
   it("accepts a minimal dashboard payload", () => {
     const parsed = DashboardStateSchema.parse({
+      build: {
+        productName: "DroidAgent",
+        version: "0.2.0",
+        gitCommit: "abc1234",
+        packageManager: "pnpm@10.13.1",
+        nodeVersion: "v22.16.0",
+      },
       setup: {
         completedSteps: [],
         currentStep: "hostScan",

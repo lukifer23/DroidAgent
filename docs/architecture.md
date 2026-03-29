@@ -7,11 +7,12 @@
   - stores state in SQLite under `~/.droidagent`
   - stores cloud-provider API keys in the macOS login Keychain
   - manages runtimes and OpenClaw through CLI/process supervision
+  - exposes the running build/version identity to the shell and diagnostics
   - exposes the browser REST API and owner-authenticated WebSocket update stream
   - owns the only browser-facing integration boundary; the browser never receives an OpenClaw token
 - `apps/web`
   - mobile-first routed PWA
-  - Setup, Chat, Files, Jobs, Models, Channels, Settings
+  - Setup, Chat, Files, Jobs, Models, Settings
   - reconnect-safe streaming, install prompt, Fold-friendly layout
 - `packages/shared`
   - common schemas for dashboard state, files, jobs, passkeys, access/bootstrap payloads, diagnostics telemetry, and WebSocket events
@@ -47,7 +48,8 @@
 ## Remote access
 
 - local daily control starts on loopback
-- Tailscale Serve and a Cloudflare named tunnel are the supported remote phone paths
+- Tailscale Serve is the primary guided remote phone path
+- a Cloudflare named tunnel remains an advanced backend path but is intentionally hidden from the main operator flow
 - DroidAgent tracks canonical origin, bootstrap token issuance, and phone-side owner enrollment state
 - after canonical setup, the selected remote URL becomes the primary daily-use origin
 
@@ -77,4 +79,4 @@
 - `signal-cli` stays isolated under `~/.droidagent/signal-cli`
 - the PWA remains the primary control surface
 - Signal stays available as an advanced secondary owner ingress, not a required onboarding step
-- the Channels route handles install, registration, QR-based linking, pending-pair resolution, daemon control, and owner test messages
+- advanced Signal management stays secondary to the main Setup/Chat/Files/Jobs/Models/Settings flow

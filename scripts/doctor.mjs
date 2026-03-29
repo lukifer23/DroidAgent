@@ -12,7 +12,9 @@ const requiredDirs = [
   path.join(appDir, "logs"),
   path.join(appDir, "logs", "jobs"),
   path.join(appDir, "tmp"),
-  path.join(appDir, "state")
+  path.join(appDir, "state"),
+  path.join(appDir, "uploads"),
+  path.join(appDir, "tailscale")
 ];
 
 function commandVersion(command, args = ["--version"]) {
@@ -70,7 +72,7 @@ async function main() {
     openclawVersion ? `${openclawVersion} (${openclawOnPath ? "PATH" : "bundled"})` : "openclaw not found"
   );
 
-  for (const binary of ["ollama", "tailscale", "cloudflared", "signal-cli"]) {
+  for (const binary of ["ollama", "tailscale", "signal-cli"]) {
     const version = commandVersion(binary);
     add(binary, version ? "ok" : "warn", version ?? `${binary} not found in PATH`);
   }
@@ -84,6 +86,15 @@ async function main() {
     add("Server health", response.ok ? "ok" : "warn", `${baseUrl}/api/health -> ${response.status}`);
     if (response.ok && response.payload) {
       const health = response.payload;
+      add(
+        "DroidAgent build",
+        health.build?.version ? "ok" : "warn",
+        health.build?.gitCommit
+          ? `v${health.build.version} (${health.build.gitCommit})`
+          : health.build?.version
+            ? `v${health.build.version}`
+            : "Build metadata unavailable"
+      );
       add(
         "LaunchAgent",
         health.launchAgent?.running ? "ok" : health.launchAgent?.installed ? "warn" : "warn",
@@ -101,9 +112,9 @@ async function main() {
       );
       add(
         "Multimodal path",
-        health.harness?.attachmentsEnabled ? "ok" : "warn",
-        health.harness?.imageModel
-          ? `${health.harness.imageModel} • ${health.harness.availableTools?.includes("pdf") ? "pdf tool on" : "pdf tool off"}`
+        health.harnessSummary?.attachmentsEnabled ? "ok" : "warn",
+        health.harnessSummary?.imageModel
+          ? `${health.harnessSummary.imageModel} • ${health.harnessSummary.pdfModel ? "pdf tool on" : "pdf tool off"}`
           : "No local image/PDF model configured"
       );
 
@@ -154,11 +165,17 @@ async function main() {
         access.tailscaleStatus?.httpsEnabled ? "ok" : "warn",
         access.tailscaleStatus?.healthMessage ?? "Tailscale status unavailable"
       );
-      add(
-        "Cloudflare",
-        access.cloudflareStatus?.running ? "ok" : access.cloudflareStatus?.configured ? "warn" : "warn",
-        access.cloudflareStatus?.healthMessage ?? "Cloudflare status unavailable"
-      );
+      if (
+        access.accessMode === "cloudflare" ||
+        access.cloudflareStatus?.configured ||
+        access.cloudflareStatus?.running
+      ) {
+        add(
+          "Cloudflare backend",
+          access.cloudflareStatus?.running ? "ok" : access.cloudflareStatus?.configured ? "warn" : "warn",
+          access.cloudflareStatus?.healthMessage ?? "Cloudflare status unavailable"
+        );
+      }
     } else {
       add("Access mode", "warn", `${baseUrl}/api/access -> ${response.status}`);
     }

@@ -470,6 +470,15 @@ export const SetupStateSchema = z.object({
 });
 export type SetupState = z.infer<typeof SetupStateSchema>;
 
+export const BuildInfoSchema = z.object({
+  productName: z.string(),
+  version: z.string(),
+  gitCommit: z.string().nullable(),
+  packageManager: z.string().nullable(),
+  nodeVersion: z.string(),
+});
+export type BuildInfo = z.infer<typeof BuildInfoSchema>;
+
 export const QuickstartResultSchema = z.object({
   hostReady: z.boolean(),
   remoteReady: z.boolean(),
@@ -617,6 +626,7 @@ export const PerformanceSnapshotSchema = z.object({
 export type PerformanceSnapshot = z.infer<typeof PerformanceSnapshotSchema>;
 
 export const DashboardStateSchema = z.object({
+  build: BuildInfoSchema,
   setup: SetupStateSchema,
   canonicalUrl: z.string().url().nullable(),
   tailscaleStatus: TailscaleStatusSchema,

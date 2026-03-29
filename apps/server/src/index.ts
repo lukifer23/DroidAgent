@@ -26,6 +26,7 @@ import { launchAgentService } from "./services/launch-agent-service.js";
 import { openclawService } from "./services/openclaw-service.js";
 import { runtimeService } from "./services/runtime-service.js";
 import { appStateService } from "./services/app-state-service.js";
+import { buildInfoService } from "./services/build-info-service.js";
 import { quickstartService } from "./services/quickstart-service.js";
 import { signalService } from "./services/signal-service.js";
 import { startupService } from "./services/startup-service.js";
@@ -240,19 +241,33 @@ function withMeasuredStreamRelay(
 
 app.get("/api/health", async (c) => {
   signalService.refreshStateInBackground();
-  const [runtimeSummary, setup, launchAgent, channels] = await Promise.all([
+  const [runtimeSummary, setup, launchAgent, channels, harness] =
+    await Promise.all([
     runtimeService.getRuntimeStatuses(),
     appStateService.getSetupState(),
     launchAgentService.status(),
     harnessService.listChannels(),
+    harnessService.harnessStatus(),
   ]);
   return c.json({
     ok: true,
     timestamp: new Date().toISOString(),
+    build: buildInfoService.getBuildInfo(),
     runtimeSummary,
     setup,
     launchAgent,
     channels,
+    harnessSummary: {
+      configured: harness.configured,
+      activeModel: harness.activeModel,
+      contextWindow: harness.contextWindow,
+      toolProfile: harness.toolProfile,
+      attachmentsEnabled: harness.attachmentsEnabled,
+      imageModel: harness.imageModel,
+      pdfModel: harness.pdfModel,
+      memorySearchEnabled: harness.memorySearchEnabled,
+      sessionMemoryEnabled: harness.sessionMemoryEnabled,
+    },
   });
 });
 

@@ -5,7 +5,8 @@
 - Passkey auth is required for browser access after owner enrollment.
 - OpenClaw stays loopback-only and token-protected.
 - The browser never receives an OpenClaw token and never connects to OpenClaw directly.
-- Default bind is loopback-only; supported remote paths are Tailscale Serve and a Cloudflare named tunnel.
+- Default bind is loopback-only; the guided operator path is Tailscale Serve.
+- A Cloudflare named tunnel remains an advanced backend path, but it is intentionally not part of the default onboarding or primary operator UI.
 - File and job operations are limited to the configured workspace root.
 - Public file APIs use workspace-relative paths instead of absolute host paths.
 - Text-file saving uses path jail checks, conflict detection, and atomic writes.

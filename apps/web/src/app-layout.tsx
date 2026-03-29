@@ -180,7 +180,8 @@ export function AppLayout() {
             {activeProvider?.contextWindow
               ? ` • ${formatTokenBudget(activeProvider.contextWindow)}`
               : ""}{" "}
-            • {memoryReady ? "memory ready" : "memory pending"}
+            • {memoryReady ? "memory ready" : "memory pending"} • v
+            {dashboard?.build.version ?? "unknown"}
           </small>
         </div>
         <button

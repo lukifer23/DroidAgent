@@ -1,13 +1,15 @@
 # DroidAgent
 
+Current repo/runtime line: `v0.2.0`
+
 DroidAgent is a macOS-first, single-owner control plane for OpenClaw with a mobile-first PWA shell for chat, files, jobs, runtime control, passkeys, Tailscale phone access, optional Signal ingress, and local multimodal attachments.
 
 ## What Ships In V1
 
 - `apps/server`
-  - Hono API, passkey auth, SQLite app state, Keychain-backed cloud secrets, canonical-origin enforcement, workspace-scoped files and jobs, OpenClaw orchestration, and owner-authenticated websocket fanout
+  - Hono API, passkey auth, SQLite app state, Keychain-backed cloud secrets, canonical-origin enforcement, workspace-scoped files and jobs, OpenClaw orchestration, build/version identity, and owner-authenticated websocket fanout
 - `apps/web`
-  - installable React/Vite PWA with Setup, Chat, Files, Jobs, Models, Channels, and Settings routes
+  - installable React/Vite PWA with Setup, Chat, Files, Jobs, Models, and Settings as the primary operator routes
   - fold-friendly layout, reconnect-safe streaming, dedicated chat surface, light/dark themes, multimodal attachments, diagnostics card, and subtle motion tuned for operator use
 - `packages/shared`
   - shared Zod contracts for dashboard, auth, files, jobs, channels, access state, and diagnostics telemetry
@@ -29,6 +31,8 @@ Quick local start:
 ```bash
 pnpm bootstrap
 ```
+
+`pnpm bootstrap` now reuses an already healthy local server, restarts the LaunchAgent-backed host when it is installed, and only falls back to a background direct server start when no LaunchAgent is present yet.
 
 Manual local start:
 
@@ -86,3 +90,4 @@ After the owner passkey is enrolled, the `Setup` route now drives the common pat
 - Browser acceptance now runs against a real server-backed Playwright harness; route interception and fake websocket replacement are no longer the primary test path.
 - Performance reporting is advisory in this pass. `verify:full` enforces correctness; the perf scripts produce artifacts under `artifacts/perf/`.
 - The current live acceptance target is `web/PWA + owner passkey + Tailscale remote + Ollama local runtime`.
+- Version/build identity is surfaced by the running server so the Mac shell, the phone shell, diagnostics, and the repo all report the same release line.

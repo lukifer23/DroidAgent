@@ -23,9 +23,11 @@ The bootstrap script:
 3. builds shared, server, and web
 4. ensures `~/.droidagent` app directories exist
 5. optionally starts Ollama if already installed
-6. starts the DroidAgent server
-7. waits for health readiness
-8. opens `http://localhost:4318`
+6. reuses an already healthy local server when one is present
+7. otherwise restarts the LaunchAgent-backed host when that path is installed
+8. otherwise starts a background local server and writes its output to `~/.droidagent/logs/bootstrap-server.log`
+9. waits for health readiness
+10. opens `http://localhost:4318`
 
 Bootstrap is idempotent and safe to re-run.
 
@@ -41,7 +43,7 @@ Run `pnpm doctor` after bootstrap when you want a non-mutating environment check
 6. Use Manual Controls only when you want a different workspace, a different local model, or llama.cpp.
 7. Optionally enroll additional passkeys from Settings.
 8. Optionally store cloud-provider keys in Keychain.
-9. Optionally install and start the LaunchAgent.
+9. Optionally install and start the LaunchAgent if you want launchd to own the host process permanently.
 10. Optionally configure Signal from the Channels route.
 
 The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailscale remote + Ollama local runtime`.
@@ -56,6 +58,7 @@ The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailsc
 6. Use a one-time bootstrap link only when you need to enroll a new device-specific passkey after the canonical URL is healthy.
 7. Use the canonical remote URL for daily phone access.
 8. The default local model path is `qwen3.5:4b` at `65k` context with thinking disabled, smart context management enabled, `qwen2.5vl:3b` handling image/PDF chat attachments locally, and `embeddinggemma:300m-qat-q8_0` handling semantic memory locally.
+9. The running host reports its own build/version line in Settings and diagnostics so screenshots, docs, and support notes stay aligned.
 
 ## Manual setup
 

@@ -6,6 +6,11 @@
   - private-first default
   - best fit when the phone can join the same tailnet
 
+## Advanced backend path
+
+- A Cloudflare named tunnel still exists as an advanced backend capability, but it is intentionally hidden from the default onboarding and main operator UI.
+- The streamlined v1 docs and quickstart flow assume Tailscale as the daily remote path.
+
 ## Unsupported paths in v1
 
 - raw router port forwarding

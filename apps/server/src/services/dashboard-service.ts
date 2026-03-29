@@ -4,6 +4,7 @@ import { TtlCache } from "../lib/ttl-cache.js";
 import { performanceService } from "./performance-service.js";
 import { accessService } from "./access-service.js";
 import { appStateService } from "./app-state-service.js";
+import { buildInfoService } from "./build-info-service.js";
 import { harnessService } from "./harness-service.js";
 import { jobService } from "./job-service.js";
 import { keychainService } from "./keychain-service.js";
@@ -59,6 +60,7 @@ export class DashboardService {
         ]);
 
         return DashboardStateSchema.parse({
+          build: buildInfoService.getBuildInfo(),
           setup,
           canonicalUrl: access.canonicalUrl,
           tailscaleStatus: access.tailscaleStatus,

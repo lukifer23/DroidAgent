@@ -577,13 +577,52 @@ export function SettingsScreen() {
             web shell plus the Tailscale phone URL.
           </small>
         </article>
+
+        <article className="panel-card">
+          <div className="panel-heading">
+            <h3>Build Identity</h3>
+            <p>
+              One version string for the Mac, the phone shell, the docs, and
+              the repo. Use this when you compare screenshots, logs, or bug
+              reports.
+            </p>
+          </div>
+          <div className="status-list">
+            <article className="health-row ready">
+              <div className="health-row-top">
+                <strong>Version</strong>
+                <span className="status-chip ready">
+                  v{dashboard?.build.version ?? "unknown"}
+                </span>
+              </div>
+              <small>
+                {dashboard?.build.gitCommit
+                  ? `Commit ${dashboard.build.gitCommit}`
+                  : "Git commit unavailable on this host."}
+              </small>
+            </article>
+            <article className="health-row ready">
+              <div className="health-row-top">
+                <strong>Runtime</strong>
+                <span className="status-chip ready">
+                  {dashboard?.build.nodeVersion ?? "unknown"}
+                </span>
+              </div>
+              <small>
+                {dashboard?.build.packageManager ??
+                  "Package manager metadata unavailable."}
+              </small>
+            </article>
+          </div>
+        </article>
       </section>
 
       <article className="panel-card">
         <h3>Cloud Providers</h3>
         <p>
           API keys are stored in the macOS login keychain. Only provider
-          metadata stays inside DroidAgent.
+          metadata stays inside DroidAgent. These are optional advanced paths;
+          the guided local-first flow stays on Ollama plus Tailscale.
         </p>
         <div className="stack-list">
           {(dashboard?.cloudProviders ?? []).map(

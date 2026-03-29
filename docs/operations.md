@@ -15,6 +15,8 @@ pnpm build
 node apps/server/dist/index.js
 ```
 
+`pnpm bootstrap` is the simpler host path now. It reuses a healthy local server when one already exists, prefers the LaunchAgent-managed host when installed, and only falls back to a background direct server start when the LaunchAgent has not been installed yet.
+
 ## Logs
 
 - DroidAgent logs: `~/.droidagent/logs`
@@ -48,6 +50,7 @@ pnpm perf:report
 - Install, start, stop, and uninstall are exposed in the Settings route and server API.
 - The LaunchAgent runs `node apps/server/dist/index.js` with production-style log paths under `~/.droidagent/logs`.
 - If you are currently running the server in a foreground terminal, stop that process after enabling the LaunchAgent so launchd can own port `4318`.
+- `pnpm bootstrap` now avoids starting a duplicate foreground server when the LaunchAgent path already owns the host.
 
 ## Remote access
 
@@ -70,6 +73,7 @@ pnpm perf:report
 - The Settings route shows a compact client/server diagnostics card.
 - The Settings route also shows semantic-memory readiness, embedding/index status, and the current `65k` local context budget.
 - The Settings route now also exposes memory-prep timings so semantic-memory regressions are visible in the same diagnostics surface as chat, files, and jobs.
+- The Settings route also shows the running build/version identity so the live host, screenshots, logs, and repo all stay on the same release line.
 - The chat route now accepts local images, PDFs, Markdown, JSON, logs, and common code/text files. DroidAgent stores them under `~/.droidagent/uploads` and passes them through the real OpenClaw tool path instead of a parallel mock transcript.
 - Performance artifacts are written under `artifacts/perf/`.
 - Access, dashboard, runtime, provider, and startup-status reads use short-lived in-memory caches with explicit invalidation on mutations so the mobile shell stays responsive without serving long-lived stale state.
