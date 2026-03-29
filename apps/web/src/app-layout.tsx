@@ -164,7 +164,7 @@ export function AppLayout() {
         <div className="topbar">
           <div className="topbar-copy">
             <div className="eyebrow">DroidAgent</div>
-            <h1>{isSetupRoute ? "Setup" : isChatRoute ? "Live Chat" : "Operator Console"}</h1>
+            <h1>{isSetupRoute ? "Setup" : isChatRoute ? "Chat" : "Operator Console"}</h1>
             <small className="topbar-meta">{topbarMeta}</small>
           </div>
 
@@ -226,8 +226,16 @@ export function AppLayout() {
           Reconnecting to DroidAgent...
         </section>
       ) : null}
-      {notice ? <section className="status-banner success">{notice}</section> : null}
-      {errorMessage ? (
+      {isChatRoute && (notice || errorMessage) ? (
+        <div className="notice-stack">
+          {notice ? <section className="status-banner success">{notice}</section> : null}
+          {errorMessage ? (
+            <section className="status-banner error">{errorMessage}</section>
+          ) : null}
+        </div>
+      ) : null}
+      {!isChatRoute && notice ? <section className="status-banner success">{notice}</section> : null}
+      {!isChatRoute && errorMessage ? (
         <section className="status-banner error">{errorMessage}</section>
       ) : null}
 
