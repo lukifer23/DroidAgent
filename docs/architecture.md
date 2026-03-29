@@ -74,6 +74,14 @@
 - the client records route, chat, reconnect, file, and job timings locally
 - the Settings route surfaces a compact diagnostics card
 - the benchmark scripts write JSON artifacts under `artifacts/perf/`
+- realtime dashboard mutation fanout includes a dedicated harness update event and client-side snapshot reconciliation to keep partial dashboard patches from drifting during noisy update bursts
+
+## UI shell and layout stability
+
+- the routed PWA shell keeps a shared topbar and bottom-nav chrome while route content remains mounted across navigation to avoid avoidable subtree remount jitter
+- viewport CSS vars (`--app-topbar-h`, `--app-bottom-nav-h`, `--app-viewport-h`) are measured from live chrome and updated via `ResizeObserver` plus `visualViewport` listeners, with rAF scheduling to avoid resize thrash
+- Chat and Terminal shells now share unified viewport-height formulas so sticky composers, PTY surfaces, and status stacks stay aligned on Fold-sized and phone-sized viewports
+- style concerns are layered: base palette/components in `styles.css`, cross-screen shell primitives in `styles/system.css`, and motion/accessibility handling in `styles/motion.css`
 
 ## Optional Signal path
 

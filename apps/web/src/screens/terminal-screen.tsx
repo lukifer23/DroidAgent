@@ -54,6 +54,13 @@ export function TerminalScreen() {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const renderedSessionIdRef = useRef<string | null>(null);
   const renderedTranscriptRef = useRef("");
+  const sendRealtimeCommandRef = useRef(sendRealtimeCommand);
+  const wsStatusRef = useRef(wsStatus);
+  const terminalSessionIdRef = useRef<string | null>(terminalState.session?.id ?? null);
+
+  sendRealtimeCommandRef.current = sendRealtimeCommand;
+  wsStatusRef.current = wsStatus;
+  terminalSessionIdRef.current = terminalState.session?.id ?? null;
 
   const snapshotQuery = useQuery({
     queryKey: ["terminal"],
@@ -93,11 +100,11 @@ export function TerminalScreen() {
     terminal.focus();
 
     const dataDisposable = terminal.onData((data) => {
-      const sessionId = terminalState.session?.id;
-      if (!sessionId || wsStatus !== "connected") {
+      const sessionId = terminalSessionIdRef.current;
+      if (!sessionId || wsStatusRef.current !== "connected") {
         return;
       }
-      sendRealtimeCommand({
+      sendRealtimeCommandRef.current({
         type: "terminal.input",
         payload: {
           sessionId,
@@ -109,10 +116,10 @@ export function TerminalScreen() {
     const syncSize = () => {
       fitAddon.fit();
       const sessionId = terminalStore.getSnapshot().session?.id;
-      if (!sessionId || wsStatus !== "connected") {
+      if (!sessionId || wsStatusRef.current !== "connected") {
         return;
       }
-      sendRealtimeCommand({
+      sendRealtimeCommandRef.current({
         type: "terminal.resize",
         payload: {
           sessionId,
@@ -143,7 +150,7 @@ export function TerminalScreen() {
       fitAddonRef.current = null;
       terminal.dispose();
     };
-  }, [resolvedTheme, sendRealtimeCommand, terminalState.session?.id, wsStatus]);
+  }, [resolvedTheme]);
 
   useEffect(() => {
     const terminal = xtermRef.current;

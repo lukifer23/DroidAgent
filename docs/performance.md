@@ -55,6 +55,13 @@ Client-side:
 - `client.memory.prepare`
 - `client.job.start_to_first_output`
 
+Notable implementation guardrails in this pass:
+
+- streaming chat rendering fast-paths plain deltas before markdown parsing to reduce avoidable parse churn
+- terminal transcript trimming tracks byte budget incrementally and avoids full-history re-encoding on each output chunk
+- jobs output rendering tails large logs in-browser to avoid large full-text DOM updates
+- websocket-driven dashboard patches are reconciled with debounced full snapshot pulls after high-impact runtime/provider/channel/context/memory mutations
+
 ## Advisory Budgets
 
 - `GET /api/access` local p95 <= `250 ms`

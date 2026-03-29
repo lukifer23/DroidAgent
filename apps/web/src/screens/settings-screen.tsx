@@ -13,6 +13,7 @@ import type {
 } from "@droidagent/shared";
 
 import {
+  useAuthQuery,
   useAccessQuery,
   useDashboardQuery,
   usePasskeysQuery,
@@ -48,10 +49,11 @@ export function SettingsScreen() {
     setThemePreference,
     themePreference,
   } = useDroidAgentApp();
-  const dashboardQuery = useDashboardQuery(true);
+  const authQuery = useAuthQuery();
+  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
   const accessQuery = useAccessQuery();
-  const passkeysQuery = usePasskeysQuery(true);
-  const performanceQuery = usePerformanceQuery(true);
+  const passkeysQuery = usePasskeysQuery(Boolean(authQuery.data?.user));
+  const performanceQuery = usePerformanceQuery(Boolean(authQuery.data?.user));
   const clientPerformanceSnapshot = useClientPerformanceSnapshot();
   const dashboard = dashboardQuery.data;
   const access = accessQuery.data;
@@ -163,6 +165,15 @@ export function SettingsScreen() {
 
   return (
     <section className="stack-list">
+      {dashboardQuery.isLoading ? (
+        <article className="panel-card compact">Loading system settings...</article>
+      ) : null}
+      {dashboardQuery.isError ? (
+        <article className="panel-card compact conflict-card">
+          Settings are temporarily unavailable. Check host connectivity and retry.
+        </article>
+      ) : null}
+
       <section className="system-rail settings-rail">
         {overviewCards.map((card) => (
           <article

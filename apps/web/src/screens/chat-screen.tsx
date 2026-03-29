@@ -1,5 +1,6 @@
 import {
   type ClipboardEvent,
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -146,6 +147,18 @@ function ChatMarkdown({ text }: { text: string }) {
   );
 }
 
+function StreamingMarkdown({ text }: { text: string }) {
+  if (!text.includes("\n") && !/[`*_#[\]-]/.test(text)) {
+    return <p>{text}</p>;
+  }
+
+  return (
+    <div className="message-markdown">
+      <ChatMarkdown text={text} />
+    </div>
+  );
+}
+
 function AttachmentPart({
   attachments,
 }: {
@@ -231,7 +244,7 @@ function ApprovalCard({
   );
 }
 
-function MessagePartView({
+const MessagePartView = memo(function MessagePartView({
   part,
   approval,
   onResolveApproval,
@@ -301,7 +314,7 @@ function MessagePartView({
       {part.details ? <span>{part.details}</span> : null}
     </div>
   );
-}
+});
 
 function PendingAttachmentList({
   attachments,
@@ -385,6 +398,10 @@ export function ChatScreen() {
     Boolean(activeProvider?.enabled) &&
     Boolean(harness?.configured);
   const approvalCount = approvals.length;
+  const approvalsById = useMemo(
+    () => new Map(approvals.map((approval) => [approval.id, approval])),
+    [approvals],
+  );
 
   const historyQuery = useQuery({
     queryKey: ["sessions", selectedSessionKey, "messages"],
@@ -397,34 +414,33 @@ export function ChatScreen() {
   });
 
   const messages = useMemo(() => historyQuery.data ?? [], [historyQuery.data]);
+  const liveMetricMap = useMemo(
+    () => new Map(clientPerformanceSnapshot.metrics.map((metric) => [metric.name, metric])),
+    [clientPerformanceSnapshot.metrics],
+  );
+
   const liveMetrics = useMemo(
     () => [
       {
         label: "First token",
         value: formatLatency(
-          clientPerformanceSnapshot.metrics.find(
-            (metric) => metric.name === "client.chat.submit_to_first_token",
-          )?.summary,
+          liveMetricMap.get("client.chat.submit_to_first_token")?.summary,
         ),
       },
       {
         label: "Reply done",
         value: formatLatency(
-          clientPerformanceSnapshot.metrics.find(
-            (metric) => metric.name === "client.chat.submit_to_done",
-          )?.summary,
+          liveMetricMap.get("client.chat.submit_to_done")?.summary,
         ),
       },
       {
         label: "Reconnect",
         value: formatLatency(
-          clientPerformanceSnapshot.metrics.find(
-            (metric) => metric.name === "client.ws.reconnect_to_resync",
-          )?.summary,
+          liveMetricMap.get("client.ws.reconnect_to_resync")?.summary,
         ),
       },
     ],
-    [clientPerformanceSnapshot.metrics],
+    [liveMetricMap],
   );
 
   const headerFacts = [
@@ -450,7 +466,12 @@ export function ChatScreen() {
       return;
     }
 
-    container.scrollTop = container.scrollHeight;
+    const handle = window.requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
+    });
+    return () => {
+      window.cancelAnimationFrame(handle);
+    };
   }, [messages.length, selectedSessionKey, streaming?.text, activeRun?.updatedAt]);
 
   async function uploadFiles(files: File[]) {
@@ -724,6 +745,22 @@ export function ChatScreen() {
 
       <article className="chat-thread-panel panel-card compact">
         <div ref={threadRef} className="chat-message-list operator-thread">
+          {historyQuery.isLoading ? (
+            <article className="panel-card compact">Loading session history...</article>
+          ) : null}
+          {historyQuery.isError ? (
+            <article className="panel-card compact conflict-card">
+              Failed to load session history. Reconnect and try again.
+            </article>
+          ) : null}
+          {!historyQuery.isLoading &&
+          !historyQuery.isError &&
+          messages.length === 0 &&
+          !streaming ? (
+            <article className="panel-card compact">
+              This session is empty. Start with a prompt or attach files.
+            </article>
+          ) : null}
           {messages.map((message) => (
             <article
               key={message.id}
@@ -749,10 +786,7 @@ export function ChatScreen() {
                 ).map((part, index) => {
                   const approval =
                     part.type === "approval_request"
-                      ? approvals.find(
-                          (entry) =>
-                            part.approvalId && entry.id === part.approvalId,
-                        ) ??
+                      ? (part.approvalId ? approvalsById.get(part.approvalId) ?? null : null) ??
                         (approvals.length === 1
                           ? approvals[0]!
                           : null)
@@ -784,11 +818,8 @@ export function ChatScreen() {
                 </div>
               </div>
               <div className="message-markdown">
-                <ChatMarkdown
-                  text={
-                    streaming.text ||
-                    "Working through the live OpenClaw run..."
-                  }
+                <StreamingMarkdown
+                  text={streaming.text || "Working through the live OpenClaw run..."}
                 />
               </div>
             </article>

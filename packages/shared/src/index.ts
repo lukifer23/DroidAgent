@@ -928,6 +928,10 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
     payload: MemoryStatusSchema,
   }),
   z.object({
+    type: z.literal("harness.updated"),
+    payload: HarnessStatusSchema,
+  }),
+  z.object({
     type: z.literal("error"),
     payload: z.object({
       message: z.string(),

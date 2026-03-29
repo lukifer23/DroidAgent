@@ -13,7 +13,7 @@ import {
 import { useQueryClient } from "@tanstack/react-query";
 import type { ChatMessage, ClientCommand, ServerEvent, WorkspaceEntry } from "@droidagent/shared";
 
-import { useAccessQuery, useAuthQuery, useDashboardQuery, usePasskeysQuery, usePerformanceQuery } from "./app-data";
+import { useAccessQuery, useAuthQuery, useDashboardQuery, usePasskeysQuery } from "./app-data";
 import { useWebSocket } from "./hooks/use-websocket";
 import { api } from "./lib/api";
 import { clientPerformance } from "./lib/client-performance";
@@ -158,7 +158,11 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
       queryClient.invalidateQueries({ queryKey: ["access"] }),
       queryClient.invalidateQueries({ queryKey: ["passkeys"] }),
-      queryClient.invalidateQueries({ queryKey: ["performance"] })
+      queryClient.invalidateQueries({ queryKey: ["performance"] }),
+      queryClient.invalidateQueries({ queryKey: ["sessions"] }),
+      queryClient.invalidateQueries({ queryKey: ["files"] }),
+      queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+      queryClient.invalidateQueries({ queryKey: ["terminal"] }),
     ]);
   });
 
@@ -285,7 +289,6 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const dashboardSessions = dashboardQuery.data?.sessions ?? [];
   usePasskeysQuery(Boolean(authQuery.data?.user));
   useAccessQuery();
-  usePerformanceQuery(Boolean(authQuery.data?.user));
 
   const { status: wsStatus, send: sendRealtimeCommand } = useWebSocket({
     enabled: Boolean(authQuery.data?.user),

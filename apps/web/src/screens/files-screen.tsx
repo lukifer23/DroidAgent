@@ -189,6 +189,19 @@ export function FilesScreen() {
 
       <div className="split-panel">
         <div className="list-panel">
+          {filesQuery.isLoading ? (
+            <article className="panel-card compact">Loading workspace files...</article>
+          ) : null}
+          {filesQuery.isError ? (
+            <article className="panel-card compact conflict-card">
+              Failed to load directory. Verify path and permissions.
+            </article>
+          ) : null}
+          {!filesQuery.isLoading &&
+          !filesQuery.isError &&
+          (filesQuery.data ?? []).length === 0 ? (
+            <article className="panel-card compact">No files found in this directory.</article>
+          ) : null}
           {(filesQuery.data ?? []).map((entry: WorkspaceEntry) => (
             <button
               key={entry.path}
@@ -304,7 +317,13 @@ export function FilesScreen() {
               ) : null}
             </>
           ) : (
-            <div className="viewer-panel">Select a text file to open it.</div>
+            <div className="viewer-panel">
+              {fileQuery.isLoading
+                ? "Loading file..."
+                : fileQuery.isError
+                  ? "Failed to load file. Select another file or retry."
+                  : "Select a text file to open it."}
+            </div>
           )}
         </div>
       </div>

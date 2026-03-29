@@ -3,13 +3,22 @@ import { useQuery } from "@tanstack/react-query";
 
 import type { JobOutputSnapshot, JobRecord } from "@droidagent/shared";
 
-import { useDashboardQuery } from "../app-data";
+import { useAuthQuery, useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { api, postJson } from "../lib/api";
 
+function renderLogTail(value: string, maxChars = 48_000): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+
+  return `...log trimmed in browser (${value.length - maxChars} chars hidden)\n${value.slice(-maxChars)}`;
+}
+
 export function JobsScreen() {
   const { runAction, trackJobStart } = useDroidAgentApp();
-  const dashboardQuery = useDashboardQuery(true);
+  const authQuery = useAuthQuery();
+  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
   const dashboard = dashboardQuery.data;
   const [commandInput, setCommandInput] = useState("pwd");
   const [jobCwdInput, setJobCwdInput] = useState(".");
@@ -87,11 +96,15 @@ export function JobsScreen() {
               <div className="stack-list job-output-grid">
                 <section>
                   <strong>stdout</strong>
-                  <pre className="viewer-panel">{outputQuery.data?.stdout || "No stdout yet."}</pre>
+                  <pre className="viewer-panel">
+                    {renderLogTail(outputQuery.data?.stdout || "No stdout yet.")}
+                  </pre>
                 </section>
                 <section>
                   <strong>stderr</strong>
-                  <pre className="viewer-panel">{outputQuery.data?.stderr || "No stderr yet."}</pre>
+                  <pre className="viewer-panel">
+                    {renderLogTail(outputQuery.data?.stderr || "No stderr yet.")}
+                  </pre>
                 </section>
               </div>
               {outputQuery.data?.truncated ? <small>Output was truncated at the safety ceiling.</small> : null}

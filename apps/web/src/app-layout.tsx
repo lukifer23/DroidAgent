@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   Activity,
   Bot,
@@ -87,7 +87,7 @@ export function AppLayout() {
     setHostDrawerOpen(false);
   }, [location.pathname]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const shell = shellRef.current;
     const topbar = topbarRef.current;
     const nav = navRef.current;
@@ -95,6 +95,7 @@ export function AppLayout() {
       return;
     }
 
+    let frame = 0;
     const updateViewportChrome = () => {
       const topbarHeight = Math.round(topbar.getBoundingClientRect().height);
       const navHeight = Math.round(nav.getBoundingClientRect().height);
@@ -105,24 +106,38 @@ export function AppLayout() {
       shell.style.setProperty("--app-bottom-nav-h", `${navHeight}px`);
       shell.style.setProperty("--app-viewport-h", `${viewportHeight}px`);
     };
+    const scheduleUpdate = () => {
+      if (frame) {
+        return;
+      }
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        updateViewportChrome();
+      });
+    };
 
     const observer = new ResizeObserver(() => {
-      updateViewportChrome();
+      scheduleUpdate();
     });
     observer.observe(topbar);
     observer.observe(nav);
 
     const viewport = window.visualViewport;
-    viewport?.addEventListener("resize", updateViewportChrome);
-    window.addEventListener("resize", updateViewportChrome);
+    viewport?.addEventListener("resize", scheduleUpdate);
+    viewport?.addEventListener("scroll", scheduleUpdate);
+    window.addEventListener("resize", scheduleUpdate);
     updateViewportChrome();
 
     return () => {
+      if (frame) {
+        window.cancelAnimationFrame(frame);
+      }
       observer.disconnect();
-      viewport?.removeEventListener("resize", updateViewportChrome);
-      window.removeEventListener("resize", updateViewportChrome);
+      viewport?.removeEventListener("resize", scheduleUpdate);
+      viewport?.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
     };
-  }, [location.pathname, operatorReady]);
+  }, []);
 
   if (authQuery.isLoading) {
     return <main className="app-shell loading">Loading DroidAgent...</main>;
@@ -303,7 +318,7 @@ export function AppLayout() {
 
       <section className="main-layout routed-layout">
         <div className="content-panel">
-          <div key={location.pathname} className="route-frame">
+          <div className="route-frame">
             <Outlet />
           </div>
         </div>

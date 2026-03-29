@@ -9,6 +9,7 @@ import { clientPerformance } from "../lib/client-performance";
 const INITIAL_DELAY_MS = 500;
 const MAX_DELAY_MS = 30000;
 const SNAPSHOT_URL = "/api/dashboard";
+const DASHBOARD_SYNC_DEBOUNCE_MS = 180;
 
 export interface UseWebSocketOptions {
   enabled: boolean;
@@ -82,6 +83,13 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
     };
   }
 
+  if (event.type === "harness.updated") {
+    return {
+      ...current,
+      harness: event.payload,
+    };
+  }
+
   if (event.type === "sessions.updated") {
     return {
       ...current,
@@ -131,7 +139,28 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const pendingJobOutputRef = useRef<Map<string, { stdout: string; stderr: string; stdoutBytes: number; stderrBytes: number }>>(
     new Map()
   );
+  const dashboardSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   onMessageRef.current = onMessage;
+
+  const syncDashboardSnapshot = useCallback(() => {
+    if (dashboardSyncTimeoutRef.current) {
+      clearTimeout(dashboardSyncTimeoutRef.current);
+    }
+
+    dashboardSyncTimeoutRef.current = setTimeout(async () => {
+      dashboardSyncTimeoutRef.current = null;
+      try {
+        const response = await fetch(SNAPSHOT_URL, { credentials: "include" });
+        if (!response.ok) {
+          return;
+        }
+        const data = await response.json();
+        queryClient.setQueryData(["dashboard"], data);
+      } catch {
+        // ignored by design; WS patches keep UI mostly current
+      }
+    }, DASHBOARD_SYNC_DEBOUNCE_MS);
+  }, [queryClient]);
 
   const flushPendingRealtimeState = useCallback(() => {
     flushHandleRef.current = null;
@@ -295,12 +324,22 @@ export function useWebSocket(options: UseWebSocketOptions) {
           payload.type === "launchAgent.updated" ||
           payload.type === "memory.updated" ||
           payload.type === "context.updated" ||
+          payload.type === "harness.updated" ||
           payload.type === "sessions.updated" ||
           payload.type === "job.updated" ||
           payload.type === "approval.updated" ||
           payload.type === "approvals.updated"
         ) {
           queryClient.setQueryData<DashboardState | undefined>(["dashboard"], (current) => updateDashboardState(current, payload));
+          if (
+            payload.type === "runtime.updated" ||
+            payload.type === "providers.updated" ||
+            payload.type === "channel.updated" ||
+            payload.type === "context.updated" ||
+            payload.type === "memory.updated"
+          ) {
+            syncDashboardSnapshot();
+          }
           if (
             payload.type === "setup.updated" ||
             payload.type === "access.updated" ||
@@ -313,9 +352,6 @@ export function useWebSocket(options: UseWebSocketOptions) {
           ) {
             void queryClient.invalidateQueries({ queryKey: ["startupDiagnostics"] });
           }
-        }
-        if (payload.type === "error") {
-          queryClient.setQueryData(["lastError"], payload.payload.message);
         }
         if (payload.type === "performance.updated") {
           queryClient.setQueryData(["performance"], payload.payload);
@@ -370,7 +406,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
     ws.onerror = () => {
       ws.close();
     };
-  }, [enabled, queryClient]);
+  }, [enabled, queryClient, syncDashboardSnapshot]);
 
   useEffect(() => {
     connect();
@@ -378,6 +414,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
         timeoutRef.current = null;
+      }
+      if (dashboardSyncTimeoutRef.current) {
+        clearTimeout(dashboardSyncTimeoutRef.current);
+        dashboardSyncTimeoutRef.current = null;
       }
       if (flushHandleRef.current !== null) {
         if (typeof flushHandleRef.current === "number" && typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {

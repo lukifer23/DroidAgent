@@ -88,6 +88,10 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 
 ## Notes
 
+- UI/UX overhaul now uses a modular style layer (`styles.css` + `styles/system.css` + `styles/motion.css`) with unified viewport-height calculations for Chat and Terminal shells to reduce layout jumps on navigation and mobile browser chrome changes.
+- Realtime dashboard synchronization now includes explicit harness updates and debounced full-snapshot reconciliation to keep UI state truthful after runtime/provider/channel/context/memory mutations.
+- Chat, Files, Jobs, Settings, and Terminal surfaces now include stronger loading/empty/error behavior and safer fallbacks when websocket transport is degraded.
+- Browser-side heavy paths are hardened: streaming chat render path avoids unnecessary markdown parsing in simple deltas, terminal transcript trimming avoids full-buffer re-encode loops, and large job logs are browser-tailed.
 - File APIs are workspace-relative and text-only.
 - Chat attachments support local images, PDFs, Markdown, JSON, logs, and common code/text files through the real OpenClaw tool path.
 - The chat route is the primary operator surface: live run state, approvals, tool summaries, attachments, markdown/code rendering, and per-run client timings are all surfaced there.

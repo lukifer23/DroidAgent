@@ -119,10 +119,20 @@ export class WebsocketHub {
   async publishRuntimeUpdated(): Promise<void> {
     dashboardService.invalidate();
     startupService.invalidate();
+    const [runtimes, harness] = await Promise.all([
+      runtimeService.getRuntimeStatuses(),
+      harnessService.harnessStatus(),
+    ]);
     this.broadcast(
       ServerEventSchema.parse({
         type: "runtime.updated",
-        payload: await runtimeService.getRuntimeStatuses()
+        payload: runtimes
+      })
+    );
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "harness.updated",
+        payload: harness,
       })
     );
   }
@@ -130,9 +140,10 @@ export class WebsocketHub {
   async publishProvidersUpdated(): Promise<void> {
     dashboardService.invalidate();
     startupService.invalidate();
-    const [providers, cloudProviders] = await Promise.all([
+    const [providers, cloudProviders, harness] = await Promise.all([
       runtimeService.listProviderProfiles(),
-      keychainService.listProviderSummaries()
+      keychainService.listProviderSummaries(),
+      harnessService.harnessStatus(),
     ]);
     this.broadcast(
       ServerEventSchema.parse({
@@ -143,15 +154,31 @@ export class WebsocketHub {
         }
       })
     );
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "harness.updated",
+        payload: harness,
+      })
+    );
   }
 
   async publishChannelUpdated(): Promise<void> {
     dashboardService.invalidate();
     startupService.invalidate();
+    const [channels, harness] = await Promise.all([
+      harnessService.listChannels(),
+      harnessService.harnessStatus(),
+    ]);
     this.broadcast(
       ServerEventSchema.parse({
         type: "channel.updated",
-        payload: await harnessService.listChannels()
+        payload: channels
+      })
+    );
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "harness.updated",
+        payload: harness,
       })
     );
   }
@@ -170,10 +197,20 @@ export class WebsocketHub {
   async publishContextUpdated(): Promise<void> {
     dashboardService.invalidate();
     startupService.invalidate();
+    const [context, harness] = await Promise.all([
+      openclawService.contextManagementStatus(),
+      harnessService.harnessStatus(),
+    ]);
     this.broadcast(
       ServerEventSchema.parse({
         type: "context.updated",
-        payload: await openclawService.contextManagementStatus()
+        payload: context
+      })
+    );
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "harness.updated",
+        payload: harness,
       })
     );
   }
@@ -181,10 +218,20 @@ export class WebsocketHub {
   async publishMemoryUpdated(): Promise<void> {
     dashboardService.invalidate();
     startupService.invalidate();
+    const [memory, harness] = await Promise.all([
+      openclawService.memoryStatus(),
+      harnessService.harnessStatus(),
+    ]);
     this.broadcast(
       ServerEventSchema.parse({
         type: "memory.updated",
-        payload: await openclawService.memoryStatus()
+        payload: memory
+      })
+    );
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "harness.updated",
+        payload: harness,
       })
     );
   }

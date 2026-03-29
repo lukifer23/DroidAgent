@@ -6,6 +6,7 @@ type Listener = () => void;
 interface TerminalStoreState {
   session: TerminalSessionSummary | null;
   transcript: string;
+  transcriptBytes: number;
   truncated: boolean;
   maxBytes: number;
   closeReason: string | null;
@@ -14,6 +15,7 @@ interface TerminalStoreState {
 const emptyState: TerminalStoreState = {
   session: null,
   transcript: "",
+  transcriptBytes: 0,
   truncated: false,
   maxBytes: 256 * 1024,
   closeReason: null,
@@ -46,6 +48,9 @@ class TerminalStore {
     this.state = {
       session: snapshot.session,
       transcript: snapshot.transcript,
+      transcriptBytes:
+        snapshot.session?.transcriptBytes ??
+        textEncoder.encode(snapshot.transcript).length,
       truncated: snapshot.truncated,
       maxBytes: snapshot.maxBytes,
       closeReason: snapshot.closeReason,
@@ -57,6 +62,7 @@ class TerminalStore {
     this.state = {
       ...this.state,
       session,
+      transcriptBytes: session.transcriptBytes,
       closeReason: null,
     };
     this.emit();
@@ -67,17 +73,39 @@ class TerminalStore {
       return;
     }
 
-    const nextTranscript = `${this.state.transcript}${data}`;
     const maxBytes = this.state.maxBytes;
-    const encoded = textEncoder.encode(nextTranscript);
-    const truncated = encoded.byteLength > maxBytes;
+    const chunkBytes = textEncoder.encode(data).length;
+    const nextBytes = this.state.transcriptBytes + chunkBytes;
+    let nextTranscript = `${this.state.transcript}${data}`;
+    let nextTranscriptBytes = nextBytes;
+    let truncated = nextBytes > maxBytes;
+
+    if (truncated) {
+      const overflow = nextBytes - maxBytes;
+      const estimatedCharsToTrim = Math.max(
+        64,
+        Math.ceil(
+          (overflow / Math.max(chunkBytes, 1)) * Math.max(data.length, 1),
+        ),
+      );
+      nextTranscript = nextTranscript.slice(estimatedCharsToTrim);
+      nextTranscriptBytes = textEncoder.encode(nextTranscript).length;
+
+      while (nextTranscriptBytes > maxBytes && nextTranscript.length > 0) {
+        nextTranscript = nextTranscript.slice(
+          Math.min(
+            nextTranscript.length,
+            Math.max(1, Math.ceil(nextTranscript.length * 0.1)),
+          ),
+        );
+        nextTranscriptBytes = textEncoder.encode(nextTranscript).length;
+      }
+    }
+
     this.state = {
       ...this.state,
-      transcript: truncated
-        ? new TextDecoder().decode(
-            encoded.subarray(encoded.byteLength - maxBytes),
-          )
-        : nextTranscript,
+      transcript: nextTranscript,
+      transcriptBytes: nextTranscriptBytes,
       truncated,
     };
     this.emit();

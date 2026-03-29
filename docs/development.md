@@ -6,8 +6,10 @@
   - control plane, auth, runtime orchestration, files, jobs, remote access, Signal, telemetry
 - `apps/web`
   - mobile-first PWA shell
+  - modularized UI shell styling layers (`styles.css`, `styles/system.css`, `styles/motion.css`) with unified viewport-measured layout primitives
 - `packages/shared`
   - shared Zod contracts and event payloads
+  - includes explicit realtime harness update events for dashboard coherence
 
 The default local path is `Ollama + qwen3.5:4b + 65k context + embeddinggemma:300m-qat-q8_0 + smart context management + workspace memory scaffold`.
 
