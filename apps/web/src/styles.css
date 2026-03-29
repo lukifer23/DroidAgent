@@ -2,14 +2,17 @@
   color-scheme: dark;
   --shell-gutter: clamp(0.55rem, 2vw, 0.95rem);
   --bg: #080a0d;
+  --bg-strong: #05070a;
   --panel: rgba(17, 22, 28, 0.86);
-  --panel-strong: rgba(21, 27, 34, 0.96);
+  --panel-strong: rgba(18, 24, 30, 0.96);
   --panel-soft: rgba(24, 30, 37, 0.88);
   --text: #f6f1e8;
   --muted: #a4aeb8;
   --accent: #f3c55c;
   --accent-strong: #ff7b59;
+  --accent-soft: rgba(243, 197, 92, 0.14);
   --good: #7fd7b5;
+  --danger: #ff8c72;
   --border: rgba(255, 255, 255, 0.09);
   --shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
   --shadow-soft: 0 14px 32px rgba(0, 0, 0, 0.26);
@@ -21,6 +24,27 @@
   --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   font-family:
     "Avenir Next", "SF Pro Display", "Segoe UI", ui-sans-serif, sans-serif;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f3f1ec;
+  --bg-strong: #ece8df;
+  --panel: rgba(255, 255, 255, 0.9);
+  --panel-strong: rgba(255, 255, 255, 0.96);
+  --panel-soft: rgba(255, 252, 248, 0.92);
+  --text: #17191d;
+  --muted: #5f6973;
+  --accent: #c07d1b;
+  --accent-strong: #d6553d;
+  --accent-soft: rgba(192, 125, 27, 0.12);
+  --good: #0f8a67;
+  --danger: #c64f33;
+  --border: rgba(23, 25, 29, 0.09);
+  --shadow: 0 18px 48px rgba(56, 41, 16, 0.12);
+  --shadow-soft: 0 10px 24px rgba(56, 41, 16, 0.1);
+  --focus-ring:
+    0 0 0 1px rgba(192, 125, 27, 0.24), 0 0 0 4px rgba(192, 125, 27, 0.12);
 }
 
 * {
@@ -49,7 +73,7 @@ body {
       rgba(243, 197, 92, 0.07),
       transparent 26%
     ),
-    linear-gradient(180deg, #0d1116, #07090c 72%);
+    linear-gradient(180deg, var(--bg), var(--bg-strong) 72%);
   color: var(--text);
   overflow-x: hidden;
 }
@@ -144,8 +168,12 @@ pre {
 .auth-screen {
   min-height: 100vh;
   padding: var(--shell-gutter);
-  max-width: 1180px;
+  max-width: 1280px;
   margin: 0 auto;
+}
+
+.app-shell.chat-route-shell {
+  max-width: 1400px;
 }
 
 .auth-screen {
@@ -212,6 +240,14 @@ small {
   gap: 0.8rem;
 }
 
+.theme-toggle-row {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.compact-actions {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
 .status-block {
   display: grid;
   gap: 0.45rem;
@@ -238,6 +274,10 @@ small {
   grid-template-columns: 1fr auto;
   margin-bottom: 0.35rem;
   padding: 0.35rem 0.1rem 0.15rem;
+}
+
+.topbar.compact {
+  margin-bottom: 0.15rem;
 }
 
 .topbar-copy {
@@ -766,36 +806,95 @@ small {
 }
 
 .chat-panel,
+.chat-shell,
 .files-panel,
 .jobs-panel {
   display: grid;
   gap: 1rem;
 }
 
-.chat-ops-card {
+.chat-shell {
+  min-height: calc(100dvh - 11rem);
+  align-content: start;
+}
+
+.chat-status-bar {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
+  align-items: end;
+  background:
+    linear-gradient(180deg, rgba(243, 197, 92, 0.08), transparent 62%),
+    var(--panel-soft);
+}
+
+.chat-status-copy,
+.chat-status-meta {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.chat-status-copy h2 {
+  margin: 0;
+  font-size: clamp(1.2rem, 3vw, 1.8rem);
+}
+
+.chat-status-copy p {
+  margin: 0;
+  line-height: 1.55;
+}
+
+.chat-surface {
   display: grid;
   gap: 0.85rem;
-  background:
-    linear-gradient(180deg, rgba(243, 197, 92, 0.07), transparent 62%),
-    rgba(255, 255, 255, 0.035);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  min-height: 0;
 }
 
-.chat-ops-header {
+.chat-surface-header {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.chat-capability-row {
   display: flex;
-  align-items: start;
-  justify-content: space-between;
-  gap: 0.85rem;
+  flex-wrap: wrap;
+  gap: 0.55rem;
 }
 
-.chat-ops-header h3 {
-  margin: 0.18rem 0 0;
-  font-size: 1.18rem;
+.chat-tools-panel {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.035);
 }
 
-.chat-ops-copy {
-  margin: 0;
-  color: var(--muted);
-  line-height: 1.5;
+.chat-tools-panel summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.approval-banner {
+  display: grid;
+  gap: 0.8rem;
+  background: rgba(255, 123, 89, 0.08);
+  border-color: rgba(255, 123, 89, 0.18);
+}
+
+.approval-banner > div:first-child {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.chat-message-list {
+  display: grid;
+  gap: 0.8rem;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 0.1rem;
+  scrollbar-width: thin;
 }
 
 .capability-grid {
@@ -876,6 +975,7 @@ small {
   gap: 0.75rem;
   overflow-x: auto;
   padding-bottom: 0.2rem;
+  scrollbar-width: none;
 }
 
 .session-pill {
@@ -928,7 +1028,7 @@ small {
 }
 
 .message-card {
-  width: min(100%, 52rem);
+  width: min(100%, 56rem);
   border-radius: 22px;
   padding: clamp(0.9rem, 2.4vw, 1.1rem);
   border: 1px solid var(--border);
@@ -943,12 +1043,12 @@ small {
 
 .message-card.user {
   justify-self: end;
-  background: rgba(243, 197, 92, 0.11);
+  background: var(--accent-soft);
 }
 
 .message-card.assistant {
   justify-self: start;
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.045);
 }
 
 .message-card.tool,
@@ -970,6 +1070,20 @@ small {
   justify-content: space-between;
   gap: 0.75rem;
   margin-bottom: 0.55rem;
+}
+
+.message-meta-copy {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.message-copy-button {
+  padding: 0.52rem 0.7rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  box-shadow: none;
+  font-size: 0.82rem;
 }
 
 .message-meta span {
@@ -1043,13 +1157,87 @@ small {
   word-break: break-word;
   border-radius: 16px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.035);
+  background: rgba(255, 255, 255, 0.03);
   padding: 0.85rem 0.95rem;
 }
 
 .message-details {
   display: grid;
   gap: 0.65rem;
+}
+
+.attachment-stack {
+  display: grid;
+  gap: 0.65rem;
+  margin-bottom: 0.8rem;
+}
+
+.attachment-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 0.7rem;
+}
+
+.attachment-image-card,
+.attachment-chip {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text);
+  text-decoration: none;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.72rem;
+}
+
+.attachment-image-card img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 14px;
+}
+
+.attachment-image-card span {
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.attachment-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.attachment-chip strong {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+}
+
+.attachment-chip span,
+.attachment-chip small {
+  color: var(--muted);
+}
+
+.markdown-code-shell {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.markdown-code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.2rem 0.15rem 0;
+}
+
+.markdown-code-toolbar span {
+  color: var(--muted);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
 }
 
 .message-details summary {
@@ -1092,6 +1280,58 @@ small {
     rgba(11, 15, 20, 0.92);
   backdrop-filter: blur(24px);
   box-shadow: var(--shadow-soft);
+}
+
+.composer-rich {
+  position: sticky;
+  bottom: calc(5.6rem + env(safe-area-inset-bottom));
+  gap: 0.9rem;
+}
+
+.composer-shell {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
+}
+
+.composer-attachment-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.composer-attachment-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  padding: 0.72rem 0.78rem;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.composer-attachment-chip > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.composer-attachment-chip strong {
+  font-size: 0.92rem;
+}
+
+.composer-attachment-chip span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.hidden-file-input {
+  display: none;
 }
 
 .composer-status {
@@ -1370,6 +1610,22 @@ button:active:not(:disabled),
     align-items: start;
   }
 
+  .chat-status-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-shell {
+    min-height: calc(100dvh - 9.75rem);
+  }
+
+  .chat-surface {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+  }
+
+  .chat-message-list {
+    min-height: 0;
+  }
+
   .system-rail {
     display: flex;
     overflow-x: auto;
@@ -1409,6 +1665,10 @@ button:active:not(:disabled),
   .link-preview-row,
   .setup-overview-grid,
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .theme-toggle-row {
     grid-template-columns: 1fr;
   }
 
@@ -1469,10 +1729,6 @@ button:active:not(:disabled),
     width: 100%;
   }
 
-  .chat-ops-header {
-    flex-direction: column;
-  }
-
   .session-pill {
     min-width: 152px;
   }
@@ -1480,6 +1736,27 @@ button:active:not(:disabled),
   .message-meta {
     align-items: start;
     flex-direction: column;
+  }
+
+  .composer-actions {
+    justify-content: stretch;
+  }
+
+  .composer-actions button {
+    flex: 1 1 0;
+  }
+
+  .composer-attachment-chip {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .chat-capability-row {
+    gap: 0.4rem;
+  }
+
+  .status-chip {
+    font-size: 0.74rem;
   }
 }
 

@@ -51,7 +51,7 @@ test("streams chat replies through the real websocket path", async ({
   await gotoSignedIn(page, "/chat");
   const prompt = `hello from e2e ${testInfo.project.name}`;
   const assistantReply = page
-    .locator(".chat-thread .message-card.assistant p")
+    .locator(".message-card.assistant p")
     .filter({
       hasText: new RegExp(`^Test harness reply: ${prompt}$`),
     });
@@ -59,7 +59,7 @@ test("streams chat replies through the real websocket path", async ({
 
   await page
     .getByPlaceholder(
-      "Ask DroidAgent to inspect, edit, search, or operate on this Mac...",
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command...",
     )
     .fill(prompt);
   await expect(sendButton).toBeEnabled();
@@ -71,6 +71,34 @@ test("streams chat replies through the real websocket path", async ({
       .filter({ hasText: new RegExp(`^${prompt}$`) }),
   ).toBeVisible();
   await expect(assistantReply.last()).toBeVisible();
+});
+
+test("uploads chat attachments and shows them in the live thread", async ({
+  page,
+}) => {
+  await gotoSignedIn(page, "/chat");
+
+  await page.locator('input[type="file"]').setInputFiles([
+    {
+      name: "notes.md",
+      mimeType: "text/markdown",
+      buffer: Buffer.from("# Notes\n"),
+    },
+  ]);
+  await expect(page.getByText(/notes\.md/i)).toBeVisible();
+
+  await page.getByRole("button", { name: "Send" }).click();
+
+  await expect(
+    page.locator(".message-card.user .attachment-chip").filter({
+      hasText: /notes\.md/i,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".message-card.assistant p").filter({
+      hasText: /1 attachment/i,
+    }).last(),
+  ).toBeVisible();
 });
 
 test("surfaces file conflicts from disk changes and allows reload", async ({
@@ -108,7 +136,7 @@ test("reconnects after a temporary offline period", async ({ page }) => {
   );
   const prompt = "reconnect check";
   const assistantReply = page
-    .locator(".chat-thread .message-card.assistant p")
+    .locator(".message-card.assistant p")
     .filter({
       hasText: new RegExp(`^Test harness reply: ${prompt}$`),
     });
@@ -128,7 +156,7 @@ test("reconnects after a temporary offline period", async ({ page }) => {
   const sendButton = page.getByRole("button", { name: "Send" });
   await page
     .getByPlaceholder(
-      "Ask DroidAgent to inspect, edit, search, or operate on this Mac...",
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command...",
     )
     .fill(prompt);
   await expect(sendButton).toBeEnabled();

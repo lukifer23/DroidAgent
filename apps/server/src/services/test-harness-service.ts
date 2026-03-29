@@ -12,6 +12,7 @@ import {
   type ChannelConfigSummary,
   type ChannelStatus,
   type ChatMessage,
+  type ChatSendRequest,
   type HarnessStatus,
   type RuntimeStatus,
   type SessionSummary
@@ -99,6 +100,8 @@ export class TestHarnessService implements HarnessAdapter {
       activeModel: `ollama/${runtimeSettings.ollamaModel}`,
       contextWindow: runtimeSettings.ollamaContextWindow,
       thinkingDefault: "off",
+      imageModel: "ollama/qwen2.5vl:3b",
+      pdfModel: "ollama/qwen2.5vl:3b",
       workspaceRoot: runtimeSettings.workspaceRoot,
       toolProfile: "coding",
       availableTools: [
@@ -116,11 +119,14 @@ export class TestHarnessService implements HarnessAdapter {
         "session_status",
         "subagents",
         "memory_search",
-        "memory_get"
+        "memory_get",
+        "image",
+        "pdf"
       ],
       workspaceOnlyFs: true,
       memorySearchEnabled: true,
       sessionMemoryEnabled: true,
+      attachmentsEnabled: true,
       execHost: "gateway",
       execSecurity: "allowlist",
       execAsk: "on-miss"
@@ -168,16 +174,18 @@ export class TestHarnessService implements HarnessAdapter {
     return cloneMessages(this.ensureSession(sessionKey));
   }
 
-  async sendMessage(sessionKey: string, message: string, relay: StreamRelayCallbacks): Promise<{ runId: string }> {
+  async sendMessage(sessionKey: string, request: ChatSendRequest, relay: StreamRelayCallbacks): Promise<{ runId: string }> {
     await this.abortMessage(sessionKey);
 
     const session = this.ensureSession(sessionKey);
+    const message = request.text.trim() || "Inspect the attached files.";
     session.push(
       ChatMessageSchema.parse({
         id: randomUUID(),
         sessionId: sessionKey,
         role: "user",
         text: message,
+        attachments: request.attachments,
         createdAt: nowIso(),
         status: "complete",
         source: "web"
@@ -185,7 +193,10 @@ export class TestHarnessService implements HarnessAdapter {
     );
 
     const runId = randomUUID();
-    const responseText = `Test harness reply: ${message}`;
+    const responseText =
+      request.attachments.length > 0
+        ? `Test harness reply: ${message} (${request.attachments.length} attachment${request.attachments.length === 1 ? "" : "s"})`
+        : `Test harness reply: ${message}`;
     const chunks = chunkText(responseText);
     const activeRun: ActiveRun = {
       timer: null,

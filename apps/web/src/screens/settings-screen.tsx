@@ -40,7 +40,14 @@ function metricDescription(
 
 export function SettingsScreen() {
   const queryClient = useQueryClient();
-  const { canInstallApp, installApp, runAction } = useDroidAgentApp();
+  const {
+    canInstallApp,
+    installApp,
+    resolvedTheme,
+    runAction,
+    setThemePreference,
+    themePreference,
+  } = useDroidAgentApp();
   const dashboardQuery = useDashboardQuery(true);
   const accessQuery = useAccessQuery();
   const passkeysQuery = usePasskeysQuery(true);
@@ -376,6 +383,21 @@ export function SettingsScreen() {
             </article>
             <article className="health-row ready">
               <div className="health-row-top">
+                <strong>Multimodal attachments</strong>
+                <span
+                  className={`status-chip${dashboard?.harness.attachmentsEnabled ? " ready" : ""}`}
+                >
+                  {dashboard?.harness.attachmentsEnabled ? "Live" : "Pending"}
+                </span>
+              </div>
+              <small>
+                {dashboard?.harness.imageModel
+                  ? `${dashboard.harness.imageModel} powers image and PDF analysis for the chat composer.`
+                  : "No local multimodal model is configured yet."}
+              </small>
+            </article>
+            <article className="health-row ready">
+              <div className="health-row-top">
                 <strong>Workspace scaffold</strong>
                 <span className="status-chip ready">Prepared</span>
               </div>
@@ -463,6 +485,35 @@ export function SettingsScreen() {
               Review Memory Files
             </Link>
           </div>
+        </article>
+
+        <article className="panel-card">
+          <div className="panel-heading">
+            <h3>Appearance</h3>
+            <p>
+              Keep the shell readable on the Mac and the Fold. Theme preference
+              applies immediately and stays local to this browser.
+            </p>
+          </div>
+          <div className="button-row theme-toggle-row">
+            {(["system", "dark", "light"] as const).map((option) => (
+              <button
+                key={option}
+                className={themePreference === option ? "" : "secondary"}
+                onClick={() => setThemePreference(option)}
+                type="button"
+              >
+                {option === "system"
+                  ? `System (${resolvedTheme})`
+                  : option.charAt(0).toUpperCase() + option.slice(1)}
+              </button>
+            ))}
+          </div>
+          <small>
+            Current theme: {resolvedTheme}. Chat is optimized for a compact
+            dedicated viewport with a sticky composer and responsive message
+            width.
+          </small>
         </article>
 
         <article className="panel-card">

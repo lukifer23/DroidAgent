@@ -290,7 +290,7 @@ export class WebsocketHub {
       }
 
       if (command.type === "chat.send") {
-        const { sessionId, text } = command.payload;
+        const { sessionId, text, attachments } = command.payload;
         const enqueueMetric = performanceService.start("server", "chat.send.enqueue", {
           transport: "ws",
           sessionId
@@ -307,7 +307,10 @@ export class WebsocketHub {
         let finished = false;
         let runId = "";
 
-        const run = await harnessService.sendMessage(sessionId, text, {
+        const run = await harnessService.sendMessage(sessionId, {
+          text,
+          attachments,
+        }, {
           onDelta: async (delta) => {
             if (!firstDeltaRecorded) {
               firstDeltaRecorded = true;

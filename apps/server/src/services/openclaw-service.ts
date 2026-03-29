@@ -9,7 +9,9 @@ import {
   ApprovalRecordSchema,
   ChannelConfigSummarySchema,
   ChannelStatusSchema,
+  ChatAttachmentSchema,
   ChatMessageSchema,
+  ChatSendRequestSchema,
   ContextManagementStatusSchema,
   HarnessStatusSchema,
   MemoryStatusSchema,
@@ -22,6 +24,7 @@ import {
   type ChannelConfigSummary,
   type ChannelStatus,
   type ChatMessage,
+  type ChatSendRequest,
   type ContextManagementStatus,
   type HarnessStatus,
   type MemoryStatus,
@@ -39,7 +42,11 @@ import {
 } from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
 import { TtlCache } from "../lib/ttl-cache.js";
-import { appStateService } from "./app-state-service.js";
+import {
+  DEFAULT_OLLAMA_VISION_MODEL,
+  appStateService,
+} from "./app-state-service.js";
+import { attachmentService } from "./attachment-service.js";
 import type {
   HarnessRuntimeModelConfig,
   StreamRelayCallbacks,
@@ -54,6 +61,8 @@ const CHANNEL_STATUS_TTL_MS = 5_000;
 const MEMORY_STATUS_TTL_MS = 5_000;
 const DEFAULT_WEB_SESSION_ID = "web:operator";
 const INTERNAL_SESSION_IDS = new Set(["agent:main:main"]);
+const ATTACHMENT_PAYLOAD_START = "<<DROIDAGENT_ATTACHMENTS_V1>>";
+const ATTACHMENT_PAYLOAD_END = "<<END_DROIDAGENT_ATTACHMENTS_V1>>";
 const CODING_PROFILE_TOOLS = [
   "read",
   "write",
@@ -71,6 +80,7 @@ const CODING_PROFILE_TOOLS = [
   "memory_search",
   "memory_get",
   "image",
+  "pdf",
 ] as const;
 const MESSAGING_PROFILE_TOOLS = [
   "message",
@@ -202,6 +212,31 @@ const WORKSPACE_BOOTSTRAP_FILES = [
   ["memory/README.md", MEMORY_README_TEMPLATE],
   ["skills/README.md", SKILLS_README_TEMPLATE],
 ] as const;
+const OPERATOR_EXEC_ALLOWLIST_PATTERNS = [
+  "/bin/df*",
+  "/usr/bin/df*",
+  "/usr/bin/du*",
+  "/usr/bin/stat*",
+  "/usr/bin/uname*",
+  "/usr/sbin/diskutil*",
+  "/usr/sbin/system_profiler*",
+  "/usr/sbin/sysctl*",
+] as const;
+
+interface GatewayAttachmentRecord {
+  id: string;
+  name: string;
+  kind: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  filePath: string;
+}
+
+interface GatewayAttachmentPayload {
+  text: string;
+  attachments: GatewayAttachmentRecord[];
+}
 
 interface OpenClawMemorySourceCount {
   source: string;
@@ -434,17 +469,84 @@ function collectTextParts(value: unknown): string[] {
   return [formatStructuredValue(record)];
 }
 
+function extractAttachmentPayload(
+  value: string,
+): { payload: GatewayAttachmentPayload | null; remainder: string } {
+  const startIndex = value.indexOf(ATTACHMENT_PAYLOAD_START);
+  const endIndex = value.indexOf(ATTACHMENT_PAYLOAD_END);
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return { payload: null, remainder: value };
+  }
+
+  const payloadText = value
+    .slice(startIndex + ATTACHMENT_PAYLOAD_START.length, endIndex)
+    .trim();
+  const remainder = value.slice(endIndex + ATTACHMENT_PAYLOAD_END.length).trim();
+
+  try {
+    const parsed = JSON.parse(payloadText) as GatewayAttachmentPayload;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.text !== "string" ||
+      !Array.isArray(parsed.attachments)
+    ) {
+      return { payload: null, remainder: value };
+    }
+
+    return {
+      payload: {
+        text: parsed.text,
+        attachments: parsed.attachments,
+      },
+      remainder,
+    };
+  } catch {
+    return { payload: null, remainder: value };
+  }
+}
+
+function publicAttachmentsFromPayload(
+  payload: GatewayAttachmentPayload | null,
+) {
+  if (!payload) {
+    return [];
+  }
+
+  return payload.attachments.map((attachment) =>
+    ChatAttachmentSchema.parse({
+      id: attachment.id,
+      name: attachment.name,
+      kind: attachment.kind,
+      mimeType: attachment.mimeType,
+      size: attachment.size,
+      url: attachment.url,
+    }),
+  );
+}
+
+function stripGeneratedAttachmentInstructions(value: string): string {
+  const { payload, remainder } = extractAttachmentPayload(value);
+  if (!payload) {
+    return value;
+  }
+
+  return payload.text.trim() || remainder.trim() || "Inspect the attached files.";
+}
+
 function renderHistoryContent(message: Record<string, unknown>): string {
   const lines = collectTextParts(message.content ?? message.text);
   if (lines.length > 0) {
-    return lines.join("\n\n");
+    return stripGeneratedAttachmentInstructions(lines.join("\n\n"));
   }
 
   if (typeof message.text === "string" && message.text.trim()) {
-    return message.text;
+    return stripGeneratedAttachmentInstructions(message.text);
   }
 
-  return formatStructuredValue(message.content ?? "");
+  return stripGeneratedAttachmentInstructions(
+    formatStructuredValue(message.content ?? ""),
+  );
 }
 
 function resolveMessageRole(role: unknown): ChatMessage["role"] {
@@ -490,7 +592,7 @@ function collapsePreview(text: string): string {
 
 function renderPreviewValue(preview: unknown, lastMessage: unknown): string {
   if (typeof preview === "string" && preview.trim()) {
-    return collapsePreview(preview);
+    return collapsePreview(stripGeneratedAttachmentInstructions(preview));
   }
 
   if (typeof lastMessage === "string" && lastMessage.trim()) {
@@ -508,10 +610,59 @@ function renderPreviewValue(preview: unknown, lastMessage: unknown): string {
   }
 
   if (Array.isArray(lastMessage)) {
-    return collapsePreview(collectTextParts(lastMessage).join("\n\n"));
+    return collapsePreview(
+      stripGeneratedAttachmentInstructions(
+        collectTextParts(lastMessage).join("\n\n"),
+      ),
+    );
   }
 
   return "";
+}
+
+function attachmentToolGuidance(kind: string): string {
+  if (kind === "image") {
+    return "Use the image tool to inspect it.";
+  }
+  if (kind === "pdf") {
+    return "Use the pdf tool to extract and analyze it.";
+  }
+  return "Use the read tool to inspect it.";
+}
+
+function buildAttachmentPrompt(
+  request: ChatSendRequest,
+  attachments: GatewayAttachmentRecord[],
+): string {
+  if (attachments.length === 0) {
+    return request.text.trim();
+  }
+
+  const normalizedText =
+    request.text.trim() ||
+    "Inspect the attached files and respond with the most useful summary, findings, and next actions.";
+  const payload: GatewayAttachmentPayload = {
+    text: normalizedText,
+    attachments,
+  };
+  const manifest = JSON.stringify(payload, null, 2);
+  const attachmentInstructions = attachments
+    .map(
+      (attachment) =>
+        `- ${attachment.name} (${attachment.kind}, ${attachment.mimeType}, ${attachment.size} bytes)\n  Local path: ${attachment.filePath}\n  ${attachmentToolGuidance(attachment.kind)}`,
+    )
+    .join("\n");
+
+  return [
+    ATTACHMENT_PAYLOAD_START,
+    manifest,
+    ATTACHMENT_PAYLOAD_END,
+    "Local attachments are available for this request. Use the listed local paths and the appropriate tools instead of guessing.",
+    attachmentInstructions,
+    "",
+    "User request:",
+    normalizedText,
+  ].join("\n");
 }
 
 function isInternalSessionRecord(
@@ -579,20 +730,46 @@ function resolveHarnessToolProfile(
   return "custom";
 }
 
-function resolveProfileTools(profile: HarnessStatus["toolProfile"]): string[] {
-  if (profile === "minimal") {
-    return [...MINIMAL_PROFILE_TOOLS];
+function resolveModelRef(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) {
+    return value;
   }
 
-  if (profile === "coding") {
-    return [...CODING_PROFILE_TOOLS];
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof (value as { primary?: unknown }).primary === "string"
+  ) {
+    return (value as { primary: string }).primary;
   }
 
-  if (profile === "messaging") {
-    return [...MESSAGING_PROFILE_TOOLS];
+  return null;
+}
+
+function resolveProfileTools(
+  profile: HarnessStatus["toolProfile"],
+  currentConfig: Record<string, unknown> | null,
+): string[] {
+  const tools: string[] =
+    profile === "minimal"
+      ? [...MINIMAL_PROFILE_TOOLS]
+      : profile === "coding"
+        ? [...CODING_PROFILE_TOOLS]
+        : profile === "messaging"
+          ? [...MESSAGING_PROFILE_TOOLS]
+          : [];
+  const allowed =
+    getConfigPathValue(currentConfig, "tools.allow") ?? [];
+  if (Array.isArray(allowed)) {
+    for (const entry of allowed) {
+      if (typeof entry === "string" && entry.trim()) {
+        tools.push(entry);
+      }
+    }
   }
 
-  return [];
+  return [...new Set(tools)];
 }
 
 function parseHistoryMessage(
@@ -600,11 +777,18 @@ function parseHistoryMessage(
   message: Record<string, unknown>,
   index: number,
 ): ChatMessage {
+  const renderedText = renderHistoryContent(message);
+  const { payload } = extractAttachmentPayload(
+    collectTextParts(message.content ?? message.text).join("\n\n") ||
+      (typeof message.text === "string" ? message.text : ""),
+  );
+
   return ChatMessageSchema.parse({
     id: String(message.id ?? `${sessionKey}-${index}`),
     sessionId: sessionKey,
     role: resolveMessageRole(message.role),
-    text: renderHistoryContent(message),
+    text: renderedText,
+    attachments: publicAttachmentsFromPayload(payload),
     createdAt: resolveIsoTimestamp(message),
     status: "complete",
     source: "openclaw",
@@ -878,6 +1062,35 @@ export class OpenClawService {
     }
   }
 
+  private async ensureOperatorExecAllowlist(): Promise<void> {
+    const seededVersion = await appStateService.getJsonSetting<string | null>(
+      "openclawExecAllowlistSeedVersion",
+      null,
+    );
+    if (seededVersion === "v1") {
+      return;
+    }
+
+    const token = await this.ensureGatewayToken();
+    for (const pattern of OPERATOR_EXEC_ALLOWLIST_PATTERNS) {
+      await this.execOpenClaw([
+        "approvals",
+        "allowlist",
+        "add",
+        pattern,
+        "--agent",
+        "main",
+        "--gateway",
+        "--url",
+        OPENCLAW_GATEWAY_URL,
+        "--token",
+        token,
+      ]);
+    }
+
+    await appStateService.setJsonSetting("openclawExecAllowlistSeedVersion", "v1");
+  }
+
   private async openclawEnv(): Promise<NodeJS.ProcessEnv> {
     return {
       ...baseEnv(),
@@ -929,6 +1142,7 @@ export class OpenClawService {
     >,
   ) {
     const modelId = runtimeSettings.ollamaModel;
+    const visionModelId = DEFAULT_OLLAMA_VISION_MODEL;
     const contextWindow = runtimeSettings.ollamaContextWindow;
 
     return {
@@ -944,6 +1158,15 @@ export class OpenClawService {
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow,
           maxTokens: contextWindow,
+        },
+        {
+          id: visionModelId,
+          name: visionModelId,
+          reasoning: false,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 65536,
+          maxTokens: 65536,
         },
       ],
     };
@@ -1546,8 +1769,11 @@ export class OpenClawService {
         "agents.defaults.model.primary",
         this.resolvePrimaryModel(runtimeSettings),
       ],
+      ["agents.defaults.imageModel.primary", `ollama/${DEFAULT_OLLAMA_VISION_MODEL}`],
+      ["agents.defaults.pdfModel.primary", `ollama/${DEFAULT_OLLAMA_VISION_MODEL}`],
       ["agents.defaults.thinkingDefault", "off"],
       ["tools.profile", "coding"],
+      ["tools.allow", ["pdf"]],
       [
         "models.providers.ollama",
         this.buildOllamaProviderConfig(runtimeSettings),
@@ -1680,13 +1906,23 @@ export class OpenClawService {
               "agents.defaults.thinkingDefault",
             ) as string)
           : "off",
+      imageModel: resolveModelRef(
+        getConfigPathValue(currentConfig, "agents.defaults.imageModel"),
+      ),
+      pdfModel: resolveModelRef(
+        getConfigPathValue(currentConfig, "agents.defaults.pdfModel"),
+      ),
       workspaceRoot: this.resolveWorkspaceRoot(runtimeSettings),
       toolProfile,
-      availableTools: resolveProfileTools(toolProfile),
+      availableTools: resolveProfileTools(toolProfile, currentConfig),
       workspaceOnlyFs:
         getConfigPathValue(currentConfig, "tools.fs.workspaceOnly") === true,
       memorySearchEnabled: cacheConfig?.enabled === true,
       sessionMemoryEnabled: experimentalConfig?.sessionMemory === true,
+      attachmentsEnabled:
+        resolveModelRef(
+          getConfigPathValue(currentConfig, "agents.defaults.imageModel"),
+        ) !== null,
       execHost:
         typeof getConfigPathValue(currentConfig, "tools.exec.host") === "string"
           ? (getConfigPathValue(currentConfig, "tools.exec.host") as string)
@@ -1790,6 +2026,7 @@ export class OpenClawService {
 
     try {
       await this.gatewayHealthProbe();
+      await this.ensureOperatorExecAllowlist();
       return;
     } catch (error) {
       const failure = await this.explainGatewayFailure(error, {
@@ -1853,6 +2090,7 @@ export class OpenClawService {
       }
       try {
         await this.gatewayHealthProbe();
+        await this.ensureOperatorExecAllowlist();
         return;
       } catch (error) {
         if (i === GATEWAY_READY_RETRIES - 1) {
@@ -1986,13 +2224,31 @@ export class OpenClawService {
 
   async sendMessage(
     sessionKey: string,
-    message: string,
+    request: ChatSendRequest,
     relay: StreamRelayCallbacks,
   ): Promise<{ runId: string }> {
     await this.ensureConfigured();
+    await this.ensureOperatorExecAllowlist();
     if (this.activeRuns.has(sessionKey)) {
       await this.abortMessage(sessionKey);
     }
+
+    const normalizedRequest = ChatSendRequestSchema.parse(request);
+    const attachments = await Promise.all(
+      normalizedRequest.attachments.map(async (attachment) => {
+        const stored = await attachmentService.get(attachment.id);
+        return {
+          id: stored.id,
+          name: stored.name,
+          kind: stored.kind,
+          mimeType: stored.mimeType,
+          size: stored.size,
+          url: stored.url,
+          filePath: stored.filePath,
+        } satisfies GatewayAttachmentRecord;
+      }),
+    );
+    const message = buildAttachmentPrompt(normalizedRequest, attachments);
 
     const runId = randomUUID();
     const controller = new AbortController();

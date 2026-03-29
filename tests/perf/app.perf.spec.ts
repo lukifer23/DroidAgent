@@ -35,23 +35,23 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   await page.getByRole("link", { name: "Chat" }).click();
   await expect(
     page.getByPlaceholder(
-      "Ask DroidAgent to inspect, edit, search, or operate on this Mac...",
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command...",
     ),
   ).toBeVisible();
 
   const prompt = `perf-${projectName}`;
-  const assistantMessages = page.locator(".chat-thread .message-card.assistant p");
+  const assistantMessages = page.locator(".message-card.assistant p");
   const sendButton = page.getByRole("button", { name: "Send" });
   await page
     .getByPlaceholder(
-      "Ask DroidAgent to inspect, edit, search, or operate on this Mac...",
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command...",
     )
     .fill(prompt);
   await expect(sendButton).toBeEnabled();
   const sendStart = performance.now();
   await sendButton.click();
   await page.waitForFunction(() => {
-    const assistantParagraphs = [...document.querySelectorAll<HTMLElement>(".chat-thread .message-card.assistant p")];
+    const assistantParagraphs = [...document.querySelectorAll<HTMLElement>(".message-card.assistant p")];
     return assistantParagraphs.some((element) => {
       const text = element.textContent?.trim() ?? "";
       return text.startsWith("Test harness");

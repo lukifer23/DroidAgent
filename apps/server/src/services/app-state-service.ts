@@ -112,6 +112,7 @@ export const DEFAULT_CLOUD_PROVIDER_PREFERENCES: CloudProviderPreferences = {
 
 export const DEFAULT_OLLAMA_MODEL = "qwen3.5:4b";
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "embeddinggemma:300m-qat-q8_0";
+export const DEFAULT_OLLAMA_VISION_MODEL = "qwen2.5vl:3b";
 
 const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   selectedRuntime: "ollama",

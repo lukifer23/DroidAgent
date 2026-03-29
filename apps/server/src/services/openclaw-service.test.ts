@@ -19,6 +19,7 @@ const {
 }));
 
 vi.mock("./app-state-service.js", () => ({
+  DEFAULT_OLLAMA_VISION_MODEL: "qwen2.5vl:3b",
   appStateService: {
     getRuntimeSettings,
     updateRuntimeSettings,
@@ -235,6 +236,12 @@ describe("OpenClaw context management policy", () => {
           model: {
             primary: "ollama/qwen3.5:4b",
           },
+          imageModel: {
+            primary: "ollama/qwen2.5vl:3b",
+          },
+          pdfModel: {
+            primary: "ollama/qwen2.5vl:3b",
+          },
           thinkingDefault: "off",
           memorySearch: {
             provider: "ollama",
@@ -290,6 +297,15 @@ describe("OpenClaw context management policy", () => {
                 input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 65536,
+            maxTokens: 65536,
+              },
+              {
+                id: "qwen2.5vl:3b",
+                name: "qwen2.5vl:3b",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 65536,
                 maxTokens: 65536,
               },
             ],
@@ -316,6 +332,7 @@ describe("OpenClaw context management policy", () => {
       },
       tools: {
         profile: "coding",
+        allow: ["pdf"],
         exec: {
           host: "gateway",
           security: "allowlist",
@@ -398,6 +415,12 @@ describe("OpenClaw context management policy", () => {
             mode: "off",
           },
           thinkingDefault: "off",
+          imageModel: {
+            primary: "ollama/qwen2.5vl:3b",
+          },
+          pdfModel: {
+            primary: "ollama/qwen2.5vl:3b",
+          },
           model: {
             primary: "ollama/qwen3.5:4b",
           },
@@ -415,6 +438,15 @@ describe("OpenClaw context management policy", () => {
                 reasoning: false,
                 name: "qwen3.5:4b",
                 id: "qwen3.5:4b",
+              },
+              {
+                maxTokens: 65536,
+                cost: { cacheWrite: 0, input: 0, cacheRead: 0, output: 0 },
+                contextWindow: 65536,
+                input: ["text", "image"],
+                reasoning: false,
+                name: "qwen2.5vl:3b",
+                id: "qwen2.5vl:3b",
               },
             ],
             api: "ollama",
@@ -459,6 +491,7 @@ describe("OpenClaw context management policy", () => {
       },
       tools: {
         profile: "coding",
+        allow: ["pdf"],
         exec: {
           ask: "on-miss",
           security: "allowlist",
@@ -497,6 +530,10 @@ describe("OpenClaw context management policy", () => {
 
   it("reuses a healthy externally managed gateway instead of spawning a new local process", async () => {
     vi.spyOn(openclawService, "ensureConfigured").mockResolvedValue(undefined);
+    vi.spyOn(
+      openclawService as never,
+      "ensureOperatorExecAllowlist" as never,
+    ).mockResolvedValue(undefined);
     const execSpy = vi
       .spyOn(openclawService as never, "execOpenClaw" as never)
       .mockResolvedValueOnce(JSON.stringify({ version: "2026.3.24" }));
@@ -634,6 +671,52 @@ describe("OpenClaw context management policy", () => {
     });
   });
 
+  it("strips attachment envelopes from history while preserving attachment metadata", async () => {
+    vi.spyOn(openclawService, "callGateway").mockResolvedValue({
+      messages: [
+        {
+          id: "message-user",
+          role: "user",
+          ts: 1_710_000_000_000,
+          content: `<<DROIDAGENT_ATTACHMENTS_V1>>
+{
+  "text": "Inspect the attached files.",
+  "attachments": [
+    {
+      "id": "attachment-1",
+      "name": "notes.md",
+      "kind": "markdown",
+      "mimeType": "text/markdown",
+      "size": 120,
+      "url": "/api/chat/uploads/attachment-1",
+      "filePath": "/tmp/notes.md"
+    }
+  ]
+}
+<<END_DROIDAGENT_ATTACHMENTS_V1>>
+Local attachments are available for this request.
+User request:
+Inspect the attached files.`,
+        },
+      ],
+    } as never);
+
+    const messages = await openclawService.loadHistory("web:operator");
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      text: "Inspect the attached files.",
+    });
+    expect(messages[0]?.attachments).toEqual([
+      expect.objectContaining({
+        id: "attachment-1",
+        name: "notes.md",
+        kind: "markdown",
+      }),
+    ]);
+  });
+
   it("surfaces the live harness tool and session policy", async () => {
     runtimeSettings.activeProviderId = "ollama-default";
     runtimeSettings.ollamaModel = "qwen3.5:4b";
@@ -650,6 +733,12 @@ describe("OpenClaw context management policy", () => {
       agents: {
         defaults: {
           thinkingDefault: "off",
+          imageModel: {
+            primary: "ollama/qwen2.5vl:3b",
+          },
+          pdfModel: {
+            primary: "ollama/qwen2.5vl:3b",
+          },
           memorySearch: {
             cache: {
               enabled: true,
@@ -662,6 +751,7 @@ describe("OpenClaw context management policy", () => {
       },
       tools: {
         profile: "coding",
+        allow: ["pdf"],
         exec: {
           host: "gateway",
           security: "allowlist",
@@ -683,10 +773,13 @@ describe("OpenClaw context management policy", () => {
       gatewayBind: "loopback",
       activeModel: "ollama/qwen3.5:4b",
       contextWindow: 65536,
+      imageModel: "ollama/qwen2.5vl:3b",
+      pdfModel: "ollama/qwen2.5vl:3b",
       toolProfile: "coding",
       workspaceOnlyFs: true,
       memorySearchEnabled: true,
       sessionMemoryEnabled: true,
+      attachmentsEnabled: true,
       execHost: "gateway",
       execSecurity: "allowlist",
       execAsk: "on-miss",
@@ -702,6 +795,7 @@ describe("OpenClaw context management policy", () => {
         "sessions_history",
         "subagents",
         "memory_search",
+        "pdf",
       ]),
     );
   });
@@ -806,6 +900,10 @@ describe("OpenClaw context management policy", () => {
     const ensureConfiguredSpy = vi
       .spyOn(openclawService as never, "ensureConfigured" as never)
       .mockResolvedValue(undefined);
+    vi.spyOn(
+      openclawService as never,
+      "ensureOperatorExecAllowlist" as never,
+    ).mockResolvedValue(undefined);
     const abortMessageSpy = vi
       .spyOn(openclawService, "abortMessage")
       .mockResolvedValue(undefined);
@@ -813,7 +911,10 @@ describe("OpenClaw context management policy", () => {
       .spyOn(openclawService as never, "streamMessageRun" as never)
       .mockResolvedValue(undefined);
 
-    await openclawService.sendMessage("web:operator", "hello", {
+    await openclawService.sendMessage("web:operator", {
+      text: "hello",
+      attachments: [],
+    }, {
       onDelta: vi.fn(),
       onDone: vi.fn(),
       onError: vi.fn(),
@@ -828,6 +929,10 @@ describe("OpenClaw context management policy", () => {
     const ensureConfiguredSpy = vi
       .spyOn(openclawService as never, "ensureConfigured" as never)
       .mockResolvedValue(undefined);
+    vi.spyOn(
+      openclawService as never,
+      "ensureOperatorExecAllowlist" as never,
+    ).mockResolvedValue(undefined);
     const abortMessageSpy = vi
       .spyOn(openclawService, "abortMessage")
       .mockResolvedValue(undefined);
@@ -844,7 +949,10 @@ describe("OpenClaw context management policy", () => {
       controller: new AbortController(),
     });
 
-    await openclawService.sendMessage("web:operator", "hello again", {
+    await openclawService.sendMessage("web:operator", {
+      text: "hello again",
+      attachments: [],
+    }, {
       onDelta: vi.fn(),
       onDone: vi.fn(),
       onError: vi.fn(),

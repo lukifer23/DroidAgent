@@ -1,6 +1,6 @@
 # DroidAgent
 
-DroidAgent is a macOS-first, single-owner control plane for OpenClaw with a mobile-first PWA shell for chat, files, jobs, runtime control, passkeys, Tailscale phone access, and optional Signal ingress.
+DroidAgent is a macOS-first, single-owner control plane for OpenClaw with a mobile-first PWA shell for chat, files, jobs, runtime control, passkeys, Tailscale phone access, optional Signal ingress, and local multimodal attachments.
 
 ## What Ships In V1
 
@@ -8,7 +8,7 @@ DroidAgent is a macOS-first, single-owner control plane for OpenClaw with a mobi
   - Hono API, passkey auth, SQLite app state, Keychain-backed cloud secrets, canonical-origin enforcement, workspace-scoped files and jobs, OpenClaw orchestration, and owner-authenticated websocket fanout
 - `apps/web`
   - installable React/Vite PWA with Setup, Chat, Files, Jobs, Models, Channels, and Settings routes
-  - fold-friendly layout, reconnect-safe streaming, diagnostics card, and subtle motion tuned for operator use
+  - fold-friendly layout, reconnect-safe streaming, dedicated chat surface, light/dark themes, multimodal attachments, diagnostics card, and subtle motion tuned for operator use
 - `packages/shared`
   - shared Zod contracts for dashboard, auth, files, jobs, channels, access state, and diagnostics telemetry
 
@@ -50,6 +50,7 @@ After the owner passkey is enrolled, the `Setup` route now drives the common pat
 - Ollama is the default local runtime path
 - the default local Ollama context budget is `65k`
 - the default local semantic-memory embedding model is `embeddinggemma:300m-qat-q8_0` on Ollama
+- the default local multimodal model is `qwen2.5vl:3b` on Ollama for image and PDF analysis
 - semantic memory stays local-first with fallback disabled, so embeddings do not silently drift to a cloud provider
 - llama.cpp remains the advanced local runtime path
 - Tailscale Serve is the primary and only remote path exposed in the main UI right now
@@ -80,6 +81,7 @@ After the owner passkey is enrolled, the `Setup` route now drives the common pat
 ## Notes
 
 - File APIs are workspace-relative and text-only.
+- Chat attachments support local images, PDFs, Markdown, JSON, logs, and common code/text files through the real OpenClaw tool path.
 - Owner jobs run inside the configured workspace jail and persist replayable stdout and stderr logs.
 - Browser acceptance now runs against a real server-backed Playwright harness; route interception and fake websocket replacement are no longer the primary test path.
 - Performance reporting is advisory in this pass. `verify:full` enforces correctness; the perf scripts produce artifacts under `artifacts/perf/`.

@@ -7,9 +7,15 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { WebSocketServer } from "ws";
+import { ChatSendRequestSchema } from "@droidagent/shared";
 
 import { db, schema } from "./db/index.js";
 import { accessService } from "./services/access-service.js";
+import {
+  AttachmentNotFoundError,
+  AttachmentValidationError,
+  attachmentService,
+} from "./services/attachment-service.js";
 import { authService } from "./services/auth-service.js";
 import { dashboardService } from "./services/dashboard-service.js";
 import { FileConflictError, fileService } from "./services/file-service.js";
@@ -53,6 +59,12 @@ app.onError((error, c) => {
       },
       409,
     );
+  }
+  if (error instanceof AttachmentValidationError) {
+    return c.json({ error: error.message }, 400);
+  }
+  if (error instanceof AttachmentNotFoundError) {
+    return c.json({ error: error.message }, 404);
   }
   return c.json(
     {
@@ -1052,12 +1064,57 @@ app.get("/api/sessions/:sessionId/messages", async (c) => {
   return c.json(await harnessService.loadHistory(c.req.param("sessionId")));
 });
 
+app.post("/api/chat/uploads", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const formData = await c.req.formData();
+  const files = formData
+    .getAll("files")
+    .filter((entry): entry is File => entry instanceof File);
+  if (files.length === 0) {
+    return c.json({ error: "Attach at least one file." }, 400);
+  }
+
+  const uploads = await Promise.all(
+    files.map(async (file) => {
+      const stored = await attachmentService.saveUpload(file);
+      return {
+        id: stored.id,
+        name: stored.name,
+        kind: stored.kind,
+        mimeType: stored.mimeType,
+        size: stored.size,
+        url: stored.url,
+      };
+    }),
+  );
+
+  return c.json({ attachments: uploads }, 201);
+});
+
+app.get("/api/chat/uploads/:attachmentId", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const attachment = await attachmentService.get(c.req.param("attachmentId"));
+  const body = await fs.promises.readFile(attachment.filePath);
+  c.header("content-type", attachment.mimeType);
+  c.header("content-length", String(attachment.size));
+  c.header(
+    "content-disposition",
+    `inline; filename="${attachment.name.replace(/"/g, "")}"`,
+  );
+  c.header("cache-control", "private, max-age=31536000, immutable");
+  return c.body(body);
+});
+
 app.post("/api/sessions/:sessionId/messages", async (c) => {
   const blocked = await mutationGuard(c);
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  const body = (await c.req.json()) as { text: string };
+  const body = ChatSendRequestSchema.parse(await c.req.json());
   const sessionId = c.req.param("sessionId");
   let runId = "";
   const measuredRelay = withMeasuredStreamRelay("http", sessionId, {
@@ -1075,11 +1132,7 @@ app.post("/api/sessions/:sessionId/messages", async (c) => {
       await websocketHub.publishSessionsUpdated();
     },
   });
-  const run = await harnessService.sendMessage(
-    sessionId,
-    body.text,
-    measuredRelay.relay,
-  );
+  const run = await harnessService.sendMessage(sessionId, body, measuredRelay.relay);
   runId = run.runId;
   measuredRelay.markAccepted();
   return c.json({ ok: true, runId: run.runId }, 202);

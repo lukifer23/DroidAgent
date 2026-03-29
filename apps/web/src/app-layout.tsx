@@ -164,13 +164,18 @@ export function AppLayout() {
   ] as const;
 
   return (
-    <main className="app-shell">
-      <header className="topbar">
+    <main className={`app-shell${isChatRoute ? " chat-route-shell" : ""}`}>
+      <header className={`topbar${isChatRoute ? " compact" : ""}`}>
         <div className="topbar-copy">
           <div className="eyebrow">DroidAgent</div>
-          <h1>{isChatRoute ? "Operator Chat" : "Control Center"}</h1>
+          <h1>{isChatRoute ? "Live Operator Chat" : "Control Center"}</h1>
           <small className="topbar-meta">
-            {remoteReady ? "Tailscale live" : "Local-first"} •{" "}
+            {isChatRoute
+              ? "Real OpenClaw session"
+              : remoteReady
+                ? "Tailscale live"
+                : "Local-first"}{" "}
+            •{" "}
             {activeProvider?.model ?? dashboard?.setup.selectedModel ?? "No model"}
             {activeProvider?.contextWindow
               ? ` • ${formatTokenBudget(activeProvider.contextWindow)}`

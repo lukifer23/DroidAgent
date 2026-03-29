@@ -73,6 +73,24 @@ export function ModelsScreen() {
       </article>
 
       <article className="panel-card compact">
+        <strong>Multimodal Path</strong>
+        <span>
+          {dashboard?.harness.attachmentsEnabled
+            ? "Image and PDF analysis live"
+            : "Attachments not ready"}
+        </span>
+        <small>
+          {dashboard?.harness.imageModel ?? "No image model"} • pdf tool{" "}
+          {dashboard?.harness.availableTools.includes("pdf") ? "enabled" : "pending"}
+        </small>
+        <small>
+          The chat composer can upload images, PDFs, Markdown, JSON, and code
+          files. OpenClaw routes those through the local tool path instead of a
+          fake side channel.
+        </small>
+      </article>
+
+      <article className="panel-card compact">
         <strong>Workspace Context</strong>
         <span>
           {dashboard?.memory.ready

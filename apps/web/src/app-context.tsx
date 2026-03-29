@@ -35,6 +35,9 @@ interface DroidAgentAppContextValue {
   selectedSessionId: string;
   setSelectedSessionId: (sessionId: string) => void;
   sendRealtimeCommand: (command: ClientCommand) => boolean;
+  themePreference: "system" | "dark" | "light";
+  resolvedTheme: "dark" | "light";
+  setThemePreference: (value: "system" | "dark" | "light") => void;
   canInstallApp: boolean;
   installApp: () => Promise<void>;
   beginRouteTransition: (path: string) => void;
@@ -51,7 +54,27 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const [selectedSessionId, setSelectedSessionId] = useState("web:operator");
+  const [themePreference, setThemePreference] = useState<
+    "system" | "dark" | "light"
+  >(() => {
+    if (typeof window === "undefined") {
+      return "system";
+    }
+    const saved = window.localStorage.getItem("droidagent-theme");
+    return saved === "dark" || saved === "light" || saved === "system"
+      ? saved
+      : "system";
+  });
   const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
+  const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">(() => {
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-color-scheme: light)").matches
+    ) {
+      return "light";
+    }
+    return "dark";
+  });
 
   const routeTransitionRef = useRef<{ path: string; metric: ReturnType<typeof clientPerformance.start> } | null>(null);
   const pendingChatMetricsRef = useRef<
@@ -81,6 +104,39 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.localStorage.setItem("droidagent-theme", themePreference);
+    const media = window.matchMedia("(prefers-color-scheme: light)");
+    const applyTheme = () => {
+      const nextTheme =
+        themePreference === "system"
+          ? media.matches
+            ? "light"
+            : "dark"
+          : themePreference;
+      setResolvedTheme(nextTheme);
+      document.documentElement.dataset.theme = nextTheme;
+      document.documentElement.style.colorScheme = nextTheme;
+      const themeMeta = document.querySelector('meta[name="theme-color"]');
+      if (themeMeta) {
+        themeMeta.setAttribute(
+          "content",
+          nextTheme === "light" ? "#f3f1ec" : "#0d1116",
+        );
+      }
+    };
+
+    applyTheme();
+    media.addEventListener("change", applyTheme);
+    return () => {
+      media.removeEventListener("change", applyTheme);
+    };
+  }, [themePreference]);
 
   const refreshQueries = useEffectEvent(async () => {
     await Promise.all([
@@ -286,6 +342,9 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       selectedSessionId,
       setSelectedSessionId,
       sendRealtimeCommand,
+      themePreference,
+      resolvedTheme,
+      setThemePreference,
       canInstallApp: Boolean(installPromptEvent),
       installApp,
       beginRouteTransition,
@@ -305,6 +364,8 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       runAction,
       selectedSessionId,
       sendRealtimeCommand,
+      themePreference,
+      resolvedTheme,
       trackChatSubmit,
       trackJobStart,
       wsStatus

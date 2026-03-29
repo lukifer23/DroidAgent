@@ -9,6 +9,7 @@ import {
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OLLAMA_MODEL,
+  DEFAULT_OLLAMA_VISION_MODEL,
   appStateService,
 } from "./app-state-service.js";
 import { accessService } from "./access-service.js";
@@ -62,6 +63,7 @@ export class QuickstartService {
       DEFAULT_OLLAMA_MODEL;
     const embeddingModelId =
       initialSettings.ollamaEmbeddingModel || DEFAULT_OLLAMA_EMBEDDING_MODEL;
+    const visionModelId = DEFAULT_OLLAMA_VISION_MODEL;
 
     if (!isDirectory(workspaceRoot)) {
       throw new Error("Workspace root must be an existing directory.");
@@ -178,6 +180,10 @@ export class QuickstartService {
     );
     if (embeddingPrepared) {
       actions.push(`Prepared local embedding model ${embeddingModelId}.`);
+    }
+    const visionPrepared = await runtimeService.ensureOllamaModel(visionModelId);
+    if (visionPrepared) {
+      actions.push(`Prepared local multimodal model ${visionModelId}.`);
     }
 
     const memoryStatus = await openclawService.prepareSemanticMemory({

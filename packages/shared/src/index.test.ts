@@ -101,6 +101,8 @@ describe("DashboardStateSchema", () => {
         activeModel: "ollama/qwen3.5:4b",
         contextWindow: 65536,
         thinkingDefault: "off",
+        imageModel: "ollama/qwen2.5vl:3b",
+        pdfModel: "ollama/qwen2.5vl:3b",
         workspaceRoot: "/tmp/droidagent",
         toolProfile: "coding",
         availableTools: [
@@ -123,6 +125,7 @@ describe("DashboardStateSchema", () => {
         workspaceOnlyFs: true,
         memorySearchEnabled: true,
         sessionMemoryEnabled: true,
+        attachmentsEnabled: true,
         execHost: "gateway",
         execSecurity: "allowlist",
         execAsk: "on-miss",
@@ -225,6 +228,46 @@ describe("DashboardStateSchema", () => {
     });
 
     expect(parsed.type).toBe("chat.stream.delta");
+  });
+
+  it("accepts chat attachments and attachment-backed messages", () => {
+    const payload = {
+      text: "Summarize the attached PDF and screenshot.",
+      attachments: [
+        {
+          id: "attachment-1",
+          name: "report.pdf",
+          kind: "pdf",
+          mimeType: "application/pdf",
+          size: 1024,
+          url: "/api/chat/uploads/attachment-1",
+        },
+        {
+          id: "attachment-2",
+          name: "screenshot.png",
+          kind: "image",
+          mimeType: "image/png",
+          size: 2048,
+          url: "/api/chat/uploads/attachment-2",
+        },
+      ],
+    } as const;
+
+    const message = ServerEventSchema.parse({
+      type: "chat.message",
+      payload: {
+        id: "message-1",
+        sessionId: "web:operator",
+        role: "user",
+        text: payload.text,
+        attachments: payload.attachments,
+        createdAt: new Date().toISOString(),
+        status: "complete",
+        source: "web",
+      },
+    });
+
+    expect(message.payload.attachments).toHaveLength(2);
   });
 
   it("accepts targeted access updates", () => {

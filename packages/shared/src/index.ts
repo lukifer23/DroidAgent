@@ -317,16 +317,56 @@ export type SessionSummary = z.infer<typeof SessionSummarySchema>;
 export const ChatRoleSchema = z.enum(["user", "assistant", "system", "tool"]);
 export type ChatRole = z.infer<typeof ChatRoleSchema>;
 
+export const ChatAttachmentKindSchema = z.enum([
+  "image",
+  "pdf",
+  "markdown",
+  "text",
+  "code",
+  "json",
+]);
+export type ChatAttachmentKind = z.infer<typeof ChatAttachmentKindSchema>;
+
+export const ChatAttachmentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  kind: ChatAttachmentKindSchema,
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+  url: z.string(),
+});
+export type ChatAttachment = z.infer<typeof ChatAttachmentSchema>;
+
 export const ChatMessageSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
   role: ChatRoleSchema,
   text: z.string(),
+  attachments: z.array(ChatAttachmentSchema).default([]),
   createdAt: z.string(),
   status: z.enum(["streaming", "complete", "error"]).default("complete"),
   source: z.enum(["web", "signal", "openclaw"]).default("web"),
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
+
+const ChatSendRequestBodySchema = z.object({
+  text: z.string().default(""),
+  attachments: z.array(ChatAttachmentSchema).default([]),
+});
+
+export const ChatSendRequestSchema = ChatSendRequestBodySchema
+  .superRefine((value, ctx) => {
+    if (value.text.trim().length > 0 || value.attachments.length > 0) {
+      return;
+    }
+
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["text"],
+      message: "Provide a message or at least one attachment.",
+    });
+  });
+export type ChatSendRequest = z.infer<typeof ChatSendRequestSchema>;
 
 export const JobStatusSchema = z.enum([
   "queued",
@@ -519,12 +559,15 @@ export const HarnessStatusSchema = z.object({
   activeModel: z.string().nullable(),
   contextWindow: z.number().int().positive().nullable(),
   thinkingDefault: z.string().nullable(),
+  imageModel: z.string().nullable(),
+  pdfModel: z.string().nullable(),
   workspaceRoot: z.string().nullable(),
   toolProfile: HarnessToolProfileSchema,
   availableTools: z.array(z.string()),
   workspaceOnlyFs: z.boolean(),
   memorySearchEnabled: z.boolean(),
   sessionMemoryEnabled: z.boolean(),
+  attachmentsEnabled: z.boolean(),
   execHost: z.string().nullable(),
   execSecurity: z.string().nullable(),
   execAsk: z.string().nullable(),
@@ -607,7 +650,8 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("chat.send"),
     payload: z.object({
       sessionId: z.string(),
-      text: z.string().min(1),
+      text: ChatSendRequestBodySchema.shape.text,
+      attachments: ChatSendRequestBodySchema.shape.attachments,
     }),
   }),
   z.object({

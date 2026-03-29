@@ -2,6 +2,7 @@ import { TEST_MODE } from "../env.js";
 import type {
   ApprovalRecord,
   ChannelConfigSummary,
+  ChatSendRequest,
   ChannelStatus,
   ChatMessage,
   HarnessStatus,
@@ -30,7 +31,7 @@ export interface HarnessAdapter {
   harnessStatus(): Promise<HarnessStatus>;
   listSessions(): Promise<SessionSummary[]>;
   loadHistory(sessionKey: string): Promise<ChatMessage[]>;
-  sendMessage(sessionKey: string, message: string, relay: StreamRelayCallbacks): Promise<{ runId: string }>;
+  sendMessage(sessionKey: string, request: ChatSendRequest, relay: StreamRelayCallbacks): Promise<{ runId: string }>;
   abortMessage(sessionKey: string): Promise<void>;
   listApprovals(): Promise<ApprovalRecord[]>;
   resolveApproval(approvalId: string, resolution: "approved" | "denied"): Promise<void>;

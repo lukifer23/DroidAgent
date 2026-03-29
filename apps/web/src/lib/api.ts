@@ -9,12 +9,14 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(input: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers ?? {});
+  if (!(init?.body instanceof FormData) && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+
   const response = await fetch(input, {
     credentials: "include",
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {})
-    },
+    headers,
     ...init
   });
 
@@ -45,5 +47,12 @@ export function putJson<T>(input: string, body: unknown): Promise<T> {
   return api<T>(input, {
     method: "PUT",
     body: JSON.stringify(body)
+  });
+}
+
+export function postFormData<T>(input: string, body: FormData): Promise<T> {
+  return api<T>(input, {
+    method: "POST",
+    body,
   });
 }

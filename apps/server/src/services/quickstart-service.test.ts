@@ -39,6 +39,7 @@ const {
 }));
 
 vi.mock("./app-state-service.js", () => ({
+  DEFAULT_OLLAMA_VISION_MODEL: "qwen2.5vl:3b",
   appStateService: {
     getRuntimeSettings,
     updateRuntimeSettings,

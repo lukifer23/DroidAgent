@@ -99,6 +99,13 @@ async function main() {
         health.setup?.selectedRuntime ? "ok" : "warn",
         health.setup?.selectedRuntime ?? "No runtime selected"
       );
+      add(
+        "Multimodal path",
+        health.harness?.attachmentsEnabled ? "ok" : "warn",
+        health.harness?.imageModel
+          ? `${health.harness.imageModel} • ${health.harness.availableTools?.includes("pdf") ? "pdf tool on" : "pdf tool off"}`
+          : "No local image/PDF model configured"
+      );
 
       for (const runtime of health.runtimeSummary ?? []) {
         const metadata = runtime.metadata ?? {};
