@@ -238,6 +238,9 @@ export function SettingsScreen() {
             </article>
           </div>
           <div className="button-row">
+            <Link className="button-link secondary" to="/terminal">
+              Rescue Terminal
+            </Link>
             <button
               onClick={() =>
                 void runAction(async () => {

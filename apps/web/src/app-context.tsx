@@ -17,6 +17,7 @@ import { useAccessQuery, useAuthQuery, useDashboardQuery, usePasskeysQuery, useP
 import { useWebSocket } from "./hooks/use-websocket";
 import { api } from "./lib/api";
 import { clientPerformance } from "./lib/client-performance";
+import { terminalStore } from "./lib/terminal-store";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -256,6 +257,21 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
         });
         pendingJobMetricsRef.current.delete(event.payload.jobId);
       }
+      return;
+    }
+
+    if (event.type === "terminal.updated") {
+      terminalStore.updateSession(event.payload);
+      return;
+    }
+
+    if (event.type === "terminal.output") {
+      terminalStore.appendOutput(event.payload.sessionId, event.payload.data);
+      return;
+    }
+
+    if (event.type === "terminal.closed") {
+      terminalStore.close(event.payload.sessionId, event.payload.reason);
       return;
     }
 

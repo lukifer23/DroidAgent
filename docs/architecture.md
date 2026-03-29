@@ -12,7 +12,7 @@
   - owns the only browser-facing integration boundary; the browser never receives an OpenClaw token
 - `apps/web`
   - mobile-first routed PWA
-  - Setup, Chat, Files, Jobs, Models, Settings
+  - Setup, Chat, Files, Jobs, Models, Settings, plus an owner-only rescue terminal route
   - reconnect-safe streaming, install prompt, Fold-friendly layout
 - `packages/shared`
   - common schemas for dashboard state, files, jobs, passkeys, access/bootstrap payloads, diagnostics telemetry, and WebSocket events
@@ -66,6 +66,7 @@
 - text files can be loaded and saved through the PWA with conflict checks and atomic writes
 - jobs are owner-submitted shell commands inside the configured workspace jail
 - stdout/stderr are streamed live and persisted under `~/.droidagent/logs/jobs`
+- the rescue terminal is a separate PTY-backed owner shell with its own transcript and audit log path under `~/.droidagent/logs/terminal`
 
 ## Diagnostics and performance
 

@@ -56,3 +56,9 @@ export function postFormData<T>(input: string, body: FormData): Promise<T> {
     body,
   });
 }
+
+export function deleteJson<T>(input: string): Promise<T> {
+  return api<T>(input, {
+    method: "DELETE",
+  });
+}

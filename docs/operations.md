@@ -25,6 +25,7 @@ Use `pnpm stop` when you need a clean local reset. It stops managed DroidAgent h
 
 - DroidAgent logs: `~/.droidagent/logs`
 - Job logs: `~/.droidagent/logs/jobs`
+- Rescue terminal logs: `~/.droidagent/logs/terminal`
 - OpenClaw gateway log: `~/.droidagent/logs/openclaw.log`
 - llama.cpp log: `~/.droidagent/logs/llama-cpp.log`
 - Signal daemon log: `~/.droidagent/logs/signal-daemon.log`
@@ -63,6 +64,7 @@ pnpm perf:report
 - If the normal macOS Tailscale daemon is unavailable, DroidAgent can start a userspace `tailscaled` process under `~/.droidagent/tailscale` and operate against its socket instead.
 - After owner sign-in, Setup is only the first-run wizard: it prepares the default local runtime path and creates the Tailscale phone URL automatically when Tailscale is already authenticated.
 - Once the operator path is ready, daily use should happen from `Chat`; Setup moves out of the primary bottom-nav flow.
+- The Host drawer and Settings are the maintenance entry points. The rescue terminal stays outside the primary bottom nav so the operator flow stays focused on Chat, Files, Jobs, Models, and Settings.
 - The same quickstart path also seeds `MEMORY.md`, `PREFERENCES.md`, `HEARTBEAT.md`, daily notes under `memory/`, and the workspace `skills/` directory.
 - The default local chat model is `qwen3.5:4b` with a `65k` context budget and thinking disabled.
 - The default local multimodal model is `qwen2.5vl:3b` for image and PDF analysis inside the chat composer.
@@ -81,6 +83,8 @@ pnpm perf:report
 - The Settings route also shows the running build/version identity so the live host, screenshots, logs, and repo all stay on the same release line.
 - The chat route now accepts local images, PDFs, Markdown, JSON, logs, and common code/text files. DroidAgent stores them under `~/.droidagent/uploads` and passes them through the real OpenClaw tool path instead of a parallel mock transcript.
 - The chat route is the operator console: it surfaces live run state, tool summaries, approval cards, attachments, code blocks, and client-side per-run timings.
+- The rescue terminal is owner-only and PTY-backed. It defaults to a workspace shell and requires explicit confirmation before opening a full host shell.
+- Use Jobs for replayable workspace commands. Use the rescue terminal only for interactive recovery work that needs a real shell.
 - Performance artifacts are written under `artifacts/perf/`.
 - Access, dashboard, runtime, provider, and startup-status reads use short-lived in-memory caches with explicit invalidation on mutations so the mobile shell stays responsive without serving long-lived stale state.
 - OpenClaw runs with default thinking disabled unless you explicitly re-enable it in-session, while smart context management still controls compaction, pruning, and memory flush policy.

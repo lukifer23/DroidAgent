@@ -29,6 +29,7 @@
     "perf:report": "node ./scripts/perf-report.mjs",
     "format": "prettier --write .",
     "bootstrap": "./scripts/bootstrap.sh",
+    "start": "node ./scripts/start.mjs",
     "stop": "node ./scripts/stop.mjs --quiet",
     "restart": "pnpm stop && pnpm bootstrap"
   },

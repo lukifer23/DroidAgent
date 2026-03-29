@@ -19,6 +19,7 @@ const loadSettingsScreen = () => import("./screens/settings-screen");
 const loadJobsScreen = () => import("./screens/jobs-screen");
 const loadModelsScreen = () => import("./screens/models-screen");
 const loadChannelsScreen = () => import("./screens/channels-screen");
+const loadTerminalScreen = () => import("./screens/terminal-screen");
 
 const SetupScreen = lazy(async () => ({
   default: (await loadSetupScreen()).SetupScreen,
@@ -35,6 +36,9 @@ const ModelsScreen = lazy(async () => ({
 const ChannelsScreen = lazy(async () => ({
   default: (await loadChannelsScreen()).ChannelsScreen,
 }));
+const TerminalScreen = lazy(async () => ({
+  default: (await loadTerminalScreen()).TerminalScreen,
+}));
 const preloadScreens = () =>
   Promise.all([
     loadSetupScreen(),
@@ -42,6 +46,7 @@ const preloadScreens = () =>
     loadJobsScreen(),
     loadModelsScreen(),
     loadChannelsScreen(),
+    loadTerminalScreen(),
   ]);
 
 function withLazyScreen(Component: ComponentType) {
@@ -153,6 +158,12 @@ const settingsRoute = createRoute({
   component: withLazyScreen(SettingsScreen),
 });
 
+const terminalRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "terminal",
+  component: withLazyScreen(TerminalScreen),
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   setupRoute,
@@ -162,6 +173,7 @@ const routeTree = rootRoute.addChildren([
   modelsRoute,
   channelsRoute,
   settingsRoute,
+  terminalRoute,
 ]);
 
 const router = createRouter({

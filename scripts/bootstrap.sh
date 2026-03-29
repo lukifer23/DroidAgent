@@ -139,7 +139,11 @@ fi
 echo ""
 echo "${GREEN}DroidAgent is running.${NC} Open ${SERVER_URL} in your browser."
 echo ""
-open "${SERVER_URL}" 2>/dev/null || echo "Open manually: ${SERVER_URL}"
+if [[ -x /usr/bin/open ]]; then
+  /usr/bin/open "${SERVER_URL}" 2>/dev/null || echo "Open manually: ${SERVER_URL}"
+else
+  echo "Open manually: ${SERVER_URL}"
+fi
 echo "Next step: complete passkey sign-in, then run the Setup quickstart to prepare the workspace, Ollama, OpenClaw, memory, and the Tailscale phone URL."
 echo "Diagnostics: pnpm run doctor"
 echo ""

@@ -30,6 +30,7 @@ import { buildInfoService } from "./services/build-info-service.js";
 import { quickstartService } from "./services/quickstart-service.js";
 import { signalService } from "./services/signal-service.js";
 import { startupService } from "./services/startup-service.js";
+import { terminalService } from "./services/terminal-service.js";
 import { testHarnessService } from "./services/test-harness-service.js";
 import {
   clearDirectoryContents,
@@ -462,6 +463,54 @@ app.get("/api/diagnostics/performance", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   return c.json(performanceService.serverSnapshot());
+});
+
+app.get("/api/terminal/session", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await terminalService.getSnapshot());
+});
+
+app.post("/api/terminal/session", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = (await c.req.json()) as {
+    scope?: "workspace" | "host";
+    cwd?: string;
+    cols?: number;
+    rows?: number;
+    confirmHostAccess?: boolean;
+  };
+  if (body.scope === "host" && !body.confirmHostAccess) {
+    return c.json(
+      {
+        error: "Host shell access requires explicit confirmation.",
+      },
+      400,
+    );
+  }
+  return c.json(
+    await terminalService.createSession({
+      scope: body.scope === "host" ? "host" : "workspace",
+      cwd: body.cwd,
+      cols: body.cols,
+      rows: body.rows,
+      confirmHostAccess: body.confirmHostAccess,
+      userId: c.get("user")?.id,
+    }),
+    201,
+  );
+});
+
+app.delete("/api/terminal/session/:sessionId", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  await terminalService.closeSession(c.req.param("sessionId"));
+  return c.json({ ok: true });
 });
 
 app.get("/api/memory/status", async (c) => {

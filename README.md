@@ -10,7 +10,7 @@ DroidAgent is a macOS-first, single-owner control plane for OpenClaw with a mobi
   - Hono API, passkey auth, SQLite app state, Keychain-backed cloud secrets, canonical-origin enforcement, workspace-scoped files and jobs, OpenClaw orchestration, build/version identity, and owner-authenticated websocket fanout
 - `apps/web`
   - installable React/Vite PWA with a chat-first operator shell, first-run Setup, Files, Jobs, Models, and Settings
-  - fold-friendly layout, reconnect-safe streaming, a dedicated OpenClaw operator console, light/dark themes, multimodal attachments, compact host-status surfaces, and subtle motion tuned for operator use
+  - fold-friendly layout, reconnect-safe streaming, a dedicated OpenClaw operator console, an owner-only rescue terminal, light/dark themes, multimodal attachments, compact host-status surfaces, and subtle motion tuned for operator use
 - `packages/shared`
   - shared Zod contracts for dashboard, auth, files, jobs, channels, access state, and diagnostics telemetry
 
@@ -92,6 +92,7 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - Chat attachments support local images, PDFs, Markdown, JSON, logs, and common code/text files through the real OpenClaw tool path.
 - The chat route is the primary operator surface: live run state, approvals, tool summaries, attachments, markdown/code rendering, and per-run client timings are all surfaced there.
 - Owner jobs run inside the configured workspace jail and persist replayable stdout and stderr logs.
+- The rescue terminal is a real PTY surface, separate from Jobs. It defaults to a workspace-scoped shell and exposes a deliberate host-shell escalation path for recovery work.
 - Browser acceptance now runs against a real server-backed Playwright harness; route interception and fake websocket replacement are no longer the primary test path.
 - Performance reporting is advisory in this pass. `verify:full` enforces correctness; the perf scripts produce artifacts under `artifacts/perf/`.
 - The current live acceptance target is `web/PWA + owner passkey + Tailscale remote + Ollama local runtime`.

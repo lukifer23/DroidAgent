@@ -61,6 +61,33 @@ test("loads the simplified setup screen", async ({ page }) => {
   await expectNoHorizontalOverflow(page);
 });
 
+test("starts a rescue terminal session and streams PTY output", async ({
+  page,
+}) => {
+  const state = await gotoSignedIn(page, "/terminal");
+
+  await expect(
+    page.getByRole("heading", { name: /Recover permissions, auth, and host state directly/i }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+
+  await page.getByRole("button", { name: "Start Workspace Shell" }).click();
+  await expect(page.getByText(/Workspace rescue shell/i)).toBeVisible();
+
+  await page.locator(".terminal-canvas").click();
+  await page.keyboard.type("printf 'term-ok'\\r");
+
+  await expect
+    .poll(async () => {
+      const response = await page.request.get(
+        new URL("/api/terminal/session", state.baseUrl).toString(),
+      );
+      const body = (await response.json()) as { transcript?: string };
+      return body.transcript?.includes("term-ok") ?? false;
+    })
+    .toBe(true);
+});
+
 test("streams chat replies through the real websocket path", async ({
   page,
 }, testInfo) => {

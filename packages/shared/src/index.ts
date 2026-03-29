@@ -506,6 +506,45 @@ export const JobOutputSnapshotSchema = z.object({
 });
 export type JobOutputSnapshot = z.infer<typeof JobOutputSnapshotSchema>;
 
+export const TerminalScopeSchema = z.enum(["workspace", "host"]);
+export type TerminalScope = z.infer<typeof TerminalScopeSchema>;
+
+export const TerminalSessionStatusSchema = z.enum([
+  "starting",
+  "running",
+  "closed",
+  "error",
+]);
+export type TerminalSessionStatus = z.infer<
+  typeof TerminalSessionStatusSchema
+>;
+
+export const TerminalSessionSummarySchema = z.object({
+  id: z.string(),
+  scope: TerminalScopeSchema,
+  cwd: z.string(),
+  shell: z.string(),
+  title: z.string(),
+  status: TerminalSessionStatusSchema,
+  pid: z.number().int().positive().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  idleExpiresAt: z.string().nullable(),
+  transcriptBytes: z.number().int().nonnegative(),
+});
+export type TerminalSessionSummary = z.infer<
+  typeof TerminalSessionSummarySchema
+>;
+
+export const TerminalSnapshotSchema = z.object({
+  session: TerminalSessionSummarySchema.nullable(),
+  transcript: z.string(),
+  truncated: z.boolean(),
+  maxBytes: z.number().int().positive(),
+  closeReason: z.string().nullable(),
+});
+export type TerminalSnapshot = z.infer<typeof TerminalSnapshotSchema>;
+
 export const PasskeySummarySchema = z.object({
   id: z.string(),
   createdAt: z.string(),
@@ -759,6 +798,27 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("runtime.refresh"),
     payload: z.object({}),
   }),
+  z.object({
+    type: z.literal("terminal.input"),
+    payload: z.object({
+      sessionId: z.string(),
+      data: z.string().min(1),
+    }),
+  }),
+  z.object({
+    type: z.literal("terminal.resize"),
+    payload: z.object({
+      sessionId: z.string(),
+      cols: z.number().int().min(20).max(400),
+      rows: z.number().int().min(8).max(200),
+    }),
+  }),
+  z.object({
+    type: z.literal("terminal.close"),
+    payload: z.object({
+      sessionId: z.string(),
+    }),
+  }),
 ]);
 export type ClientCommand = z.infer<typeof ClientCommandSchema>;
 
@@ -876,6 +936,24 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("performance.updated"),
     payload: PerformanceSnapshotSchema,
+  }),
+  z.object({
+    type: z.literal("terminal.updated"),
+    payload: TerminalSessionSummarySchema,
+  }),
+  z.object({
+    type: z.literal("terminal.output"),
+    payload: z.object({
+      sessionId: z.string(),
+      data: z.string(),
+    }),
+  }),
+  z.object({
+    type: z.literal("terminal.closed"),
+    payload: z.object({
+      sessionId: z.string(),
+      reason: z.string().nullable(),
+    }),
   }),
 ]);
 export type ServerEvent = z.infer<typeof ServerEventSchema>;

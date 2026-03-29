@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Activity,
   Bot,
@@ -51,6 +51,9 @@ export function AppLayout() {
   const accessQuery = useAccessQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
   const [hostDrawerOpen, setHostDrawerOpen] = useState(false);
+  const shellRef = useRef<HTMLElement | null>(null);
+  const topbarRef = useRef<HTMLElement | null>(null);
+  const navRef = useRef<HTMLElement | null>(null);
 
   const access = accessQuery.data;
   const dashboard = dashboardQuery.data;
@@ -65,6 +68,7 @@ export function AppLayout() {
   const operatorReady = isOperatorReady(dashboard);
   const isSetupRoute = location.pathname === "/setup";
   const isChatRoute = location.pathname === "/chat";
+  const isTerminalRoute = location.pathname === "/terminal";
   const activeProvider = providers.find((provider) => provider.enabled);
   const runtimeCount = runtimes.filter((runtime) => runtime.state === "running")
     .length;
@@ -73,7 +77,7 @@ export function AppLayout() {
   const navItemsForState = navItems.filter(
     (item) => !operatorReady || item.readyOnly,
   );
-  const showStatusRow = !isChatRoute;
+  const showStatusRow = !isChatRoute && !isTerminalRoute;
 
   useEffect(() => {
     finishRouteTransition(location.pathname);
@@ -82,6 +86,43 @@ export function AppLayout() {
   useEffect(() => {
     setHostDrawerOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    const shell = shellRef.current;
+    const topbar = topbarRef.current;
+    const nav = navRef.current;
+    if (!shell || !topbar || !nav) {
+      return;
+    }
+
+    const updateViewportChrome = () => {
+      const topbarHeight = Math.round(topbar.getBoundingClientRect().height);
+      const navHeight = Math.round(nav.getBoundingClientRect().height);
+      const viewportHeight = Math.round(
+        window.visualViewport?.height ?? window.innerHeight,
+      );
+      shell.style.setProperty("--app-topbar-h", `${topbarHeight}px`);
+      shell.style.setProperty("--app-bottom-nav-h", `${navHeight}px`);
+      shell.style.setProperty("--app-viewport-h", `${viewportHeight}px`);
+    };
+
+    const observer = new ResizeObserver(() => {
+      updateViewportChrome();
+    });
+    observer.observe(topbar);
+    observer.observe(nav);
+
+    const viewport = window.visualViewport;
+    viewport?.addEventListener("resize", updateViewportChrome);
+    window.addEventListener("resize", updateViewportChrome);
+    updateViewportChrome();
+
+    return () => {
+      observer.disconnect();
+      viewport?.removeEventListener("resize", updateViewportChrome);
+      window.removeEventListener("resize", updateViewportChrome);
+    };
+  }, [location.pathname, operatorReady]);
 
   if (authQuery.isLoading) {
     return <main className="app-shell loading">Loading DroidAgent...</main>;
@@ -159,12 +200,26 @@ export function AppLayout() {
   ];
 
   return (
-    <main className={`app-shell${isChatRoute ? " chat-route-shell" : ""}`}>
-      <header className={`topbar-shell${isChatRoute ? " compact" : ""}`}>
+    <main
+      ref={shellRef}
+      className={`app-shell${isChatRoute ? " chat-route-shell" : ""}${isTerminalRoute ? " terminal-route-shell" : ""}`}
+    >
+      <header
+        ref={topbarRef}
+        className={`topbar-shell${isChatRoute || isTerminalRoute ? " compact" : ""}`}
+      >
         <div className="topbar">
           <div className="topbar-copy">
             <div className="eyebrow">DroidAgent</div>
-            <h1>{isSetupRoute ? "Setup" : isChatRoute ? "Chat" : "Operator Console"}</h1>
+            <h1>
+              {isSetupRoute
+                ? "Setup"
+                : isChatRoute
+                  ? "Chat"
+                  : isTerminalRoute
+                    ? "Terminal"
+                    : "Operator Console"}
+            </h1>
             <small className="topbar-meta">{topbarMeta}</small>
           </div>
 
@@ -253,7 +308,7 @@ export function AppLayout() {
           </div>
         </div>
 
-        <nav className="bottom-nav">
+        <nav ref={navRef} className="bottom-nav">
           {navItemsForState.map((item) => {
             const Icon = item.icon;
             return (
@@ -313,6 +368,9 @@ export function AppLayout() {
             </div>
 
             <div className="drawer-actions">
+              <Link className="button-link secondary" to="/terminal">
+                Rescue terminal
+              </Link>
               {!operatorReady ? (
                 <Link className="button-link secondary" to="/setup">
                   Finish setup

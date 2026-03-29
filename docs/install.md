@@ -41,11 +41,12 @@ Run `pnpm run doctor` after bootstrap when you want a non-mutating environment c
 4. The same quickstart pass also seeds the workspace memory, preferences, and skills scaffold automatically, then builds the local semantic-memory index.
 5. If Tailscale is already authenticated on the Mac, quickstart also creates the phone URL automatically.
 6. After those checks are ready, DroidAgent routes daily use into `Chat`, not back into Setup.
-7. Use Manual Controls only when you want a different workspace, a different local model, or llama.cpp.
-8. Optionally enroll additional passkeys from Settings.
-9. Optionally store cloud-provider keys in Keychain.
-10. Optionally install and start the LaunchAgent if you want launchd to own the host process permanently.
-11. Optionally configure Signal from Settings.
+7. Use the owner-only rescue terminal from the Host drawer or Settings only when DroidAgent needs a direct recovery step for permissions, auth, installs, or host state.
+8. Use Manual Controls only when you want a different workspace, a different local model, or llama.cpp.
+9. Optionally enroll additional passkeys from Settings.
+10. Optionally store cloud-provider keys in Keychain.
+11. Optionally install and start the LaunchAgent if you want launchd to own the host process permanently.
+12. Optionally configure Signal from Settings.
 
 The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailscale remote + Ollama local runtime`.
 
@@ -83,3 +84,4 @@ Then open `http://localhost:4318`.
 | Docs or command drift       | Run `pnpm docs:check`                                                                                      |
 | Tailscale URL unavailable   | Install/sign in to Tailscale, or let DroidAgent start the userspace daemon, then enable Serve from the PWA |
 | Server did not become ready | Check `~/.droidagent/logs`                                                                                 |
+| Agent blocked on host auth or permissions | Open the rescue terminal from the Host drawer or Settings and run the required recovery command directly |

@@ -13,6 +13,7 @@ import { openclawService } from "./services/openclaw-service.js";
 import { performanceService } from "./services/performance-service.js";
 import { runtimeService } from "./services/runtime-service.js";
 import { startupService } from "./services/startup-service.js";
+import { terminalService } from "./services/terminal-service.js";
 
 function send(ws: WebSocket, payload: unknown): void {
   ws.send(JSON.stringify(payload));
@@ -50,6 +51,33 @@ export class WebsocketHub {
           type: "job.updated",
           payload: job
         })
+      );
+    });
+
+    terminalService.on("updated", (session) => {
+      this.broadcast(
+        ServerEventSchema.parse({
+          type: "terminal.updated",
+          payload: session,
+        }),
+      );
+    });
+
+    terminalService.on("output", (event) => {
+      this.broadcast(
+        ServerEventSchema.parse({
+          type: "terminal.output",
+          payload: event,
+        }),
+      );
+    });
+
+    terminalService.on("closed", (event) => {
+      this.broadcast(
+        ServerEventSchema.parse({
+          type: "terminal.closed",
+          payload: event,
+        }),
       );
     });
   }
@@ -418,6 +446,29 @@ export class WebsocketHub {
 
       if (command.type === "runtime.refresh") {
         await this.refreshAll();
+        return;
+      }
+
+      if (command.type === "terminal.input") {
+        terminalService.writeInput(
+          command.payload.sessionId,
+          command.payload.data,
+        );
+        return;
+      }
+
+      if (command.type === "terminal.resize") {
+        terminalService.resize(
+          command.payload.sessionId,
+          command.payload.cols,
+          command.payload.rows,
+        );
+        return;
+      }
+
+      if (command.type === "terminal.close") {
+        await terminalService.closeSession(command.payload.sessionId);
+        return;
       }
     } catch (error) {
       send(

@@ -29,6 +29,7 @@ export const paths = {
   dbPath: path.join(os.homedir(), ".droidagent", "droidagent.sqlite"),
   logsDir: path.join(os.homedir(), ".droidagent", "logs"),
   jobsLogsDir: path.join(os.homedir(), ".droidagent", "logs", "jobs"),
+  terminalLogsDir: path.join(os.homedir(), ".droidagent", "logs", "terminal"),
   tempDir: path.join(os.homedir(), ".droidagent", "tmp"),
   uploadsDir: path.join(os.homedir(), ".droidagent", "uploads"),
   stateDir: path.join(os.homedir(), ".droidagent", "state"),
@@ -50,7 +51,7 @@ export const paths = {
 };
 
 export function ensureAppDirs(): void {
-  for (const dir of [paths.appDir, paths.logsDir, paths.jobsLogsDir, paths.tempDir, paths.uploadsDir, paths.stateDir, paths.signalCliConfigDir, paths.tailscaleDir]) {
+  for (const dir of [paths.appDir, paths.logsDir, paths.jobsLogsDir, paths.terminalLogsDir, paths.tempDir, paths.uploadsDir, paths.stateDir, paths.signalCliConfigDir, paths.tailscaleDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 }
