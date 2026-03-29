@@ -362,6 +362,9 @@ export function ChatScreen() {
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
 
   const sessions = dashboard?.sessions ?? [];
+  const approvals = dashboard?.approvals ?? [];
+  const providers = dashboard?.providers ?? [];
+  const runtimes = dashboard?.runtimes ?? [];
   const activeSession =
     sessions.find((session) => session.id === selectedSessionId) ?? sessions[0];
   const selectedSessionKey = activeSession?.id ?? selectedSessionId;
@@ -369,17 +372,19 @@ export function ChatScreen() {
   const streaming = selectedSessionKey
     ? streamingRuns[selectedSessionKey]
     : undefined;
-  const activeProvider = dashboard?.providers.find((provider) => provider.enabled);
-  const openclawRuntime = dashboard?.runtimes.find(
+  const activeProvider = providers.find((provider) => provider.enabled);
+  const openclawRuntime = runtimes.find(
     (runtime) => runtime.id === "openclaw",
   );
   const harness = dashboard?.harness;
+  const availableTools = harness?.availableTools ?? [];
+  const memory = dashboard?.memory;
   const transportReady = wsStatus === "connected" && Boolean(selectedSessionKey);
   const agentReady =
     openclawRuntime?.state === "running" &&
     Boolean(activeProvider?.enabled) &&
     Boolean(harness?.configured);
-  const approvalCount = dashboard?.approvals.length ?? 0;
+  const approvalCount = approvals.length;
 
   const historyQuery = useQuery({
     queryKey: ["sessions", selectedSessionKey, "messages"],
@@ -427,7 +432,7 @@ export function ChatScreen() {
     activeProvider?.contextWindow
       ? formatTokenBudget(activeProvider.contextWindow)
       : "context pending",
-    dashboard?.memory.semanticReady ? "memory indexed" : "memory pending",
+    memory?.semanticReady ? "memory indexed" : "memory pending",
     harness?.attachmentsEnabled && harness?.imageModel
       ? `vision ${harness.imageModel.replace(/^ollama\//, "")}`
       : "attachments unavailable",
@@ -657,14 +662,14 @@ export function ChatScreen() {
               {transportReady ? "WebSocket live" : "HTTP fallback"}
             </span>
             <span
-              className={`status-chip${dashboard?.memory.semanticReady ? " ready" : ""}`}
+              className={`status-chip${memory?.semanticReady ? " ready" : ""}`}
             >
-              {dashboard?.memory.semanticReady ? "Memory indexed" : "Memory pending"}
+              {memory?.semanticReady ? "Memory indexed" : "Memory pending"}
             </span>
             <span className={`status-chip${approvalCount > 0 ? "" : " ready"}`}>
               {approvalCount > 0
                 ? `${approvalCount} approval${approvalCount === 1 ? "" : "s"}`
-                : `${harness?.availableTools.length ?? 0} tools ready`}
+                : `${availableTools.length} tools ready`}
             </span>
           </div>
 
@@ -698,7 +703,7 @@ export function ChatScreen() {
       <details className="chat-tools-panel operator-tools-panel">
         <summary>Capabilities and permissions</summary>
         <div className="tool-pill-grid">
-          {harness?.availableTools.map((tool) => (
+          {availableTools.map((tool) => (
             <span key={tool} className="tool-pill">
               {tool.replace(/[_:]/g, " ")}
             </span>
@@ -733,8 +738,8 @@ export function ChatScreen() {
               </div>
 
               <div className="message-part-stack">
-                {(message.parts.length > 0
-                  ? message.parts
+                {((message.parts ?? []).length > 0
+                  ? message.parts ?? []
                   : [
                       {
                         type: "markdown",
@@ -744,12 +749,12 @@ export function ChatScreen() {
                 ).map((part, index) => {
                   const approval =
                     part.type === "approval_request"
-                      ? dashboard?.approvals.find(
+                      ? approvals.find(
                           (entry) =>
                             part.approvalId && entry.id === part.approvalId,
                         ) ??
-                        (dashboard?.approvals.length === 1
-                          ? dashboard.approvals[0]!
+                        (approvals.length === 1
+                          ? approvals[0]!
                           : null)
                       : null;
 
@@ -800,12 +805,12 @@ export function ChatScreen() {
               {activeRun.stage === "approval_required" ? (
                 <ApprovalCard
                   approval={
-                    dashboard?.approvals.find(
+                    approvals.find(
                       (approval) =>
                         activeRun.approvalId &&
                         approval.id === activeRun.approvalId,
-                    ) ?? (dashboard?.approvals.length === 1
-                      ? dashboard.approvals[0]!
+                    ) ?? (approvals.length === 1
+                      ? approvals[0]!
                       : null)
                   }
                   onResolve={(approvalId, resolution) => {
@@ -844,7 +849,7 @@ export function ChatScreen() {
               {activeRun?.active
                 ? `${activeRun.label}${activeRun.detail ? ` • ${activeRun.detail}` : ""}`
                 : agentReady
-                  ? `Live OpenClaw session ready. ${harness?.availableTools.length ?? 0} tools available. Paste images or files directly into the composer, or attach them below.`
+                  ? `Live OpenClaw session ready. ${availableTools.length} tools available. Paste images or files directly into the composer, or attach them below.`
                   : "The live OpenClaw path is not ready yet."}
             </small>
 

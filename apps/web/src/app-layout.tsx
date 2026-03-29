@@ -54,15 +54,22 @@ export function AppLayout() {
 
   const access = accessQuery.data;
   const dashboard = dashboardQuery.data;
+  const setup = dashboard?.setup;
+  const memory = dashboard?.memory;
+  const build = dashboard?.build;
+  const launchAgent = dashboard?.launchAgent;
+  const providers = dashboard?.providers ?? [];
+  const runtimes = dashboard?.runtimes ?? [];
+  const approvals = dashboard?.approvals ?? [];
+  const tailscaleStatus = access?.tailscaleStatus;
   const operatorReady = isOperatorReady(dashboard);
   const isSetupRoute = location.pathname === "/setup";
   const isChatRoute = location.pathname === "/chat";
-  const activeProvider = dashboard?.providers.find((provider) => provider.enabled);
-  const runtimeCount =
-    dashboard?.runtimes.filter((runtime) => runtime.state === "running")
-      .length ?? 0;
-  const passkeyCount = dashboard?.setup.passkeyConfigured ? 1 : 0;
-  const pendingApprovals = dashboard?.approvals.length ?? 0;
+  const activeProvider = providers.find((provider) => provider.enabled);
+  const runtimeCount = runtimes.filter((runtime) => runtime.state === "running")
+    .length;
+  const passkeyCount = setup?.passkeyConfigured ? 1 : 0;
+  const pendingApprovals = approvals.length;
   const navItemsForState = navItems.filter(
     (item) => !operatorReady || item.readyOnly,
   );
@@ -86,12 +93,12 @@ export function AppLayout() {
 
   const topbarMeta = [
     access?.canonicalOrigin?.origin ? "Tailscale live" : "Local only",
-    activeProvider?.model ?? dashboard?.setup.selectedModel ?? "model pending",
+    activeProvider?.model ?? setup?.selectedModel ?? "model pending",
     activeProvider?.contextWindow
       ? formatTokenBudget(activeProvider.contextWindow)
       : null,
-    dashboard?.memory.semanticReady ? "memory ready" : "memory pending",
-    `v${dashboard?.build.version ?? "unknown"}`,
+    memory?.semanticReady ? "memory ready" : "memory pending",
+    `v${build?.version ?? "unknown"}`,
   ]
     .filter(Boolean)
     .join(" • ");
@@ -111,7 +118,7 @@ export function AppLayout() {
       value: access?.canonicalOrigin?.origin ? "Live" : "Local only",
       detail:
         access?.canonicalOrigin?.origin ??
-        access?.tailscaleStatus.healthMessage ??
+        tailscaleStatus?.healthMessage ??
         "Tailscale is not ready yet.",
       tone: access?.canonicalOrigin?.origin ? "good" : "warn",
     },
@@ -125,12 +132,12 @@ export function AppLayout() {
     },
     {
       label: "Memory",
-      value: dashboard?.memory.semanticReady ? "Indexed" : "Pending",
-      detail: dashboard?.memory.semanticReady
-        ? `${dashboard.memory.indexedFiles} files • ${dashboard.memory.indexedChunks} chunks`
-        : dashboard?.memory.embeddingProbeError ??
+      value: memory?.semanticReady ? "Indexed" : "Pending",
+      detail: memory?.semanticReady
+        ? `${memory.indexedFiles} files • ${memory.indexedChunks} chunks`
+        : memory?.embeddingProbeError ??
           "Semantic memory is not prepared yet.",
-      tone: dashboard?.memory.semanticReady ? "good" : "warn",
+      tone: memory?.semanticReady ? "good" : "warn",
     },
     {
       label: "Approvals",
@@ -143,11 +150,11 @@ export function AppLayout() {
     },
     {
       label: "LaunchAgent",
-      value: dashboard?.launchAgent.running ? "Running" : "Needs attention",
+      value: launchAgent?.running ? "Running" : "Needs attention",
       detail:
-        dashboard?.launchAgent.healthMessage ??
+        launchAgent?.healthMessage ??
         "LaunchAgent health is still loading.",
-      tone: dashboard?.launchAgent.running ? "good" : "warn",
+      tone: launchAgent?.running ? "good" : "warn",
     },
   ];
 

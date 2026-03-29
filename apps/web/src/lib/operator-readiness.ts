@@ -3,17 +3,19 @@ import type { DashboardState } from "@droidagent/shared";
 export function isOperatorReady(
   dashboard: DashboardState | undefined,
 ): boolean {
-  if (!dashboard) {
+  const setup = dashboard?.setup;
+  const memory = dashboard?.memory;
+  if (!dashboard || !setup || !memory) {
     return false;
   }
 
   return Boolean(
-    dashboard.setup.passkeyConfigured &&
-    dashboard.setup.workspaceRoot &&
-    dashboard.memory.semanticReady &&
-    dashboard.setup.selectedRuntime &&
-    dashboard.setup.selectedModel &&
-    dashboard.setup.remoteAccessEnabled &&
+    setup.passkeyConfigured &&
+    setup.workspaceRoot &&
+    memory.semanticReady &&
+    setup.selectedRuntime &&
+    setup.selectedModel &&
+    setup.remoteAccessEnabled &&
     dashboard.canonicalUrl,
   );
 }

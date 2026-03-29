@@ -27,7 +27,7 @@ export function FilesScreen() {
   const filesQuery = useQuery({
     queryKey: ["files", directoryPath],
     queryFn: () => api<WorkspaceEntry[]>(`/api/files?path=${encodeURIComponent(directoryPath)}`),
-    enabled: Boolean(authQuery.data?.user && dashboard?.setup.workspaceRoot)
+    enabled: Boolean(authQuery.data?.user && dashboard?.setup?.workspaceRoot)
   });
 
   const fileQuery = useQuery({

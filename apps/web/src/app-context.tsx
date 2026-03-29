@@ -266,6 +266,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
 
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const dashboardSessions = dashboardQuery.data?.sessions ?? [];
   usePasskeysQuery(Boolean(authQuery.data?.user));
   useAccessQuery();
   usePerformanceQuery(Boolean(authQuery.data?.user));
@@ -291,34 +292,32 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     if (dashboardQuery.isSuccess && !dashboardReadyRecordedRef.current) {
       dashboardReadyRecordedRef.current = true;
       clientPerformance.record("client.dashboard.ready", performance.now(), {
-        sessions: dashboardQuery.data?.sessions.length ?? 0
+        sessions: dashboardSessions.length
       });
     }
-  }, [dashboardQuery.data?.sessions.length, dashboardQuery.isSuccess]);
+  }, [dashboardQuery.isSuccess, dashboardSessions.length]);
 
   useEffect(() => {
-    const sessions = dashboardQuery.data?.sessions ?? [];
-    if (sessions.length === 0) {
+    if (dashboardSessions.length === 0) {
       return;
     }
-    if (sessions.some((session) => session.id === selectedSessionId)) {
+    if (dashboardSessions.some((session) => session.id === selectedSessionId)) {
       return;
     }
     startTransition(() => {
-      setSelectedSessionId(sessions[0]!.id);
+      setSelectedSessionId(dashboardSessions[0]!.id);
     });
-  }, [dashboardQuery.data?.sessions, selectedSessionId]);
+  }, [dashboardSessions, selectedSessionId]);
 
   useEffect(() => {
     if (!authQuery.data?.user) {
       return;
     }
 
-    const sessions = dashboardQuery.data?.sessions ?? [];
-    const workspaceRoot = dashboardQuery.data?.setup.workspaceRoot;
-    const targetSessionId = sessions.some((session) => session.id === selectedSessionId)
+    const workspaceRoot = dashboardQuery.data?.setup?.workspaceRoot;
+    const targetSessionId = dashboardSessions.some((session) => session.id === selectedSessionId)
       ? selectedSessionId
-      : sessions[0]?.id;
+      : dashboardSessions[0]?.id;
     if (targetSessionId) {
       void queryClient.prefetchQuery({
         queryKey: ["sessions", targetSessionId, "messages"],
@@ -332,7 +331,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
         queryFn: () => api<WorkspaceEntry[]>("/api/files?path=.")
       });
     }
-  }, [authQuery.data?.user, dashboardQuery.data?.sessions, dashboardQuery.data?.setup.workspaceRoot, queryClient, selectedSessionId]);
+  }, [authQuery.data?.user, dashboardSessions, dashboardQuery.data?.setup?.workspaceRoot, queryClient, selectedSessionId]);
 
   const installApp = useEffectEvent(async () => {
     if (!installPromptEvent) {

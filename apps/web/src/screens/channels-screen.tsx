@@ -24,7 +24,7 @@ export function ChannelsScreen() {
   const canStartLink = signalDeviceName.trim().length > 0;
   const canSendTestMessage = testTarget.trim().length > 0 && testMessage.trim().length > 0;
 
-  const signal = dashboard?.channelConfig.signal;
+  const signal = dashboard?.channelConfig?.signal;
 
   useEffect(() => {
     if (!signal?.linkUri) {

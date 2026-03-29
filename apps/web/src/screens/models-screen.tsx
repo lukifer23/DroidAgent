@@ -30,9 +30,14 @@ export function ModelsScreen() {
   const { runAction } = useDroidAgentApp();
   const dashboardQuery = useDashboardQuery(true);
   const dashboard = dashboardQuery.data;
-  const localOllamaProvider = dashboard?.providers.find(
+  const providers = dashboard?.providers ?? [];
+  const memory = dashboard?.memory;
+  const harness = dashboard?.harness;
+  const contextManagement = dashboard?.contextManagement;
+  const localOllamaProvider = providers.find(
     (provider) => provider.id === "ollama-default",
   );
+  const availableTools = harness?.availableTools ?? [];
 
   return (
     <section className="stack-list">
@@ -41,32 +46,28 @@ export function ModelsScreen() {
         <span>{localOllamaProvider?.model ?? "qwen3.5:4b"}</span>
         <small>
           {formatTokenBudget(localOllamaProvider?.contextWindow)} context •{" "}
-          thinking off • smart context trimming{" "}
-          {dashboard?.contextManagement.enabled ? "on" : "off"}
+          thinking off • smart context trimming {contextManagement?.enabled ? "on" : "off"}
         </small>
         <small>
-          Session memory {dashboard?.memory.sessionMemoryEnabled ? "on" : "off"}{" "}
-          • Workspace notes at {dashboard?.memory.memoryFilePath ?? "MEMORY.md"}
+          Session memory {memory?.sessionMemoryEnabled ? "on" : "off"} • Workspace notes at {memory?.memoryFilePath ?? "MEMORY.md"}
         </small>
       </article>
 
       <article className="panel-card compact">
         <strong>Semantic Memory</strong>
         <span>
-          {dashboard?.memory.semanticReady
+          {memory?.semanticReady
             ? "Local semantic search live"
             : "Semantic memory pending"}
         </span>
         <small>
-          {dashboard?.memory.embeddingProvider ?? "unknown"}/
-          {dashboard?.memory.embeddingModel ?? "unconfigured"} •{" "}
-          {dashboard?.memory.indexedFiles ?? 0} files •{" "}
-          {dashboard?.memory.indexedChunks ?? 0} chunks
+          {memory?.embeddingProvider ?? "unknown"}/
+          {memory?.embeddingModel ?? "unconfigured"} • {memory?.indexedFiles ?? 0} files • {memory?.indexedChunks ?? 0} chunks
         </small>
         <small>
-          {dashboard?.memory.embeddingProbeError
-            ? dashboard.memory.embeddingProbeError
-            : dashboard?.memory.dirty
+          {memory?.embeddingProbeError
+            ? memory.embeddingProbeError
+            : memory?.dirty
               ? "The semantic index is still warming or needs a reindex."
               : "Local embeddings stay on-device and back semantic recall for memory, preferences, skills, and session history."}
         </small>
@@ -75,13 +76,12 @@ export function ModelsScreen() {
       <article className="panel-card compact">
         <strong>Multimodal Path</strong>
         <span>
-          {dashboard?.harness.attachmentsEnabled
+          {harness?.attachmentsEnabled
             ? "Image and PDF analysis live"
             : "Attachments not ready"}
         </span>
         <small>
-          {dashboard?.harness.imageModel ?? "No image model"} • pdf tool{" "}
-          {dashboard?.harness.availableTools.includes("pdf") ? "enabled" : "pending"}
+          {harness?.imageModel ?? "No image model"} • pdf tool {availableTools.includes("pdf") ? "enabled" : "pending"}
         </small>
         <small>
           The chat composer can upload images, PDFs, Markdown, JSON, and code
@@ -93,14 +93,13 @@ export function ModelsScreen() {
       <article className="panel-card compact">
         <strong>Workspace Context</strong>
         <span>
-          {dashboard?.memory.ready
+          {memory?.ready
             ? "Scaffold bootstrapped"
             : "Scaffold pending"}
         </span>
         <small>
-          {dashboard?.memory.bootstrapFilesReady ?? 0}/
-          {dashboard?.memory.bootstrapFilesTotal ?? 0} bootstrap files • daily
-          note {dashboard?.memory.todayNotePath ?? "unavailable"}
+          {memory?.bootstrapFilesReady ?? 0}/
+          {memory?.bootstrapFilesTotal ?? 0} bootstrap files • daily note {memory?.todayNotePath ?? "unavailable"}
         </small>
       </article>
 
@@ -154,7 +153,7 @@ export function ModelsScreen() {
         </article>
       ))}
 
-      {(dashboard?.providers ?? []).map((provider: ProviderProfile) => (
+      {providers.map((provider: ProviderProfile) => (
         <article
           key={provider.id}
           className={`panel-card compact${provider.enabled ? " active-card" : ""}`}

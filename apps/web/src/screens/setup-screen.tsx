@@ -31,6 +31,11 @@ export function SetupScreen() {
   const accessQuery = useAccessQuery();
   const dashboard = dashboardQuery.data;
   const access = accessQuery.data;
+  const setup = dashboard?.setup;
+  const providers = dashboard?.providers ?? [];
+  const runtimes = dashboard?.runtimes ?? [];
+  const memory = dashboard?.memory;
+  const tailscaleStatus = access?.tailscaleStatus;
 
   const [workspaceInput, setWorkspaceInput] = useState(".");
   const [setupModel, setSetupModel] = useState(DEFAULT_OLLAMA_MODEL);
@@ -45,29 +50,27 @@ export function SetupScreen() {
   const [phoneQr, setPhoneQr] = useState<string | null>(null);
 
   useEffect(() => {
-    if (dashboard?.setup.workspaceRoot) {
-      setWorkspaceInput(dashboard.setup.workspaceRoot);
+    if (setup?.workspaceRoot) {
+      setWorkspaceInput(setup.workspaceRoot);
     }
-  }, [dashboard?.setup.workspaceRoot]);
+  }, [setup?.workspaceRoot]);
 
   useEffect(() => {
-    const provider = dashboard?.providers.find(
+    const provider = providers.find(
       (entry) => entry.id === "ollama-default",
     );
     setSetupModel(
-      provider?.model ?? dashboard?.setup.selectedModel ?? DEFAULT_OLLAMA_MODEL,
+      provider?.model ?? setup?.selectedModel ?? DEFAULT_OLLAMA_MODEL,
     );
-  }, [dashboard?.providers, dashboard?.setup.selectedModel]);
+  }, [providers, setup?.selectedModel]);
 
-  const passkeyReady = Boolean(dashboard?.setup.passkeyConfigured);
-  const workspaceReady = Boolean(dashboard?.setup.workspaceRoot);
+  const passkeyReady = Boolean(setup?.passkeyConfigured);
+  const workspaceReady = Boolean(setup?.workspaceRoot);
   const runtimeReady =
-    dashboard?.runtimes.find((runtime) => runtime.id === "ollama")?.state ===
-      "running" &&
-    dashboard?.runtimes.find((runtime) => runtime.id === "openclaw")?.state ===
-      "running";
-  const memoryReady = Boolean(dashboard?.memory.semanticReady);
-  const tailscaleReady = Boolean(access?.tailscaleStatus.authenticated);
+    runtimes.find((runtime) => runtime.id === "ollama")?.state === "running" &&
+    runtimes.find((runtime) => runtime.id === "openclaw")?.state === "running";
+  const memoryReady = Boolean(memory?.semanticReady);
+  const tailscaleReady = Boolean(tailscaleStatus?.authenticated);
   const remoteReady = Boolean(access?.canonicalOrigin?.origin);
   const localhostMaintenance = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname,
@@ -97,7 +100,7 @@ export function SetupScreen() {
         value: tailscaleReady ? "Connected" : "Not signed in",
         detail: tailscaleReady
           ? "This Mac is authenticated to Tailscale."
-          : access?.tailscaleStatus.healthMessage ??
+          : tailscaleStatus?.healthMessage ??
             "Sign in to Tailscale on this Mac.",
         ready: tailscaleReady,
       },
@@ -112,7 +115,7 @@ export function SetupScreen() {
     ],
     [
       access?.canonicalOrigin?.origin,
-      access?.tailscaleStatus.healthMessage,
+      tailscaleStatus?.healthMessage,
       memoryReady,
       passkeyReady,
       remoteReady,
@@ -151,8 +154,8 @@ export function SetupScreen() {
     setActiveAction("quickstart");
     try {
       const requestedWorkspaceRoot =
-        workspaceInput.trim() === "." && dashboard?.setup.workspaceRoot
-          ? dashboard.setup.workspaceRoot
+        workspaceInput.trim() === "." && setup?.workspaceRoot
+          ? setup.workspaceRoot
           : workspaceInput;
       const result = await postJson<QuickstartResult>("/api/setup/quickstart", {
         workspaceRoot: requestedWorkspaceRoot,

@@ -55,6 +55,15 @@ export function SettingsScreen() {
   const clientPerformanceSnapshot = useClientPerformanceSnapshot();
   const dashboard = dashboardQuery.data;
   const access = accessQuery.data;
+  const setup = dashboard?.setup;
+  const launchAgent = dashboard?.launchAgent;
+  const memory = dashboard?.memory;
+  const harness = dashboard?.harness;
+  const build = dashboard?.build;
+  const contextManagement = dashboard?.contextManagement;
+  const runtimes = dashboard?.runtimes ?? [];
+  const cloudProviders = dashboard?.cloudProviders ?? [];
+  const tailscaleStatus = access?.tailscaleStatus;
   const [providerApiKeys, setProviderApiKeys] = useState<
     Record<string, string>
   >({});
@@ -66,24 +75,23 @@ export function SettingsScreen() {
   );
 
   const passkeyCount = passkeysQuery.data?.length ?? 0;
-  const runtimeCount =
-    dashboard?.runtimes.filter((runtime) => runtime.state === "running")
-      .length ?? 0;
-  const tailscaleReady = Boolean(access?.tailscaleStatus.authenticated);
+  const runtimeCount = runtimes.filter((runtime) => runtime.state === "running")
+    .length;
+  const tailscaleReady = Boolean(tailscaleStatus?.authenticated);
   const remoteReady = Boolean(access?.canonicalOrigin?.origin);
   const canGeneratePhoneLink = Boolean(access?.canonicalOrigin);
-  const memoryReady = Boolean(dashboard?.memory.semanticReady);
+  const memoryReady = Boolean(memory?.semanticReady);
 
   const overviewCards = [
     {
       key: "host",
       label: "Host",
-      value: dashboard?.launchAgent.running ? "Live" : "Needs attention",
+      value: launchAgent?.running ? "Live" : "Needs attention",
       detail:
-        dashboard?.launchAgent.healthMessage ??
+        launchAgent?.healthMessage ??
         "LaunchAgent health is still loading.",
-      progress: dashboard?.launchAgent.running ? 100 : 45,
-      tone: dashboard?.launchAgent.running ? "good" : "warn",
+      progress: launchAgent?.running ? 100 : 45,
+      tone: launchAgent?.running ? "good" : "warn",
     },
     {
       key: "remote",
@@ -91,7 +99,7 @@ export function SettingsScreen() {
       value: remoteReady ? "Tailscale live" : "Local only",
       detail: remoteReady
         ? (access?.canonicalOrigin?.origin ?? "Remote URL ready")
-        : access?.tailscaleStatus.healthMessage ??
+        : tailscaleStatus?.healthMessage ??
           "Enable the Tailscale URL to finish phone access.",
       progress: remoteReady ? 100 : tailscaleReady ? 70 : 24,
       tone: remoteReady ? "good" : tailscaleReady ? "warn" : "muted",
@@ -112,8 +120,8 @@ export function SettingsScreen() {
       key: "runtime",
       label: "Runtime",
       value: runtimeCount > 0 ? `${runtimeCount} live` : "Not running",
-      detail: dashboard?.setup.selectedModel
-        ? `${dashboard.setup.selectedModel} • ${formatTokenBudget(dashboard.memory.contextWindow)} context • ${memoryReady ? "semantic memory live" : "semantic memory pending"}`
+      detail: setup?.selectedModel
+        ? `${setup.selectedModel} • ${formatTokenBudget(memory?.contextWindow)} context • ${memoryReady ? "semantic memory live" : "semantic memory pending"}`
         : "No default model is selected yet for the common local path.",
       progress: runtimeCount > 0 ? 100 : 26,
       tone: runtimeCount > 0 ? "good" : "warn",
@@ -137,7 +145,7 @@ export function SettingsScreen() {
 
   async function handlePrepareMemory() {
     const metric = clientPerformance.start("client.memory.prepare", {
-      embeddingModel: dashboard?.memory.embeddingModel ?? "pending",
+      embeddingModel: memory?.embeddingModel ?? "pending",
     });
 
     try {
@@ -184,32 +192,32 @@ export function SettingsScreen() {
           </div>
           <div className="status-list">
             <article
-              className={`health-row${dashboard?.setup.workspaceRoot ? " ready" : ""}`}
+              className={`health-row${setup?.workspaceRoot ? " ready" : ""}`}
             >
               <div className="health-row-top">
                 <strong>Workspace</strong>
                 <span
-                  className={`status-chip${dashboard?.setup.workspaceRoot ? " ready" : ""}`}
+                  className={`status-chip${setup?.workspaceRoot ? " ready" : ""}`}
                 >
-                  {dashboard?.setup.workspaceRoot ? "Set" : "Pending"}
+                  {setup?.workspaceRoot ? "Set" : "Pending"}
                 </span>
               </div>
               <small>
-                {dashboard?.setup.workspaceRoot ?? "Not configured yet."}
+                {setup?.workspaceRoot ?? "Not configured yet."}
               </small>
             </article>
             <article
-              className={`health-row${dashboard?.launchAgent.running ? " ready" : ""}`}
+              className={`health-row${launchAgent?.running ? " ready" : ""}`}
             >
               <div className="health-row-top">
                 <strong>LaunchAgent</strong>
                 <span
-                  className={`status-chip${dashboard?.launchAgent.running ? " ready" : ""}`}
+                  className={`status-chip${launchAgent?.running ? " ready" : ""}`}
                 >
-                  {dashboard?.launchAgent.running ? "Running" : "Stopped"}
+                  {launchAgent?.running ? "Running" : "Stopped"}
                 </span>
               </div>
-              <small>{dashboard?.launchAgent.healthMessage}</small>
+              <small>{launchAgent?.healthMessage ?? "LaunchAgent health is still loading."}</small>
             </article>
             <article
               className={`health-row${runtimeCount > 0 ? " ready" : ""}`}
@@ -223,8 +231,8 @@ export function SettingsScreen() {
                 </span>
               </div>
               <small>
-                {dashboard?.setup.selectedRuntime
-                  ? `Selected runtime: ${dashboard.setup.selectedRuntime}`
+                {setup?.selectedRuntime
+                  ? `Selected runtime: ${setup.selectedRuntime}`
                   : "No runtime selected yet."}
               </small>
             </article>
@@ -270,7 +278,7 @@ export function SettingsScreen() {
               Uninstall
             </button>
           </div>
-          <small>{dashboard?.launchAgent.plistPath}</small>
+          <small>{launchAgent?.plistPath ?? "LaunchAgent path unavailable."}</small>
         </article>
 
         <article className="panel-card">
@@ -290,7 +298,7 @@ export function SettingsScreen() {
                 </span>
               </div>
               <small>
-                {access?.tailscaleStatus.healthMessage ?? "Checking Tailscale…"}
+                {tailscaleStatus?.healthMessage ?? "Checking Tailscale…"}
               </small>
             </article>
             <article className={`health-row${remoteReady ? " ready" : ""}`}>
@@ -327,7 +335,7 @@ export function SettingsScreen() {
             </button>
             <button
               className="secondary"
-              disabled={!access?.tailscaleStatus.canonicalUrl}
+              disabled={!tailscaleStatus?.canonicalUrl}
               onClick={() =>
                 void runAction(async () => {
                   await postJson("/api/access/canonical", {
@@ -376,8 +384,8 @@ export function SettingsScreen() {
                 </span>
               </div>
               <small>
-                {dashboard?.memory.embeddingModel
-                  ? `${dashboard.memory.embeddingProvider ?? "unknown"}/${dashboard.memory.embeddingModel} • ${dashboard.memory.indexedFiles} files • ${dashboard.memory.indexedChunks} chunks`
+                {memory?.embeddingModel
+                  ? `${memory.embeddingProvider ?? "unknown"}/${memory.embeddingModel} • ${memory.indexedFiles} files • ${memory.indexedChunks} chunks`
                   : "No local embedding model is configured yet."}
               </small>
             </article>
@@ -385,14 +393,14 @@ export function SettingsScreen() {
               <div className="health-row-top">
                 <strong>Multimodal attachments</strong>
                 <span
-                  className={`status-chip${dashboard?.harness.attachmentsEnabled ? " ready" : ""}`}
+                  className={`status-chip${harness?.attachmentsEnabled ? " ready" : ""}`}
                 >
-                  {dashboard?.harness.attachmentsEnabled ? "Live" : "Pending"}
+                  {harness?.attachmentsEnabled ? "Live" : "Pending"}
                 </span>
               </div>
               <small>
-                {dashboard?.harness.imageModel
-                  ? `${dashboard.harness.imageModel} powers image and PDF analysis for the chat composer.`
+                {harness?.imageModel
+                  ? `${harness.imageModel} powers image and PDF analysis for the chat composer.`
                   : "No local multimodal model is configured yet."}
               </small>
             </article>
@@ -402,8 +410,8 @@ export function SettingsScreen() {
                 <span className="status-chip ready">Prepared</span>
               </div>
               <small>
-                {dashboard?.memory.effectiveWorkspaceRoot
-                  ? `${dashboard.memory.bootstrapFilesReady}/${dashboard.memory.bootstrapFilesTotal} bootstrap files are in place under ${dashboard.memory.effectiveWorkspaceRoot}.`
+                {memory?.effectiveWorkspaceRoot
+                  ? `${memory.bootstrapFilesReady}/${memory.bootstrapFilesTotal} bootstrap files are in place under ${memory.effectiveWorkspaceRoot}.`
                   : "No workspace root is configured yet."}
               </small>
             </article>
@@ -414,8 +422,8 @@ export function SettingsScreen() {
               </div>
               <small>
                 Keep stable operator preferences in{" "}
-                {dashboard?.memory.effectiveWorkspaceRoot
-                  ? `${dashboard.memory.effectiveWorkspaceRoot}/PREFERENCES.md`
+                {memory?.effectiveWorkspaceRoot
+                  ? `${memory.effectiveWorkspaceRoot}/PREFERENCES.md`
                   : "PREFERENCES.md"}
                 . The semantic index pulls that file, workspace skills, and
                 session memory in automatically.
@@ -438,13 +446,11 @@ export function SettingsScreen() {
             </Link>
           </div>
           <small>
-            Session memory: {dashboard?.memory.sessionMemoryEnabled ? "on" : "off"}{" "}
-            • Fallback: {dashboard?.memory.embeddingFallback ?? "none"} • Context:{" "}
-            {formatTokenBudget(dashboard?.memory.contextWindow)}
+            Session memory: {memory?.sessionMemoryEnabled ? "on" : "off"} • Fallback: {memory?.embeddingFallback ?? "none"} • Context: {formatTokenBudget(memory?.contextWindow)}
           </small>
-          {dashboard?.memory.embeddingProbeError ? (
+          {memory?.embeddingProbeError ? (
             <small className="error-copy">
-              {dashboard.memory.embeddingProbeError}
+              {memory.embeddingProbeError}
             </small>
           ) : null}
         </article>
@@ -592,12 +598,12 @@ export function SettingsScreen() {
               <div className="health-row-top">
                 <strong>Version</strong>
                 <span className="status-chip ready">
-                  v{dashboard?.build.version ?? "unknown"}
+                  v{build?.version ?? "unknown"}
                 </span>
               </div>
               <small>
-                {dashboard?.build.gitCommit
-                  ? `Commit ${dashboard.build.gitCommit}`
+                {build?.gitCommit
+                  ? `Commit ${build.gitCommit}`
                   : "Git commit unavailable on this host."}
               </small>
             </article>
@@ -605,11 +611,11 @@ export function SettingsScreen() {
               <div className="health-row-top">
                 <strong>Runtime</strong>
                 <span className="status-chip ready">
-                  {dashboard?.build.nodeVersion ?? "unknown"}
+                  {build?.nodeVersion ?? "unknown"}
                 </span>
               </div>
               <small>
-                {dashboard?.build.packageManager ??
+                {build?.packageManager ??
                   "Package manager metadata unavailable."}
               </small>
             </article>
@@ -625,7 +631,7 @@ export function SettingsScreen() {
           the guided local-first flow stays on Ollama plus Tailscale.
         </p>
         <div className="stack-list">
-          {(dashboard?.cloudProviders ?? []).map(
+          {cloudProviders.map(
             (provider: CloudProviderSummary) => {
               const apiKey = providerApiKeys[provider.id] ?? "";
               const defaultModel =
@@ -729,25 +735,25 @@ export function SettingsScreen() {
             onClick={() =>
               void runAction(async () => {
                 await postJson("/api/runtime/context-management", {
-                  enabled: !dashboard?.contextManagement.enabled,
+                  enabled: !contextManagement?.enabled,
                 });
-              }, dashboard?.contextManagement.enabled
+              }, contextManagement?.enabled
                 ? "Smart context management disabled."
                 : "Smart context management enabled.")
             }
           >
-            {dashboard?.contextManagement.enabled ? "Disable" : "Enable"}
+            {contextManagement?.enabled ? "Disable" : "Enable"}
           </button>
         </div>
         <small>
-          Compaction: {dashboard?.contextManagement.compactionMode ?? "unknown"}
+          Compaction: {contextManagement?.compactionMode ?? "unknown"}
           {" • "}
-          Pruning: {dashboard?.contextManagement.pruningMode ?? "unknown"}
+          Pruning: {contextManagement?.pruningMode ?? "unknown"}
           {" • "}
           Memory flush:{" "}
-          {dashboard?.contextManagement.memoryFlushEnabled ? "on" : "off"}
+          {contextManagement?.memoryFlushEnabled ? "on" : "off"}
           {" • "}
-          Session memory: {dashboard?.memory.sessionMemoryEnabled ? "on" : "off"}
+          Session memory: {memory?.sessionMemoryEnabled ? "on" : "off"}
         </small>
       </article>
 
