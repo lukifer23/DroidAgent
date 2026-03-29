@@ -247,7 +247,7 @@ describe("OpenClaw context management policy", () => {
             provider: "ollama",
             fallback: "none",
             model: "embeddinggemma:300m-qat-q8_0",
-            extraPaths: ["PREFERENCES.md", "skills/**/*.md"],
+            extraPaths: ["MEMORY.md", "PREFERENCES.md", "skills/**/*.md"],
             cache: {
               enabled: true,
               maxEntries: 50000,
@@ -380,7 +380,7 @@ describe("OpenClaw context management policy", () => {
             provider: "ollama",
             fallback: "none",
             model: "embeddinggemma:300m-qat-q8_0",
-            extraPaths: ["PREFERENCES.md", "skills/**/*.md"],
+            extraPaths: ["MEMORY.md", "PREFERENCES.md", "skills/**/*.md"],
             sync: {
               sessions: {
                 deltaMessages: 50,

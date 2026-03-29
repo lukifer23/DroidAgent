@@ -28,8 +28,8 @@ import { keychainService } from "./keychain-service.js";
 import { openclawService } from "./openclaw-service.js";
 import { signalService } from "./signal-service.js";
 
-const HEALTH_CHECK_RETRIES = 3;
-const HEALTH_CHECK_DELAY_MS = 500;
+const LLAMA_CPP_READY_TIMEOUT_MS = 300_000;
+const LLAMA_CPP_POLL_INTERVAL_MS = 1_000;
 const RUNTIME_STATUS_TTL_MS = 15_000;
 const PROVIDER_PROFILE_TTL_MS = 15_000;
 const BINARY_METADATA_TTL_MS = 86_400_000;
@@ -599,8 +599,14 @@ export class RuntimeService {
     );
     this.invalidateCaches();
 
-    for (let i = 0; i < HEALTH_CHECK_RETRIES; i++) {
-      await new Promise((r) => setTimeout(r, HEALTH_CHECK_DELAY_MS * (i + 1)));
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < LLAMA_CPP_READY_TIMEOUT_MS) {
+      if (child.exitCode !== null) {
+        throw new Error(
+          `llama.cpp exited before becoming ready (status ${child.exitCode}). Check ~/.droidagent/logs/llama-cpp.log for details.`,
+        );
+      }
+
       try {
         await this.fetchJson(`http://127.0.0.1:${LLAMA_CPP_PORT}/v1/models`);
         await harnessService.configureRuntimeModel({
@@ -610,13 +616,13 @@ export class RuntimeService {
         });
         return;
       } catch {
-        if (i === HEALTH_CHECK_RETRIES - 1) {
-          throw new Error(
-            "llama.cpp server started but did not become ready in time.",
-          );
-        }
+        await new Promise((r) => setTimeout(r, LLAMA_CPP_POLL_INTERVAL_MS));
       }
     }
+
+    throw new Error(
+      "llama.cpp server did not become ready before the startup timeout. The first launch may still be downloading the model; check ~/.droidagent/logs/llama-cpp.log and try again after the download completes.",
+    );
   }
 }
 

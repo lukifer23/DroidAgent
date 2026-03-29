@@ -1188,7 +1188,7 @@ export class OpenClawService {
       experimental: {
         sessionMemory: true,
       },
-      extraPaths: ["PREFERENCES.md", "skills/**/*.md"],
+      extraPaths: ["MEMORY.md", "PREFERENCES.md", "skills/**/*.md"],
       sources: ["memory", "sessions"],
       sync: {
         sessions: {
