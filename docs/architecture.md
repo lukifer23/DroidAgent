@@ -5,6 +5,7 @@
 - `apps/server`
   - authenticates the owner with passkeys
   - stores state in SQLite under `~/.droidagent`
+  - persists maintenance operations and memory drafts in SQLite
   - stores cloud-provider API keys in the macOS login Keychain
   - manages runtimes and OpenClaw through CLI/process supervision
   - exposes the running build/version identity to the shell and diagnostics
@@ -35,6 +36,13 @@
 - DroidAgent re-emits sanitized stream events to the browser over its own WebSocket.
 - OpenClaw remains loopback-only with token auth.
 
+## Maintenance lifecycle
+
+- The server owns maintenance intent and persistence, but restart work runs in a detached maintenance runner so DroidAgent can survive restarting itself.
+- Maintenance operations move through `queued -> draining -> stopping -> starting -> verifying -> completed|failed`.
+- A derived maintenance status mirror is written under `~/.droidagent/state/maintenance-status.json` so local bootstrap/start/stop scripts can stay maintenance-aware without bypassing browser auth.
+- `remote` scope extends `runtime` scope with the DroidAgent-managed userspace Tailscale path and is intentionally localhost-only.
+
 ## Local runtimes
 
 - `Ollama`
@@ -60,6 +68,12 @@
 - Anthropic and OpenRouter Anthropic models use `cache-ttl` pruning
 - local runtimes keep pruning off while still using compaction and memory flush
 
+## Durable memory model
+
+- Durable memory remains file-backed in the workspace: `MEMORY.md`, `PREFERENCES.md`, and `memory/YYYY-MM-DD.md`.
+- Chat messages and file selections create `pending` memory drafts first; the operator can edit target/title/content before applying them.
+- Applying a draft appends to the selected file atomically, invalidates memory status, and runs incremental reindex with force fallback if needed.
+
 ## File and job model
 
 - files are addressed by workspace-relative path, never absolute host path
@@ -71,6 +85,7 @@
 ## Diagnostics and performance
 
 - the server records rolling in-memory timing samples for HTTP requests, dashboard snapshots, chat relay timing, file operations, and job execution
+- memory draft apply timing is recorded server-side; timing summaries now also surface last-sample age and sample count
 - the client records route, chat, reconnect, file, and job timings locally
 - the Settings route surfaces a compact diagnostics card
 - the benchmark scripts write JSON artifacts under `artifacts/perf/`

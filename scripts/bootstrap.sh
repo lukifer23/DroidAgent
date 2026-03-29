@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 APP_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('./package.json', 'utf8')).version")"
 SERVER_URL="http://localhost:4318"
 APP_DIR="${HOME}/.droidagent"
+MAINTENANCE_STATE="${APP_DIR}/state/maintenance-status.json"
 LAUNCH_AGENT_LABEL="com.droidagent.server"
 LAUNCH_AGENT_PLIST="${HOME}/Library/LaunchAgents/${LAUNCH_AGENT_LABEL}.plist"
 BOOTSTRAP_SERVER_LOG="${APP_DIR}/logs/bootstrap-server.log"
@@ -40,6 +41,34 @@ wait_for_server() {
     sleep 1
   done
   return 1
+}
+
+maintenance_active() {
+  node --input-type=module - "$MAINTENANCE_STATE" <<'NODE' >/dev/null 2>&1
+import fs from "node:fs";
+const target = process.argv[2];
+try {
+  const status = JSON.parse(fs.readFileSync(target, "utf8"));
+  process.exit(status?.active ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+}
+
+maintenance_phase() {
+  node --input-type=module - "$MAINTENANCE_STATE" <<'NODE'
+import fs from "node:fs";
+const target = process.argv[2];
+try {
+  const status = JSON.parse(fs.readFileSync(target, "utf8"));
+  const phase = status?.current?.phase ?? "active";
+  const message = status?.current?.message ?? "Maintenance is active.";
+  console.log(`${phase}: ${message}`);
+} catch {
+  process.exit(1);
+}
+NODE
 }
 
 log_step "DroidAgent bootstrap v${APP_VERSION}"
@@ -113,6 +142,16 @@ echo ""
 
 if [[ ! -f apps/server/dist/index.js ]]; then
   die "Server build artifact missing." "Run: pnpm build"
+fi
+
+if ! server_ready && maintenance_active; then
+  PHASE_SUMMARY="$(maintenance_phase || true)"
+  log_warn "Detected active maintenance (${PHASE_SUMMARY:-active}). Waiting for managed recovery instead of launching a duplicate host."
+  wait_for_server || die "DroidAgent is still in maintenance and did not become healthy in time." "Check ${APP_DIR}/logs/maintenance.log or finish recovery from localhost Settings."
+  log_ok "DroidAgent recovered after maintenance at ${SERVER_URL}"
+elif server_ready && maintenance_active; then
+  PHASE_SUMMARY="$(maintenance_phase || true)"
+  log_warn "DroidAgent is already running and maintenance is still marked active (${PHASE_SUMMARY:-active}). Reusing the managed host."
 fi
 
 if ! server_ready; then

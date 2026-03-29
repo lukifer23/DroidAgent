@@ -33,7 +33,7 @@ test("loads the signed-in shell and bottom-nav routes", async ({ page }) => {
     page.getByRole("button", { name: /^Host$/i }),
   ).toBeVisible();
   await expectNoHorizontalOverflow(page);
-  await page.getByRole("link", { name: "Files" }).click();
+  await page.getByRole("link", { name: "Files", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Create Directory" }),
   ).toBeVisible();
@@ -143,6 +143,58 @@ test("uploads chat attachments and shows them in the live thread", async ({
   ).toBeVisible();
 });
 
+test("captures a chat message as a memory draft, edits it, and applies it", async ({
+  page,
+}) => {
+  const state = await gotoSignedIn(page, "/chat");
+  const prompt = "remember that the operator prefers local-first tooling";
+
+  await page
+    .getByPlaceholder(
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
+    )
+    .fill(prompt);
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const userMessage = page.locator(".message-card.user").filter({
+    hasText: prompt,
+  });
+  await expect(userMessage).toBeVisible();
+  await userMessage.locator(".message-utility-tray summary").click();
+  await userMessage.getByRole("button", { name: "Memory" }).click();
+
+  await page.getByRole("link", { name: "Settings" }).click();
+  const draftCard = page.locator(".panel-card.compact").filter({
+    hasText: prompt,
+  });
+  await expect(draftCard).toBeVisible();
+  await draftCard.getByRole("button", { name: "Edit" }).click();
+  await draftCard.getByPlaceholder("Draft title").fill("Local-first preference");
+  await draftCard
+    .locator("textarea")
+    .fill("The operator prefers local-first tooling for daily work.");
+  await page.getByRole("button", { name: "Save Draft" }).click();
+
+  const updatedDraftCard = page.locator(".panel-card.compact").filter({
+    hasText: "Local-first preference",
+  });
+  await expect(updatedDraftCard).toBeVisible();
+  await updatedDraftCard.getByRole("button", { name: "Apply" }).click();
+  await expect
+    .poll(async () => {
+      const response = await page.request.get(
+        new URL("/api/files/content?path=MEMORY.md", state.baseUrl).toString(),
+      );
+      const body = (await response.json()) as { content?: string };
+      return (
+        body.content?.includes(
+          "The operator prefers local-first tooling for daily work.",
+        ) ?? false
+      );
+    })
+    .toBe(true);
+});
+
 test("surfaces file conflicts from disk changes and allows reload", async ({
   page,
 }) => {
@@ -169,6 +221,58 @@ test("runs owner jobs and replays output", async ({ page }) => {
   await page.getByRole("button", { name: "Run" }).click();
 
   await expect(stdoutPanel).toContainText("job-ok");
+});
+
+test("runs a suggested shell block inside chat", async ({ page }) => {
+  await gotoSignedIn(page, "/chat");
+
+  await page
+    .getByPlaceholder(
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
+    )
+    .fill("show a shell block");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const assistantMessage = page.locator(".message-card.assistant").filter({
+    hasText: "Runnable shell example:",
+  });
+  await expect(assistantMessage).toBeVisible();
+  await assistantMessage.getByRole("button", { name: "Run in Chat" }).click();
+
+  const inlineJobCard = page.locator(".chat-inline-job-card");
+  await expect(inlineJobCard).toBeVisible();
+  await expect(inlineJobCard).toContainText("suggested-job-ok");
+  await expect(
+    page.locator(".message-card.assistant").filter({
+      hasText: /suggested-job-ok/i,
+    }).last(),
+  ).toBeVisible();
+});
+
+test("opens a suggested shell block in the terminal without executing it", async ({
+  page,
+}) => {
+  await gotoSignedIn(page, "/chat");
+
+  await page
+    .getByPlaceholder(
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
+    )
+    .fill("show a shell block");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const assistantMessage = page.locator(".message-card.assistant").filter({
+    hasText: "Runnable shell example:",
+  });
+  await expect(assistantMessage).toBeVisible();
+  await assistantMessage.getByRole("button", { name: "Open in Terminal" }).click();
+
+  await expect(
+    page.getByRole("heading", {
+      name: /Recover permissions, auth, and host state directly/i,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText("Suggested command loaded")).toBeVisible();
 });
 
 test("reconnects after a temporary offline period", async ({ page }) => {

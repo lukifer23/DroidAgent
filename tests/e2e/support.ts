@@ -52,8 +52,7 @@ export async function gotoSignedIn(page: Page, pathname: string): Promise<E2ESta
   const state = await signInSeededOwner(page.context());
   await resetE2EState(page);
   await page.goto(new URL(pathname, state.baseUrl).toString());
-  await expect(
-    page.locator(".topbar-copy h1"),
-  ).toBeVisible();
+  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page.locator(".bottom-nav")).toBeVisible();
   return state;
 }

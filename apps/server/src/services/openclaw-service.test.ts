@@ -218,6 +218,55 @@ describe("OpenClaw context management policy", () => {
     expect(JSON.parse(modelArgs?.[3] ?? '""')).toBe("ollama/qwen3.5:4b");
   });
 
+  it("reuses the active Ollama model for image and pdf work when the model supports vision", async () => {
+    runtimeSettings.activeProviderId = "ollama-default";
+    runtimeSettings.ollamaModel = "qwen3.5:4b";
+    runCommand.mockResolvedValue({
+      stdout: `
+  Capabilities
+    completion
+    vision
+    tools
+`,
+      stderr: "",
+      exitCode: 0,
+    });
+    vi.spyOn(
+      openclawService as never,
+      "readCurrentConfig" as never,
+    ).mockReturnValue(null);
+    const execSpy = vi
+      .spyOn(openclawService as never, "execOpenClaw" as never)
+      .mockResolvedValue("");
+
+    await openclawService.ensureConfigured();
+
+    const imageModelArgs = execSpy.mock.calls.find(
+      (call) => (call[0] as string[])[2] === "agents.defaults.imageModel.primary",
+    )?.[0] as string[] | undefined;
+    const pdfModelArgs = execSpy.mock.calls.find(
+      (call) => (call[0] as string[])[2] === "agents.defaults.pdfModel.primary",
+    )?.[0] as string[] | undefined;
+    const providerArgs = execSpy.mock.calls.find(
+      (call) => (call[0] as string[])[2] === "models.providers.ollama",
+    )?.[0] as string[] | undefined;
+    const providerConfig = JSON.parse(providerArgs?.[3] ?? "{}") as {
+      models?: Array<{ id: string; input: string[] }>;
+    };
+
+    expect(JSON.parse(imageModelArgs?.[3] ?? '""')).toBe("ollama/qwen3.5:4b");
+    expect(JSON.parse(pdfModelArgs?.[3] ?? '""')).toBe("ollama/qwen3.5:4b");
+    expect(providerConfig.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "qwen3.5:4b",
+          input: ["text", "image"],
+        }),
+      ]),
+    );
+    expect(providerConfig.models).toHaveLength(1);
+  });
+
   it("skips config writes when the desired OpenClaw config is already present", async () => {
     runtimeSettings.activeProviderId = "ollama-default";
     runtimeSettings.ollamaModel = "qwen3.5:4b";

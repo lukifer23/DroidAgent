@@ -10,6 +10,7 @@
 - File and job operations are limited to the configured workspace root.
 - Public file APIs use workspace-relative paths instead of absolute host paths.
 - Text-file saving uses path jail checks, conflict detection, and atomic writes.
+- Durable memory writes stay approval-gated through editable drafts before anything is appended to `MEMORY.md`, `PREFERENCES.md`, or a daily note.
 - Signal is optional and remains a lower-trust ingress than the local web session.
 
 ## Origin and bootstrap guard
@@ -22,10 +23,12 @@
 ## Exec and approval model
 
 - Owner-submitted jobs run directly through DroidAgent inside the workspace jail and command policy.
+- Suggested shell blocks in chat only become jobs when the owner explicitly clicks `Run in Chat`.
 - Agent-requested exec continues through OpenClaw approvals.
 - Dangerous primitives remain blocked (`sudo`, `su`, destructive `rm`, etc.).
 - Job execution enforces timeout and output ceilings.
 - Replayable stdout/stderr logs live under `~/.droidagent/logs/jobs`.
+- `Open in Terminal` only inserts a suggested command into the PTY buffer; it does not auto-execute or bypass host-shell confirmation.
 
 ## Secrets
 

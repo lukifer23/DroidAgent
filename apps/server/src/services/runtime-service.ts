@@ -20,7 +20,12 @@ import {
   baseEnv,
   paths,
 } from "../env.js";
-import { CommandError, runCommand } from "../lib/process.js";
+import {
+  CommandError,
+  findProcesses,
+  runCommand,
+  terminateProcesses,
+} from "../lib/process.js";
 import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 import { harnessService } from "./harness-service.js";
@@ -399,6 +404,20 @@ export class RuntimeService {
     if (this.llamaCppProcess && this.llamaCppProcess.exitCode === null) {
       this.llamaCppProcess.kill("SIGTERM");
       this.llamaCppProcess = null;
+    }
+    const managedLlamaProcesses = await findProcesses(
+      (processInfo) =>
+        processInfo.pid !== process.pid &&
+        /llama-server/i.test(processInfo.command) &&
+        processInfo.command.includes(`--port ${LLAMA_CPP_PORT}`),
+    );
+    if (managedLlamaProcesses.length > 0) {
+      await terminateProcesses(
+        managedLlamaProcesses.map((processInfo) => processInfo.pid),
+        {
+          timeoutMs: 2_000,
+        },
+      );
     }
     this.invalidateCaches();
   }

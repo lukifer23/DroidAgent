@@ -47,6 +47,7 @@ import {
   runCommand,
   terminateProcesses,
 } from "../lib/process.js";
+import { ollamaModelSupportsVision } from "../lib/ollama.js";
 import { TtlCache } from "../lib/ttl-cache.js";
 import {
   DEFAULT_OLLAMA_VISION_MODEL,
@@ -110,6 +111,11 @@ const TOOLS_TEMPLATE = `# DroidAgent Tooling Notes
 - Prefer \`rg\` and \`rg --files\` for search.
 - Keep edits inside the configured workspace.
 - Summarize large command output instead of echoing raw JSON to the user.
+- Default coding-profile tools: \`read\`, \`write\`, \`edit\`, \`apply_patch\`, \`exec\`, \`process\`, \`sessions_list\`, \`sessions_history\`, \`sessions_send\`, \`sessions_spawn\`, \`sessions_yield\`, \`session_status\`, \`subagents\`, \`memory_search\`, \`memory_get\`, \`image\`, \`pdf\`.
+- There is no dedicated weather tool in the default coding profile.
+- Do not claim you ran a tool, command, or check unless this turn actually emitted the tool call and received its result.
+- If a command still needs operator approval, present it as a suggestion and say the operator can run it from chat.
+- If the needed tool is unavailable, say that plainly instead of implying it already ran.
 `;
 const IDENTITY_TEMPLATE = `# Identity
 
@@ -1431,39 +1437,52 @@ export class OpenClawService {
     }
   }
 
-  private buildOllamaProviderConfig(
+  private async resolveOllamaMultimodalConfig(
     runtimeSettings: Awaited<
       ReturnType<typeof appStateService.getRuntimeSettings>
     >,
-  ) {
+  ): Promise<{
+    attachmentModelId: string;
+    providerConfig: Record<string, unknown>;
+  }> {
     const modelId = runtimeSettings.ollamaModel;
-    const visionModelId = DEFAULT_OLLAMA_VISION_MODEL;
     const contextWindow = runtimeSettings.ollamaContextWindow;
+    const primarySupportsVision = await ollamaModelSupportsVision(modelId);
+    const attachmentModelId = primarySupportsVision
+      ? modelId
+      : DEFAULT_OLLAMA_VISION_MODEL;
+    const providerModels = [
+      {
+        id: modelId,
+        name: modelId,
+        reasoning: /r1|reasoning|think/i.test(modelId),
+        input: primarySupportsVision ? ["text", "image"] : ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow,
+        maxTokens: contextWindow,
+      },
+    ];
+
+    if (attachmentModelId !== modelId) {
+      providerModels.push({
+        id: attachmentModelId,
+        name: attachmentModelId,
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 65536,
+        maxTokens: 65536,
+      });
+    }
 
     return {
-      baseUrl: "http://127.0.0.1:11434",
-      api: "ollama",
-      apiKey: "ollama-local",
-      models: [
-        {
-          id: modelId,
-          name: modelId,
-          reasoning: /r1|reasoning|think/i.test(modelId),
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow,
-          maxTokens: contextWindow,
-        },
-        {
-          id: visionModelId,
-          name: visionModelId,
-          reasoning: false,
-          input: ["text", "image"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 65536,
-          maxTokens: 65536,
-        },
-      ],
+      attachmentModelId,
+      providerConfig: {
+        baseUrl: "http://127.0.0.1:11434",
+        api: "ollama",
+        apiKey: "ollama-local",
+        models: providerModels,
+      },
     };
   }
 
@@ -2170,6 +2189,9 @@ export class OpenClawService {
     const workspaceRoot = this.resolveWorkspaceRoot(runtimeSettings);
     await this.ensureWorkspaceScaffold(workspaceRoot);
     let currentConfig = this.readCurrentConfig();
+    const multimodalConfig = await this.resolveOllamaMultimodalConfig(
+      runtimeSettings,
+    );
 
     const desiredConfig: Array<[string, unknown]> = [
       ["gateway.mode", "local"],
@@ -2182,15 +2204,18 @@ export class OpenClawService {
         "agents.defaults.model.primary",
         this.resolvePrimaryModel(runtimeSettings),
       ],
-      ["agents.defaults.imageModel.primary", `ollama/${DEFAULT_OLLAMA_VISION_MODEL}`],
-      ["agents.defaults.pdfModel.primary", `ollama/${DEFAULT_OLLAMA_VISION_MODEL}`],
+      [
+        "agents.defaults.imageModel.primary",
+        `ollama/${multimodalConfig.attachmentModelId}`,
+      ],
+      [
+        "agents.defaults.pdfModel.primary",
+        `ollama/${multimodalConfig.attachmentModelId}`,
+      ],
       ["agents.defaults.thinkingDefault", "off"],
       ["tools.profile", "coding"],
       ["tools.allow", ["pdf"]],
-      [
-        "models.providers.ollama",
-        this.buildOllamaProviderConfig(runtimeSettings),
-      ],
+      ["models.providers.ollama", multimodalConfig.providerConfig],
       [
         "agents.defaults.memorySearch",
         this.buildMemorySearchConfig(runtimeSettings),
@@ -2244,6 +2269,20 @@ export class OpenClawService {
       deep: true,
       index: params.reindex ?? false,
     });
+    this.invalidateMemoryStatusCache();
+    return await this.currentMemoryStatus();
+  }
+
+  async reindexMemory(params: { force?: boolean } = {}): Promise<MemoryStatus> {
+    const runtimeSettings = await appStateService.getRuntimeSettings();
+    const workspaceRoot = this.resolveWorkspaceRoot(runtimeSettings);
+    await this.ensureWorkspaceScaffold(workspaceRoot);
+    await this.ensureConfigured();
+    const args = ["memory", "index"];
+    if (params.force) {
+      args.push("--force");
+    }
+    await this.execOpenClaw(args, true);
     this.invalidateMemoryStatusCache();
     return await this.currentMemoryStatus();
   }
@@ -3080,14 +3119,31 @@ export class OpenClawService {
         ollamaModel: modelId,
         ollamaContextWindow: contextWindow,
       });
+      let nextConfig = this.readCurrentConfig();
+      const multimodalConfig = await this.resolveOllamaMultimodalConfig({
+        ...runtimeSettings,
+        ollamaModel: modelId,
+        ollamaContextWindow: contextWindow,
+      });
+      nextConfig = await this.setConfigValueIfNeeded(
+        nextConfig,
+        "agents.defaults.model.primary",
+        `ollama/${modelId}`,
+      );
+      nextConfig = await this.setConfigValueIfNeeded(
+        nextConfig,
+        "agents.defaults.imageModel.primary",
+        `ollama/${multimodalConfig.attachmentModelId}`,
+      );
+      nextConfig = await this.setConfigValueIfNeeded(
+        nextConfig,
+        "agents.defaults.pdfModel.primary",
+        `ollama/${multimodalConfig.attachmentModelId}`,
+      );
       await this.setConfigValueIfNeeded(
-        this.readCurrentConfig(),
+        nextConfig,
         "models.providers.ollama",
-        this.buildOllamaProviderConfig({
-          ...runtimeSettings,
-          ollamaModel: modelId,
-          ollamaContextWindow: contextWindow,
-        }),
+        multimodalConfig.providerConfig,
       );
       await this.selectOllamaModel(modelId);
       await this.applyContextManagementPolicy({

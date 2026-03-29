@@ -9,7 +9,7 @@
   - modularized UI shell styling layers (`styles.css`, `styles/system.css`, `styles/motion.css`) with unified viewport-measured layout primitives
 - `packages/shared`
   - shared Zod contracts and event payloads
-  - includes explicit realtime harness update events for dashboard coherence
+  - includes explicit realtime harness update events for dashboard coherence plus the maintenance and memory-draft contracts used by both server and web
 
 The default local path is `Ollama + qwen3.5:4b + 65k context + embeddinggemma:300m-qat-q8_0 + smart context management + workspace memory scaffold`.
 
@@ -37,7 +37,7 @@ pnpm verify:full
   - builds the workspace and runs Playwright against the real built DroidAgent server
   - Playwright starts a temp HOME, temp SQLite DB, temp workspace, and a seeded owner session
   - tests do not intercept `/api/**` and do not replace `window.WebSocket`
-  - acceptance is chat-first now: the signed-in operator shell, live chat state, attachments, files, jobs, reconnect, and layout stability on Fold-sized viewports
+  - acceptance is chat-first now: the signed-in operator shell, live chat state, durable-memory capture, suggested-command promotion, attachments, files, jobs, reconnect, and layout stability on Fold-sized viewports
 - `pnpm perf:e2e`
   - runs advisory Playwright perf scenarios and writes artifacts under `artifacts/perf/`
 

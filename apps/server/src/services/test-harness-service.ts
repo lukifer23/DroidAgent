@@ -40,6 +40,22 @@ function cloneMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => ChatMessageSchema.parse({ ...message }));
 }
 
+function buildHarnessReply(message: string, attachmentCount: number): string {
+  if (/shell block/i.test(message)) {
+    return [
+      "Runnable shell example:",
+      "",
+      "```sh",
+      "printf 'suggested-job-ok'",
+      "```",
+    ].join("\n");
+  }
+
+  return attachmentCount > 0
+    ? `Test harness reply: ${message} (${attachmentCount} attachment${attachmentCount === 1 ? "" : "s"})`
+    : `Test harness reply: ${message}`;
+}
+
 export class TestHarnessService implements HarnessAdapter {
   private readonly sessions = new Map<string, ChatMessage[]>();
   private readonly activeRuns = new Map<string, ActiveRun>();
@@ -106,8 +122,8 @@ export class TestHarnessService implements HarnessAdapter {
       activeModel: `ollama/${runtimeSettings.ollamaModel}`,
       contextWindow: runtimeSettings.ollamaContextWindow,
       thinkingDefault: "off",
-      imageModel: "ollama/qwen2.5vl:3b",
-      pdfModel: "ollama/qwen2.5vl:3b",
+      imageModel: `ollama/${runtimeSettings.ollamaModel}`,
+      pdfModel: `ollama/${runtimeSettings.ollamaModel}`,
       workspaceRoot: runtimeSettings.workspaceRoot,
       toolProfile: "coding",
       availableTools: [
@@ -219,10 +235,7 @@ export class TestHarnessService implements HarnessAdapter {
     );
 
     const runId = randomUUID();
-    const responseText =
-      request.attachments.length > 0
-        ? `Test harness reply: ${message} (${request.attachments.length} attachment${request.attachments.length === 1 ? "" : "s"})`
-        : `Test harness reply: ${message}`;
+    const responseText = buildHarnessReply(message, request.attachments.length);
     const chunks = chunkText(responseText);
     const activeRun: ActiveRun = {
       timer: null,

@@ -11,7 +11,7 @@ import {
   type ReactNode
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { ChatMessage, ClientCommand, ServerEvent, WorkspaceEntry } from "@droidagent/shared";
+import type { ChatMessage, ClientCommand, ServerEvent } from "@droidagent/shared";
 
 import { useAccessQuery, useAuthQuery, useDashboardQuery, usePasskeysQuery } from "./app-data";
 import { useWebSocket } from "./hooks/use-websocket";
@@ -48,6 +48,7 @@ interface DroidAgentAppContextValue {
 }
 
 const DroidAgentAppContext = createContext<DroidAgentAppContextValue | null>(null);
+const TRANSIENT_WEB_SESSION_PREFIX = "web:fresh:";
 
 export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
@@ -79,7 +80,14 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
 
   const routeTransitionRef = useRef<{ path: string; metric: ReturnType<typeof clientPerformance.start> } | null>(null);
   const pendingChatMetricsRef = useRef<
-    Map<string, { firstToken: ReturnType<typeof clientPerformance.start>; completed: ReturnType<typeof clientPerformance.start> }>
+    Map<
+      string,
+      {
+        firstToken: ReturnType<typeof clientPerformance.start>;
+        firstTokenFinished: boolean;
+        completed: ReturnType<typeof clientPerformance.start>;
+      }
+    >
   >(new Map());
   const pendingJobMetricsRef = useRef<Map<string, ReturnType<typeof clientPerformance.start>>>(new Map());
 
@@ -204,6 +212,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       firstToken: clientPerformance.start("client.chat.submit_to_first_token", {
         sessionId
       }),
+      firstTokenFinished: false,
       completed: clientPerformance.start("client.chat.submit_to_done", {
         sessionId
       })
@@ -222,14 +231,24 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const handleSocketMessage = useEffectEvent((event: ServerEvent) => {
     if (event.type === "chat.stream.delta") {
       const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
-      tracked?.firstToken.finish({
-        runId: event.payload.runId
-      });
+      if (tracked && !tracked.firstTokenFinished) {
+        tracked.firstToken.finish({
+          runId: event.payload.runId
+        });
+        tracked.firstTokenFinished = true;
+      }
       return;
     }
 
     if (event.type === "chat.stream.done") {
       const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
+      if (tracked && !tracked.firstTokenFinished) {
+        tracked.firstToken.finish({
+          runId: event.payload.runId,
+          outcome: "no-delta"
+        });
+        tracked.firstTokenFinished = true;
+      }
       tracked?.completed.finish({
         runId: event.payload.runId,
         outcome: "done"
@@ -240,10 +259,13 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
 
     if (event.type === "chat.stream.error") {
       const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
-      tracked?.firstToken.finish({
-        runId: event.payload.runId,
-        outcome: "error"
-      });
+      if (tracked && !tracked.firstTokenFinished) {
+        tracked.firstToken.finish({
+          runId: event.payload.runId,
+          outcome: "error"
+        });
+        tracked.firstTokenFinished = true;
+      }
       tracked?.completed.finish({
         runId: event.payload.runId,
         outcome: "error"
@@ -320,6 +342,9 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     if (dashboardSessions.length === 0) {
       return;
     }
+    if (selectedSessionId.startsWith(TRANSIENT_WEB_SESSION_PREFIX)) {
+      return;
+    }
     if (dashboardSessions.some((session) => session.id === selectedSessionId)) {
       return;
     }
@@ -333,7 +358,13 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const workspaceRoot = dashboardQuery.data?.setup?.workspaceRoot;
+    if (
+      selectedSessionId.startsWith(TRANSIENT_WEB_SESSION_PREFIX) &&
+      !dashboardSessions.some((session) => session.id === selectedSessionId)
+    ) {
+      return;
+    }
+
     const targetSessionId = dashboardSessions.some((session) => session.id === selectedSessionId)
       ? selectedSessionId
       : dashboardSessions[0]?.id;
@@ -343,14 +374,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
         queryFn: () => api<ChatMessage[]>(`/api/sessions/${encodeURIComponent(targetSessionId)}/messages`)
       });
     }
-
-    if (workspaceRoot) {
-      void queryClient.prefetchQuery({
-        queryKey: ["files", "."],
-        queryFn: () => api<WorkspaceEntry[]>("/api/files?path=.")
-      });
-    }
-  }, [authQuery.data?.user, dashboardSessions, dashboardQuery.data?.setup?.workspaceRoot, queryClient, selectedSessionId]);
+  }, [authQuery.data?.user, dashboardSessions, queryClient, selectedSessionId]);
 
   const installApp = useEffectEvent(async () => {
     if (!installPromptEvent) {

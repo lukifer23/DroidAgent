@@ -6,9 +6,12 @@ import { accessService } from "./access-service.js";
 import { appStateService } from "./app-state-service.js";
 import { buildInfoService } from "./build-info-service.js";
 import { harnessService } from "./harness-service.js";
+import { hostPressureService } from "./host-pressure-service.js";
 import { jobService } from "./job-service.js";
 import { keychainService } from "./keychain-service.js";
 import { launchAgentService } from "./launch-agent-service.js";
+import { maintenanceService } from "./maintenance-service.js";
+import { memoryDraftService } from "./memory-draft-service.js";
 import { openclawService } from "./openclaw-service.js";
 import { runtimeService } from "./runtime-service.js";
 import { signalService } from "./signal-service.js";
@@ -38,7 +41,10 @@ export class DashboardService {
           channelState,
           harness,
           memory,
+          hostPressure,
+          memoryDrafts,
           contextManagement,
+          maintenance,
           launchAgent,
           sessions,
           jobs,
@@ -52,7 +58,10 @@ export class DashboardService {
           harnessService.listChannels(),
           harnessService.harnessStatus(),
           openclawService.memoryStatus(),
+          hostPressureService.getStatus(),
+          memoryDraftService.listDrafts(),
           openclawService.contextManagementStatus(),
+          maintenanceService.getStatus(),
           launchAgentService.status(),
           harnessService.listSessions(),
           jobService.listJobs(),
@@ -75,7 +84,10 @@ export class DashboardService {
           channelConfig: channelState.config,
           harness,
           memory,
+          hostPressure,
+          memoryDrafts,
           contextManagement,
+          maintenance,
           launchAgent,
           sessions,
           jobs,

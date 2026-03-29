@@ -1,13 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  Activity,
   Bot,
   FolderTree,
   Hammer,
   MessagesSquare,
   Settings2,
   ShieldCheck,
-  Smartphone,
   X,
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
@@ -33,7 +31,17 @@ interface HostStatusItem {
   label: string;
   value: string;
   detail: string;
-  tone: "good" | "warn";
+  tone: "good" | "warn" | "critical";
+}
+
+function formatHostBytes(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "unknown";
+  }
+  if (value >= 1024 ** 3) {
+    return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+  }
+  return `${Math.round(value / 1024 ** 2)} MiB`;
 }
 
 export function AppLayout() {
@@ -59,6 +67,7 @@ export function AppLayout() {
   const dashboard = dashboardQuery.data;
   const setup = dashboard?.setup;
   const memory = dashboard?.memory;
+  const hostPressure = dashboard?.hostPressure;
   const build = dashboard?.build;
   const launchAgent = dashboard?.launchAgent;
   const providers = dashboard?.providers ?? [];
@@ -77,8 +86,8 @@ export function AppLayout() {
   const navItemsForState = navItems.filter(
     (item) => !operatorReady || item.readyOnly,
   );
-  const showStatusRow = !isChatRoute && !isTerminalRoute;
-
+  const hostPressureLevel = hostPressure?.level ?? "unknown";
+  const hostPressureAvailableBytes = hostPressure?.memoryAvailableBytes ?? null;
   useEffect(() => {
     finishRouteTransition(location.pathname);
   }, [finishRouteTransition, location.pathname]);
@@ -150,10 +159,6 @@ export function AppLayout() {
   const topbarMeta = [
     access?.canonicalOrigin?.origin ? "Tailscale live" : "Local only",
     activeProvider?.model ?? setup?.selectedModel ?? "model pending",
-    activeProvider?.contextWindow
-      ? formatTokenBudget(activeProvider.contextWindow)
-      : null,
-    memory?.semanticReady ? "memory ready" : "memory pending",
     `v${build?.version ?? "unknown"}`,
   ]
     .filter(Boolean)
@@ -187,6 +192,26 @@ export function AppLayout() {
       tone: runtimeCount > 0 ? "good" : "warn",
     },
     {
+      label: "Host pressure",
+      value:
+        hostPressureLevel === "critical"
+          ? "Critical"
+          : hostPressureLevel === "warn"
+            ? "Elevated"
+            : hostPressureLevel === "unknown"
+              ? "Telemetry fallback"
+              : "Normal",
+      detail:
+        hostPressure?.message ??
+        "Host pressure telemetry is still loading.",
+      tone:
+        hostPressureLevel === "critical"
+          ? "critical"
+          : hostPressureLevel === "warn" || hostPressureLevel === "unknown"
+            ? "warn"
+            : "good",
+    },
+    {
       label: "Memory",
       value: memory?.semanticReady ? "Indexed" : "Pending",
       detail: memory?.semanticReady
@@ -212,6 +237,21 @@ export function AppLayout() {
         "LaunchAgent health is still loading.",
       tone: launchAgent?.running ? "good" : "warn",
     },
+    ...(hostPressure && hostPressureAvailableBytes !== null
+      ? [
+          {
+            label: "Reclaimable RAM",
+            value: formatHostBytes(hostPressureAvailableBytes),
+            detail: `${formatHostBytes(hostPressure.swapUsedBytes)} swap used • ${hostPressure.activeJobs} active job${hostPressure.activeJobs === 1 ? "" : "s"}.`,
+            tone:
+              hostPressure.level === "critical"
+                ? "critical"
+                : hostPressure.level === "warn"
+                  ? "warn"
+                  : "good",
+          } satisfies HostStatusItem,
+        ]
+      : []),
   ];
 
   return (
@@ -258,32 +298,6 @@ export function AppLayout() {
           </div>
         </div>
 
-        {showStatusRow ? (
-          <div className="topbar-status-row">
-            <span className={`status-chip${operatorReady ? " ready" : ""}`}>
-              <ShieldCheck size={14} />
-              {operatorReady ? "Ready" : "Setup required"}
-            </span>
-            <span
-              className={`status-chip${access?.canonicalOrigin?.origin ? " ready" : ""}`}
-            >
-              <Smartphone size={14} />
-              {access?.canonicalOrigin?.origin ? "Phone live" : "Phone pending"}
-            </span>
-            <span className={`status-chip${runtimeCount > 0 ? " ready" : ""}`}>
-              <Bot size={14} />
-              {runtimeCount > 0 ? "Runtime live" : "Runtime pending"}
-            </span>
-            <span
-              className={`status-chip${pendingApprovals > 0 ? "" : " ready"}`}
-            >
-              <Activity size={14} />
-              {pendingApprovals > 0
-                ? `${pendingApprovals} approval${pendingApprovals === 1 ? "" : "s"}`
-                : "No approvals"}
-            </span>
-          </div>
-        ) : null}
       </header>
 
       {!isOnline ? (

@@ -11,7 +11,12 @@ import {
 } from "@droidagent/shared";
 
 import { SERVER_PORT, baseEnv, ensureAppDirs, paths } from "../env.js";
-import { CommandError, runCommand } from "../lib/process.js";
+import {
+  CommandError,
+  findProcesses,
+  runCommand,
+  terminateProcesses,
+} from "../lib/process.js";
 import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 import { keychainService } from "./keychain-service.js";
@@ -480,6 +485,50 @@ export class TailscaleRemoteAccessProvider implements RemoteAccessProvider<Tails
       throw error;
     }
     this.invalidateStatus();
+  }
+
+  async stopManagedUserspaceDaemon(): Promise<void> {
+    if (this.process && this.process.exitCode === null) {
+      this.process.kill("SIGTERM");
+      this.process = null;
+    }
+
+    const managedProcesses = await findProcesses(
+      (processInfo) =>
+        processInfo.pid !== process.pid &&
+        /tailscaled/i.test(processInfo.command) &&
+        processInfo.command.includes(paths.tailscaleSocketPath),
+    );
+    if (managedProcesses.length > 0) {
+      await terminateProcesses(
+        managedProcesses.map((processInfo) => processInfo.pid),
+        {
+          timeoutMs: 2_000,
+        },
+      );
+    }
+
+    fs.rmSync(paths.tailscaleSocketPath, { force: true });
+    this.activeSocketPath = null;
+    this.invalidateStatus();
+  }
+
+  async restartManagedUserspaceServe(): Promise<boolean> {
+    const shouldManage =
+      this.activeSocketPath === paths.tailscaleSocketPath ||
+      fs.existsSync(paths.tailscaleSocketPath);
+    if (!shouldManage) {
+      this.invalidateStatus();
+      return false;
+    }
+
+    await this.stopManagedUserspaceDaemon();
+    const socketPath = await this.ensureUserspaceDaemon();
+    if (!socketPath) {
+      throw new Error("Failed to restart the managed Tailscale userspace daemon.");
+    }
+    await this.enableServe();
+    return true;
   }
 
   async getStatus(): Promise<TailscaleStatus> {

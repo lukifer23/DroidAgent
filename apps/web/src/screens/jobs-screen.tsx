@@ -25,6 +25,8 @@ export function JobsScreen() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   const jobs = dashboard?.jobs ?? [];
+  const hostPressure = dashboard?.hostPressure;
+  const jobStartsBlocked = Boolean(hostPressure?.blocksAgentRuns);
 
   useEffect(() => {
     if (jobs.length === 0) {
@@ -45,6 +47,12 @@ export function JobsScreen() {
     <section className="jobs-panel">
       <div className="panel-card">
         <h3>Run Job</h3>
+        {jobStartsBlocked ? (
+          <small>
+            {hostPressure?.message ??
+              "Host pressure is critical. New jobs are paused until the Mac settles."}
+          </small>
+        ) : null}
         <label>
           Command
           <input value={commandInput} onChange={(event) => setCommandInput(event.target.value)} />
@@ -54,6 +62,7 @@ export function JobsScreen() {
           <input value={jobCwdInput} onChange={(event) => setJobCwdInput(event.target.value)} />
         </label>
         <button
+          disabled={jobStartsBlocked}
           onClick={() =>
             void runAction(async () => {
               const response = await postJson<{ jobId: string }>("/api/jobs", {

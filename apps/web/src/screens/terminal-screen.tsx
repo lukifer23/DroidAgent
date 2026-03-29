@@ -7,9 +7,12 @@ import type { TerminalSnapshot } from "@droidagent/shared";
 
 import "@xterm/xterm/css/xterm.css";
 
+import { useAuthQuery, useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { api, deleteJson, postJson } from "../lib/api";
 import { useTerminalState, terminalStore } from "../lib/terminal-store";
+
+const TERMINAL_PREFILL_STORAGE_KEY = "droidagent-terminal-prefill";
 
 function terminalTheme(theme: "dark" | "light") {
   return theme === "light"
@@ -47,13 +50,19 @@ export function TerminalScreen() {
   const queryClient = useQueryClient();
   const { resolvedTheme, runAction, sendRealtimeCommand, wsStatus } =
     useDroidAgentApp();
+  const authQuery = useAuthQuery();
+  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const hostPressure = dashboardQuery.data?.hostPressure;
   const terminalState = useTerminalState();
   const [confirmHostAccess, setConfirmHostAccess] = useState(false);
+  const [prefillLoadedSessionId, setPrefillLoadedSessionId] = useState<string | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement | null>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const renderedSessionIdRef = useRef<string | null>(null);
   const renderedTranscriptRef = useRef("");
+  const prefillAttemptedRef = useRef(false);
+  const prefillSentForSessionRef = useRef<string | null>(null);
   const sendRealtimeCommandRef = useRef(sendRealtimeCommand);
   const wsStatusRef = useRef(wsStatus);
   const terminalSessionIdRef = useRef<string | null>(terminalState.session?.id ?? null);
@@ -73,8 +82,51 @@ export function TerminalScreen() {
     if (!snapshotQuery.data) {
       return;
     }
+    const current = terminalStore.getSnapshot();
+    if (current.session && !snapshotQuery.data.session) {
+      return;
+    }
     terminalStore.replace(snapshotQuery.data);
   }, [snapshotQuery.data]);
+
+  useEffect(() => {
+    const pendingPrefill = window.sessionStorage.getItem(
+      TERMINAL_PREFILL_STORAGE_KEY,
+    );
+    if (!pendingPrefill || terminalState.session || prefillAttemptedRef.current) {
+      return;
+    }
+
+    prefillAttemptedRef.current = true;
+    void runAction(async () => {
+      await startSession("workspace");
+    }, "Workspace rescue terminal started.");
+  }, [runAction, terminalState.session]);
+
+  useEffect(() => {
+    const pendingPrefill = window.sessionStorage.getItem(
+      TERMINAL_PREFILL_STORAGE_KEY,
+    );
+    if (
+      !pendingPrefill ||
+      !terminalState.session ||
+      wsStatus !== "connected" ||
+      prefillSentForSessionRef.current === terminalState.session.id
+    ) {
+      return;
+    }
+
+    sendRealtimeCommand({
+      type: "terminal.input",
+      payload: {
+        sessionId: terminalState.session.id,
+        data: pendingPrefill,
+      },
+    });
+    prefillSentForSessionRef.current = terminalState.session.id;
+    setPrefillLoadedSessionId(terminalState.session.id);
+    window.sessionStorage.removeItem(TERMINAL_PREFILL_STORAGE_KEY);
+  }, [sendRealtimeCommand, terminalState.session, wsStatus]);
 
   useEffect(() => {
     const container = terminalContainerRef.current;
@@ -261,6 +313,17 @@ export function TerminalScreen() {
         </div>
       </article>
 
+      {hostPressure?.level === "critical" || hostPressure?.level === "warn" ? (
+        <article className="panel-card compact">
+          <strong>
+            {hostPressure.level === "critical"
+              ? "Host pressure is critical"
+              : "Host pressure is elevated"}
+          </strong>
+          <p>{hostPressure.message}</p>
+        </article>
+      ) : null}
+
       <section className="terminal-workspace">
         <article className="panel-card compact terminal-control-card">
           <div className="panel-heading">
@@ -362,6 +425,16 @@ export function TerminalScreen() {
             <div className="terminal-warning-card muted">
               <strong>Last close reason</strong>
               <p>{terminalState.closeReason}</p>
+            </div>
+          ) : null}
+
+          {prefillLoadedSessionId === session?.id ? (
+            <div className="terminal-warning-card muted">
+              <strong>Suggested command loaded</strong>
+              <p>
+                DroidAgent inserted a suggested command into this shell without
+                executing it.
+              </p>
             </div>
           ) : null}
 

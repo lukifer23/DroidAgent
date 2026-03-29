@@ -50,6 +50,13 @@ export function putJson<T>(input: string, body: unknown): Promise<T> {
   });
 }
 
+export function patchJson<T>(input: string, body: unknown): Promise<T> {
+  return api<T>(input, {
+    method: "PATCH",
+    body: JSON.stringify(body)
+  });
+}
+
 export function postFormData<T>(input: string, body: FormData): Promise<T> {
   return api<T>(input, {
     method: "POST",

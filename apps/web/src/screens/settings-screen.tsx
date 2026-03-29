@@ -9,6 +9,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import type {
   BootstrapLink,
   CloudProviderSummary,
+  HostPressureStatus,
+  MemoryDraft,
+  MemoryDraftTarget,
   PerformanceSnapshot,
 } from "@droidagent/shared";
 
@@ -20,7 +23,7 @@ import {
   usePerformanceQuery,
 } from "../app-data";
 import { useClientPerformanceSnapshot, useDroidAgentApp } from "../app-context";
-import { api, postJson } from "../lib/api";
+import { api, patchJson, postJson } from "../lib/api";
 import { clientPerformance } from "../lib/client-performance";
 import { formatTokenBudget } from "../lib/formatters";
 
@@ -36,7 +39,41 @@ function metricDescription(
 
   const p95 = metric.summary.p95DurationMs ?? metric.summary.lastDurationMs;
   const last = metric.summary.lastDurationMs;
-  return `${label}: p95 ${p95 ?? 0} ms • last ${last ?? 0} ms`;
+  const ageMs = metric.summary.sampleAgeMs;
+  const ageLabel =
+    typeof ageMs === "number"
+      ? ageMs >= 60_000
+        ? `${Math.round(ageMs / 60_000)}m old`
+        : ageMs >= 1_000
+          ? `${Math.round(ageMs / 1_000)}s old`
+          : `${Math.round(ageMs)}ms old`
+      : "age unknown";
+  return `${label}: p95 ${p95 ?? 0} ms • last ${last ?? 0} ms • ${metric.summary.count} samples • ${ageLabel}`;
+}
+
+function formatHostBytes(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "unknown";
+  }
+  if (value >= 1024 ** 3) {
+    return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+  }
+  return `${Math.round(value / 1024 ** 2)} MiB`;
+}
+
+function hostPressureTone(
+  hostPressure: HostPressureStatus | undefined,
+): "good" | "warn" | "critical" | "muted" {
+  if (!hostPressure) {
+    return "muted";
+  }
+  if (hostPressure.level === "critical") {
+    return "critical";
+  }
+  if (hostPressure.level === "warn" || hostPressure.level === "unknown") {
+    return "warn";
+  }
+  return "good";
 }
 
 export function SettingsScreen() {
@@ -59,7 +96,10 @@ export function SettingsScreen() {
   const access = accessQuery.data;
   const setup = dashboard?.setup;
   const launchAgent = dashboard?.launchAgent;
+  const maintenance = dashboard?.maintenance;
   const memory = dashboard?.memory;
+  const hostPressure = dashboard?.hostPressure;
+  const memoryDrafts = dashboard?.memoryDrafts ?? [];
   const harness = dashboard?.harness;
   const build = dashboard?.build;
   const contextManagement = dashboard?.contextManagement;
@@ -75,6 +115,16 @@ export function SettingsScreen() {
   const [bootstrapLink, setBootstrapLink] = useState<BootstrapLink | null>(
     null,
   );
+  const [draftEdits, setDraftEdits] = useState<
+    Record<
+      string,
+      {
+        target: MemoryDraftTarget;
+        title: string;
+        content: string;
+      }
+    >
+  >({});
 
   const passkeyCount = passkeysQuery.data?.length ?? 0;
   const runtimeCount = runtimes.filter((runtime) => runtime.state === "running")
@@ -83,6 +133,16 @@ export function SettingsScreen() {
   const remoteReady = Boolean(access?.canonicalOrigin?.origin);
   const canGeneratePhoneLink = Boolean(access?.canonicalOrigin);
   const memoryReady = Boolean(memory?.semanticReady);
+  const normalizedActiveModel =
+    harness?.activeModel?.replace(/^ollama\//, "") ?? null;
+  const normalizedImageModel =
+    harness?.imageModel?.replace(/^ollama\//, "") ?? null;
+  const pendingMemoryDrafts = memoryDrafts.filter(
+    (draft) => draft.status === "pending",
+  );
+  const localhostMaintenance = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
+    window.location.hostname,
+  );
 
   const overviewCards = [
     {
@@ -119,6 +179,28 @@ export function SettingsScreen() {
       tone: passkeyCount > 0 ? "good" : "warn",
     },
     {
+      key: "pressure",
+      label: "Host Pressure",
+      value:
+        hostPressure?.level === "critical"
+          ? "Critical"
+          : hostPressure?.level === "warn"
+            ? "Elevated"
+            : hostPressure?.level === "unknown"
+              ? "Fallback"
+              : "Normal",
+      detail:
+        hostPressure?.message ??
+        "Host pressure telemetry is still loading.",
+      progress:
+        hostPressure?.level === "critical"
+          ? 98
+          : hostPressure?.level === "warn" || hostPressure?.level === "unknown"
+            ? 68
+            : 18,
+      tone: hostPressureTone(hostPressure),
+    },
+    {
       key: "runtime",
       label: "Runtime",
       value: runtimeCount > 0 ? `${runtimeCount} live` : "Not running",
@@ -127,6 +209,16 @@ export function SettingsScreen() {
         : "No default model is selected yet for the common local path.",
       progress: runtimeCount > 0 ? 100 : 26,
       tone: runtimeCount > 0 ? "good" : "warn",
+    },
+    {
+      key: "maintenance",
+      label: "Maintenance",
+      value: maintenance?.active ? maintenance.current?.phase ?? "Active" : "Idle",
+      detail: maintenance?.active
+        ? maintenance.current?.message ?? "Maintenance is blocking new work."
+        : "No maintenance workflow is active.",
+      progress: maintenance?.active ? 60 : 100,
+      tone: maintenance?.active ? "warn" : "good",
     },
   ] as const;
 
@@ -161,6 +253,90 @@ export function SettingsScreen() {
       });
       throw error;
     }
+  }
+
+  async function handleRunMaintenance(
+    scope: "app" | "runtime" | "remote",
+    action: "restart" | "drain-only",
+  ) {
+    await postJson("/api/maintenance/run", {
+      scope,
+      action,
+    });
+    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  }
+
+  async function handleApplyDraft(draft: MemoryDraft) {
+    await postJson(`/api/memory/drafts/${encodeURIComponent(draft.id)}/apply`, {});
+    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  }
+
+  async function handleUpdateDraft(draft: MemoryDraft) {
+    const edit = draftEdits[draft.id];
+    if (!edit) {
+      return;
+    }
+    await patchJson(`/api/memory/drafts/${encodeURIComponent(draft.id)}`, {
+      target: edit.target,
+      title: edit.title.trim() || null,
+      content: edit.content.trim(),
+    });
+    setDraftEdits((current) => {
+      const next = { ...current };
+      delete next[draft.id];
+      return next;
+    });
+    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  }
+
+  async function handleDismissDraft(draft: MemoryDraft) {
+    await postJson(
+      `/api/memory/drafts/${encodeURIComponent(draft.id)}/dismiss`,
+      {},
+    );
+    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  }
+
+  function beginDraftEdit(draft: MemoryDraft) {
+    setDraftEdits((current) => ({
+      ...current,
+      [draft.id]: {
+        target: draft.target,
+        title: draft.title ?? "",
+        content: draft.content,
+      },
+    }));
+  }
+
+  function cancelDraftEdit(draftId: string) {
+    setDraftEdits((current) => {
+      const next = { ...current };
+      delete next[draftId];
+      return next;
+    });
+  }
+
+  function updateDraftEdit(
+    draftId: string,
+    patch: Partial<{
+      target: MemoryDraftTarget;
+      title: string;
+      content: string;
+    }>,
+  ) {
+    setDraftEdits((current) => {
+      const existing = current[draftId];
+      if (!existing) {
+        return current;
+      }
+      return {
+        ...current,
+        [draftId]: {
+          ...existing,
+          ...patch,
+        },
+      };
+    });
   }
 
   return (
@@ -245,6 +421,39 @@ export function SettingsScreen() {
                 {setup?.selectedRuntime
                   ? `Selected runtime: ${setup.selectedRuntime}`
                   : "No runtime selected yet."}
+              </small>
+            </article>
+            <article
+              className={`health-row${
+                hostPressure?.level === "critical"
+                  ? " critical"
+                  : hostPressure?.level === "warn" ||
+                      hostPressure?.level === "unknown"
+                    ? " warn"
+                    : " ready"
+              }`}
+            >
+              <div className="health-row-top">
+                <strong>Host pressure</strong>
+                <span
+                  className={`status-chip${
+                    hostPressure?.level === "critical"
+                      ? ""
+                      : " ready"
+                  }`}
+                >
+                  {hostPressure?.level === "critical"
+                    ? "Critical"
+                    : hostPressure?.level === "warn"
+                      ? "Elevated"
+                      : hostPressure?.level === "unknown"
+                        ? "Fallback"
+                        : "Normal"}
+                </span>
+              </div>
+              <small>
+                {hostPressure?.message ??
+                  "Host pressure telemetry is still loading."}
               </small>
             </article>
           </div>
@@ -377,6 +586,172 @@ export function SettingsScreen() {
             </button>
           </div>
         </article>
+
+        <article className="panel-card">
+          <div className="panel-heading">
+            <h3>Maintenance</h3>
+            <p>
+              Drain live work, restart managed services in order, and keep the
+              maintenance state visible while DroidAgent recovers.
+            </p>
+          </div>
+          <div className="status-list">
+            <article
+              className={`health-row${maintenance?.active ? "" : " ready"}`}
+            >
+              <div className="health-row-top">
+                <strong>Current operation</strong>
+                <span className={`status-chip${maintenance?.active ? "" : " ready"}`}>
+                  {maintenance?.active
+                    ? maintenance.current?.phase ?? "Active"
+                    : "Idle"}
+                </span>
+              </div>
+              <small>
+                {maintenance?.current?.message ??
+                  "No maintenance workflow is active."}
+              </small>
+            </article>
+            <article className="health-row ready">
+              <div className="health-row-top">
+                <strong>Scope guard</strong>
+                <span className="status-chip ready">
+                  {localhostMaintenance ? "Localhost" : "Remote session"}
+                </span>
+              </div>
+              <small>
+                Remote-scope maintenance is localhost-only because it can sever
+                the canonical phone URL.
+              </small>
+            </article>
+          </div>
+          <div className="button-row">
+            <button
+              disabled={Boolean(maintenance?.active)}
+              onClick={() =>
+                void runAction(async () => {
+                  await handleRunMaintenance("app", "restart");
+                }, "App maintenance restart requested.")
+              }
+            >
+              Restart App Scope
+            </button>
+            <button
+              className="secondary"
+              disabled={Boolean(maintenance?.active)}
+              onClick={() =>
+                void runAction(async () => {
+                  await handleRunMaintenance("runtime", "restart");
+                }, "Runtime maintenance restart requested.")
+              }
+            >
+              Restart Runtime Scope
+            </button>
+            <button
+              className="secondary"
+              disabled={Boolean(maintenance?.active) || !localhostMaintenance}
+              onClick={() =>
+                void runAction(async () => {
+                  await handleRunMaintenance("remote", "restart");
+                }, "Remote maintenance restart requested.")
+              }
+            >
+              Restart Remote Scope
+            </button>
+            <button
+              className="secondary"
+              disabled={Boolean(maintenance?.active)}
+              onClick={() =>
+                void runAction(async () => {
+                  await handleRunMaintenance("app", "drain-only");
+                }, "Drain-only maintenance requested.")
+              }
+            >
+              Drain Only
+            </button>
+          </div>
+          <small>
+            New chat, job, and terminal work is blocked while maintenance is
+            active. Existing state recovers through websocket resync after the
+            host is steady again.
+          </small>
+        </article>
+
+        <article className="panel-card">
+          <div className="panel-heading">
+            <h3>Pressure & Cleanup</h3>
+            <p>
+              Keep the Mac responsive. DroidAgent now samples host pressure and
+              pauses new chat runs and jobs if RAM, swap, or CPU pressure turns
+              critical.
+            </p>
+          </div>
+          <div className="status-list">
+            <article
+              className={`health-row${
+                hostPressure?.level === "critical"
+                  ? " critical"
+                  : hostPressure?.level === "warn" ||
+                      hostPressure?.level === "unknown"
+                    ? " warn"
+                    : " ready"
+              }`}
+            >
+              <div className="health-row-top">
+                <strong>Current pressure</strong>
+                <span
+                  className={`status-chip${
+                    hostPressure?.level === "critical" ? "" : " ready"
+                  }`}
+                >
+                  {hostPressure?.level ?? "unknown"}
+                </span>
+              </div>
+              <small>{hostPressure?.message ?? "No sample yet."}</small>
+            </article>
+            <article className="health-row ready">
+              <div className="health-row-top">
+                <strong>Reclaimable memory</strong>
+                <span className="status-chip ready">
+                  {formatHostBytes(hostPressure?.memoryAvailableBytes)}
+                </span>
+              </div>
+              <small>
+                Total RAM {formatHostBytes(hostPressure?.memoryTotalBytes)} •
+                compressed {formatHostBytes(hostPressure?.compressedBytes)} •
+                swap {formatHostBytes(hostPressure?.swapUsedBytes)}
+              </small>
+            </article>
+            <article className="health-row ready">
+              <div className="health-row-top">
+                <strong>Live work</strong>
+                <span className="status-chip ready">
+                  {hostPressure?.activeJobs ?? 0} job
+                  {(hostPressure?.activeJobs ?? 0) === 1 ? "" : "s"}
+                </span>
+              </div>
+              <small>
+                Terminal session:{" "}
+                {hostPressure?.activeTerminalSession ? "open" : "idle"} •
+                load ratio {hostPressure?.loadRatio ?? "unknown"} •
+                {hostPressure?.cpuLogicalCores ?? "unknown"} logical cores
+              </small>
+            </article>
+            {hostPressure?.recommendations.map((recommendation: string) => (
+              <article key={recommendation} className="health-row ready">
+                <div className="health-row-top">
+                  <strong>Operator guidance</strong>
+                  <span className="status-chip ready">Action</span>
+                </div>
+                <small>{recommendation}</small>
+              </article>
+            ))}
+          </div>
+          <small>
+            Rescue Terminal remains available even if agent runs are paused, so
+            you still have a direct recovery path.
+          </small>
+        </article>
       </section>
 
       <section className="settings-grid">
@@ -414,7 +789,11 @@ export function SettingsScreen() {
               </div>
               <small>
                 {harness?.imageModel
-                  ? `${harness.imageModel} powers image and PDF analysis for the chat composer.`
+                  ? normalizedImageModel && normalizedActiveModel
+                    ? normalizedImageModel === normalizedActiveModel
+                      ? `${normalizedActiveModel} handles text, image, and PDF analysis directly.`
+                      : `${normalizedImageModel} powers image and PDF analysis separately from ${normalizedActiveModel}.`
+                    : `${harness.imageModel} powers image and PDF analysis for the chat composer.`
                   : "No local multimodal model is configured yet."}
               </small>
             </article>
@@ -505,6 +884,120 @@ export function SettingsScreen() {
               Review Memory Files
             </Link>
           </div>
+        </article>
+
+        <article className="panel-card">
+          <div className="panel-heading">
+            <h3>Memory Draft Queue</h3>
+            <p>
+              Durable memory stays approval-gated. Review pending drafts here,
+              then apply them to the right file tier or dismiss them.
+            </p>
+          </div>
+          <div className="stack-list">
+            {pendingMemoryDrafts.length === 0 ? (
+              <article className="panel-card compact">
+                No pending memory drafts. Capture from Chat or Files when you
+                want to retain something durable.
+              </article>
+            ) : null}
+            {pendingMemoryDrafts.map((draft) => (
+              <article key={draft.id} className="panel-card compact">
+                <strong>{draft.title ?? "Untitled draft"}</strong>
+                <small>
+                  {draft.target} • {draft.sourceLabel ?? draft.sourceKind} •{" "}
+                  {new Date(draft.updatedAt).toLocaleString()}
+                </small>
+                {draftEdits[draft.id] ? (
+                  <div className="stack-list">
+                    <select
+                      value={draftEdits[draft.id]!.target}
+                      onChange={(event) =>
+                        updateDraftEdit(draft.id, {
+                          target: event.target.value as MemoryDraftTarget,
+                        })
+                      }
+                    >
+                      <option value="memory">MEMORY.md</option>
+                      <option value="preferences">PREFERENCES.md</option>
+                      <option value="todayNote">Today note</option>
+                    </select>
+                    <input
+                      value={draftEdits[draft.id]!.title}
+                      onChange={(event) =>
+                        updateDraftEdit(draft.id, {
+                          title: event.target.value,
+                        })
+                      }
+                      placeholder="Draft title"
+                    />
+                    <textarea
+                      value={draftEdits[draft.id]!.content}
+                      onChange={(event) =>
+                        updateDraftEdit(draft.id, {
+                          content: event.target.value,
+                        })
+                      }
+                      rows={8}
+                    />
+                    <div className="button-row">
+                      <button
+                        disabled={!draftEdits[draft.id]!.content.trim()}
+                        onClick={() =>
+                          void runAction(async () => {
+                            await handleUpdateDraft(draft);
+                          }, "Memory draft updated.")
+                        }
+                      >
+                        Save Draft
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={() => cancelDraftEdit(draft.id)}
+                      >
+                        Cancel Edit
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <small>{draft.content}</small>
+                    <div className="button-row">
+                      <button
+                        onClick={() =>
+                          void runAction(async () => {
+                            await handleApplyDraft(draft);
+                          }, "Memory draft applied.")
+                        }
+                      >
+                        Apply
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={() => beginDraftEdit(draft)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={() =>
+                          void runAction(async () => {
+                            await handleDismissDraft(draft);
+                          }, "Memory draft dismissed.")
+                        }
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </>
+                )}
+              </article>
+            ))}
+          </div>
+          <small>
+            Pending drafts: {pendingMemoryDrafts.length}. Applied drafts append
+            to the workspace files and trigger a local semantic-memory reindex.
+          </small>
         </article>
 
         <article className="panel-card">
@@ -835,6 +1328,13 @@ export function SettingsScreen() {
             <small>
               {metricDescription(
                 performanceQuery.data,
+                "host.pressure.sample",
+                "Host pressure sample",
+              )}
+            </small>
+            <small>
+              {metricDescription(
+                performanceQuery.data,
                 "http.get./api/access",
                 "GET /api/access",
               )}
@@ -872,6 +1372,13 @@ export function SettingsScreen() {
                 performanceQuery.data,
                 "memory.prepare",
                 "Memory prepare",
+              )}
+            </small>
+            <small>
+              {metricDescription(
+                performanceQuery.data,
+                "memory.draft.apply",
+                "Memory draft apply",
               )}
             </small>
             <small>

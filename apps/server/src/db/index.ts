@@ -64,6 +64,39 @@ sqlite.exec(`
     exit_code INTEGER,
     last_line TEXT NOT NULL DEFAULT ''
   );
+  CREATE TABLE IF NOT EXISTS memory_drafts (
+    id TEXT PRIMARY KEY,
+    target TEXT NOT NULL,
+    status TEXT NOT NULL,
+    title TEXT,
+    content TEXT NOT NULL,
+    source_kind TEXT NOT NULL,
+    source_label TEXT,
+    source_ref TEXT,
+    session_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    applied_at TEXT,
+    dismissed_at TEXT,
+    failed_at TEXT,
+    last_error TEXT,
+    applied_path TEXT
+  );
+  CREATE TABLE IF NOT EXISTS maintenance_operations (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL,
+    action TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 0,
+    requested_at TEXT NOT NULL,
+    started_at TEXT,
+    updated_at TEXT NOT NULL,
+    finished_at TEXT,
+    requested_by_user_id TEXT,
+    requested_from_localhost INTEGER NOT NULL DEFAULT 0,
+    message TEXT,
+    last_error TEXT
+  );
 `);
 
 export const db = drizzle(sqlite, { schema });

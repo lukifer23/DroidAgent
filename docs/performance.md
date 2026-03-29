@@ -38,6 +38,7 @@ Server-side:
 - `job.start`
 - `job.firstOutput`
 - `memory.prepare`
+- `memory.draft.apply`
 - `memory.todayNote`
 
 Client-side:
@@ -58,9 +59,12 @@ Client-side:
 Notable implementation guardrails in this pass:
 
 - streaming chat rendering fast-paths plain deltas before markdown parsing to reduce avoidable parse churn
+- client chat timing now records first-token latency once per run instead of over-counting multi-delta replies
 - terminal transcript trimming tracks byte budget incrementally and avoids full-history re-encoding on each output chunk
 - jobs output rendering tails large logs in-browser to avoid large full-text DOM updates
 - websocket-driven dashboard patches are reconciled with debounced full snapshot pulls after high-impact runtime/provider/channel/context/memory mutations
+
+The Settings diagnostics view now shows p95, last sample, sample count, and sample age so old latency numbers are easier to spot before they mislead an operator.
 
 ## Advisory Budgets
 
@@ -75,7 +79,7 @@ Model generation time is recorded separately from DroidAgent overhead.
 
 OpenClaw is configured with `agents.defaults.thinkingDefault = "off"` by default in DroidAgent to reduce avoidable latency on models that expose a reasoning or thinking mode.
 
-The default local baseline also assumes `qwen3.5:4b` on Ollama with a `65k` context budget, `qwen2.5vl:3b` for local image/PDF analysis, `embeddinggemma:300m-qat-q8_0` for local semantic memory, smart context management enabled, and workspace memory search enabled.
+The default local baseline also assumes `qwen3.5:4b` on Ollama with a `65k` context budget, the same primary model handling local image/PDF analysis whenever Ollama reports `vision`, `qwen2.5vl:3b` only as the fallback attachment model for text-only primaries, `embeddinggemma:300m-qat-q8_0` for local semantic memory, smart context management enabled, and workspace memory search enabled.
 
 ## Baseline Procedure
 

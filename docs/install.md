@@ -30,6 +30,7 @@ The bootstrap script:
 10. opens `http://localhost:4318`
 
 Bootstrap is idempotent and safe to re-run.
+If `~/.droidagent/state/maintenance-status.json` reports an active maintenance workflow, bootstrap waits for the managed restart to finish instead of launching a second host.
 
 Run `pnpm run doctor` after bootstrap when you want a non-mutating environment check.
 
@@ -37,16 +38,19 @@ Run `pnpm run doctor` after bootstrap when you want a non-mutating environment c
 
 1. Create the owner passkey on localhost.
 2. Open `Setup`.
-3. Use the quickstart action to let DroidAgent prepare the workspace, Ollama, OpenClaw, the default local chat model, the default local multimodal model, and the default local embedding model automatically.
+3. Use the quickstart action to let DroidAgent prepare the workspace, Ollama, OpenClaw, the default local chat model, the attachment fallback model when needed, and the default local embedding model automatically.
 4. The same quickstart pass also seeds the workspace memory, preferences, and skills scaffold automatically, then builds the local semantic-memory index.
 5. If Tailscale is already authenticated on the Mac, quickstart also creates the phone URL automatically.
 6. After those checks are ready, DroidAgent routes daily use into `Chat`, not back into Setup.
 7. Use the owner-only rescue terminal from the Host drawer or Settings only when DroidAgent needs a direct recovery step for permissions, auth, installs, or host state.
 8. Use Manual Controls only when you want a different workspace, a different local model, or llama.cpp.
-9. Optionally enroll additional passkeys from Settings.
-10. Optionally store cloud-provider keys in Keychain.
-11. Optionally install and start the LaunchAgent if you want launchd to own the host process permanently.
-12. Optionally configure Signal from Settings.
+9. Use chat message actions or Files editor actions to create memory drafts for `MEMORY.md`, `PREFERENCES.md`, or the current daily note.
+10. Review, edit, apply, or dismiss those drafts from `Settings`.
+11. Suggested shell blocks in chat can be sent to `Run in Chat` or `Open in Terminal`; neither path bypasses the existing job policy or host-shell confirmation rules.
+12. Optionally enroll additional passkeys from Settings.
+13. Optionally store cloud-provider keys in Keychain.
+14. Optionally install and start the LaunchAgent if you want launchd to own the host process permanently.
+15. Optionally configure Signal from Settings.
 
 The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailscale remote + Ollama local runtime`.
 
@@ -59,7 +63,7 @@ The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailsc
 5. If the same passkey provider already syncs to the phone, open the canonical remote URL directly and sign in.
 6. Use a one-time bootstrap link only when you need to enroll a new device-specific passkey after the canonical URL is healthy.
 7. Use the canonical remote URL for daily phone access after enrollment; bootstrap links are only for adding a device.
-8. The default local model path is `qwen3.5:4b` at `65k` context with thinking disabled, smart context management enabled, `qwen2.5vl:3b` handling image/PDF chat attachments locally, and `embeddinggemma:300m-qat-q8_0` handling semantic memory locally.
+8. The default local model path is `qwen3.5:4b` at `65k` context with thinking disabled, smart context management enabled, the same primary model handling image/PDF chat attachments whenever Ollama reports `vision`, `qwen2.5vl:3b` only as the fallback attachment model for text-only primaries, and `embeddinggemma:300m-qat-q8_0` handling semantic memory locally.
 9. The running host reports its own build/version line in Settings and diagnostics so screenshots, docs, and support notes stay aligned.
 
 ## Manual setup
@@ -83,5 +87,5 @@ Then open `http://localhost:4318`.
 | Build failed                | Run `pnpm build` manually                                                                                  |
 | Docs or command drift       | Run `pnpm docs:check`                                                                                      |
 | Tailscale URL unavailable   | Install/sign in to Tailscale, or let DroidAgent start the userspace daemon, then enable Serve from the PWA |
-| Server did not become ready | Check `~/.droidagent/logs`                                                                                 |
+| Server did not become ready | Check `~/.droidagent/logs`, especially `maintenance.log` when a managed restart is active                  |
 | Agent blocked on host auth or permissions | Open the rescue terminal from the Host drawer or Settings and run the required recovery command directly |

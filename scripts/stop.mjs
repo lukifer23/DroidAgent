@@ -24,6 +24,12 @@ const launchAgentPath = path.join(
   `${launchAgentLabel}.plist`,
 );
 const openclawStateDir = path.join(homeDir, `.openclaw-${profile}`);
+const maintenanceStatePath = path.join(
+  homeDir,
+  ".droidagent",
+  "state",
+  "maintenance-status.json",
+);
 const tailscaleSocketPath = path.join(
   homeDir,
   ".droidagent",
@@ -72,6 +78,14 @@ async function listProcesses() {
       };
     })
     .filter(Boolean);
+}
+
+async function readMaintenanceStatus() {
+  try {
+    return JSON.parse(await fs.promises.readFile(maintenanceStatePath, "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 function isManagedServer(command) {
@@ -154,6 +168,13 @@ async function terminatePids(pids) {
 }
 
 await bootoutLaunchAgent();
+const maintenance = await readMaintenanceStatus();
+
+if (maintenance?.active) {
+  log(
+    `Maintenance marker found (${maintenance.current?.phase ?? "active"}). Proceeding with explicit stop and clearing the stale marker afterwards.`,
+  );
+}
 
 const processes = await listProcesses();
 const managed = processes.filter((entry) => {
@@ -173,9 +194,15 @@ const managed = processes.filter((entry) => {
 });
 
 if (managed.length === 0) {
+  if (maintenance) {
+    await fs.promises.rm(maintenanceStatePath, { force: true }).catch(() => {});
+    log("No managed DroidAgent processes found. Cleared maintenance marker.");
+    process.exit(0);
+  }
   log("No managed DroidAgent processes found.");
   process.exit(0);
 }
 
 await terminatePids(managed.map((entry) => entry.pid));
+await fs.promises.rm(maintenanceStatePath, { force: true }).catch(() => {});
 log(`Stopped ${managed.length} managed DroidAgent process${managed.length === 1 ? "" : "es"}.`);

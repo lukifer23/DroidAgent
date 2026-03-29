@@ -52,12 +52,19 @@ function average(values: number[]): number | null {
 
 function summarize(name: string, source: LatencySource, samples: LatencySample[]) {
   const values = samples.map((sample) => sample.durationMs).sort((left, right) => left - right);
-  const lastDurationMs = samples.at(-1)?.durationMs ?? null;
+  const lastSample = samples.at(-1) ?? null;
+  const lastDurationMs = lastSample?.durationMs ?? null;
+  const lastEndedAt = lastSample?.endedAt ?? null;
+  const sampleAgeMs = lastEndedAt
+    ? Math.max(0, Date.now() - new Date(lastEndedAt).getTime())
+    : null;
   return LatencySummarySchema.parse({
     name,
     source,
     count: samples.length,
     lastDurationMs,
+    lastEndedAt,
+    sampleAgeMs: sampleAgeMs === null ? null : Number(sampleAgeMs.toFixed(2)),
     minDurationMs: values[0] ?? null,
     maxDurationMs: values.at(-1) ?? null,
     avgDurationMs: average(values),

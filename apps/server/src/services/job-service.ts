@@ -68,6 +68,19 @@ export class JobService extends EventEmitter<{
   output: [JobOutputEvent];
   updated: [JobRecord];
 }> {
+  private readonly activeJobs = new Map<
+    string,
+    {
+      child: ReturnType<typeof spawn>;
+      finalize: (
+        status: "succeeded" | "failed" | "cancelled",
+        exitCode: number | null,
+        lastLine?: string,
+      ) => Promise<void>;
+      timeoutId: ReturnType<typeof setTimeout>;
+    }
+  >();
+
   private async toJobRecord(record: MutableJobRecord): Promise<JobRecord> {
     const [stdoutBytes, stderrBytes] = await Promise.all([fileSize(stdoutPath(record.id)), fileSize(stderrPath(record.id))]);
     return JobRecordSchema.parse({
@@ -258,6 +271,11 @@ export class JobService extends EventEmitter<{
         return;
       }
       finalized = true;
+      const active = this.activeJobs.get(record.id);
+      if (active) {
+        clearTimeout(active.timeoutId);
+        this.activeJobs.delete(record.id);
+      }
       if (!firstOutputRecorded) {
         firstOutputRecorded = true;
         firstOutputMetric.finish({
@@ -287,6 +305,12 @@ export class JobService extends EventEmitter<{
       void finalize("failed", 124, "Job timed out.");
     }, JOB_TIMEOUT_MS);
 
+    this.activeJobs.set(record.id, {
+      child,
+      finalize,
+      timeoutId,
+    });
+
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
 
@@ -303,6 +327,30 @@ export class JobService extends EventEmitter<{
     });
 
     return record.id;
+  }
+
+  async cancelActiveJobs(reason = "Cancelled by the operator."): Promise<void> {
+    const active = [...this.activeJobs.entries()];
+    await Promise.all(
+      active.map(async ([jobId, handle]) => {
+        await fs
+          .appendFile(stderrPath(jobId), `\n[${reason}]\n`, "utf8")
+          .catch(() => {});
+        try {
+          handle.child.kill("SIGTERM");
+        } catch {
+          // ignore if already gone
+        }
+        setTimeout(() => {
+          try {
+            handle.child.kill("SIGKILL");
+          } catch {
+            // ignore if already gone
+          }
+        }, 2_000).unref();
+        await handle.finalize("cancelled", 130, reason);
+      }),
+    );
   }
 }
 

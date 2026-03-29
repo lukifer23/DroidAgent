@@ -56,3 +56,39 @@ export const jobs = sqliteTable("jobs", {
   lastLine: text("last_line").notNull().default("")
 });
 
+export const memoryDrafts = sqliteTable("memory_drafts", {
+  id: text("id").primaryKey(),
+  target: text("target").notNull(),
+  status: text("status").notNull(),
+  title: text("title"),
+  content: text("content").notNull(),
+  sourceKind: text("source_kind").notNull(),
+  sourceLabel: text("source_label"),
+  sourceRef: text("source_ref"),
+  sessionId: text("session_id"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  appliedAt: text("applied_at"),
+  dismissedAt: text("dismissed_at"),
+  failedAt: text("failed_at"),
+  lastError: text("last_error"),
+  appliedPath: text("applied_path"),
+});
+
+export const maintenanceOperations = sqliteTable("maintenance_operations", {
+  id: text("id").primaryKey(),
+  scope: text("scope").notNull(),
+  action: text("action").notNull(),
+  phase: text("phase").notNull(),
+  active: integer("active", { mode: "boolean" }).notNull().default(false),
+  requestedAt: text("requested_at").notNull(),
+  startedAt: text("started_at"),
+  updatedAt: text("updated_at").notNull(),
+  finishedAt: text("finished_at"),
+  requestedByUserId: text("requested_by_user_id"),
+  requestedFromLocalhost: integer("requested_from_localhost", {
+    mode: "boolean",
+  }).notNull().default(false),
+  message: text("message"),
+  lastError: text("last_error"),
+});

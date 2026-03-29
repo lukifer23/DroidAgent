@@ -12,6 +12,7 @@ import {
   DEFAULT_OLLAMA_VISION_MODEL,
   appStateService,
 } from "./app-state-service.js";
+import { ollamaModelSupportsVision } from "../lib/ollama.js";
 import { accessService } from "./access-service.js";
 import { harnessService } from "./harness-service.js";
 import { openclawService } from "./openclaw-service.js";
@@ -181,9 +182,12 @@ export class QuickstartService {
     if (embeddingPrepared) {
       actions.push(`Prepared local embedding model ${embeddingModelId}.`);
     }
-    const visionPrepared = await runtimeService.ensureOllamaModel(visionModelId);
-    if (visionPrepared) {
-      actions.push(`Prepared local multimodal model ${visionModelId}.`);
+    const primarySupportsVision = await ollamaModelSupportsVision(modelId);
+    if (!primarySupportsVision) {
+      const visionPrepared = await runtimeService.ensureOllamaModel(visionModelId);
+      if (visionPrepared) {
+        actions.push(`Prepared local multimodal model ${visionModelId}.`);
+      }
     }
 
     const memoryStatus = await openclawService.prepareSemanticMemory({

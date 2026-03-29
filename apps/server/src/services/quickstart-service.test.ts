@@ -18,6 +18,7 @@ const {
   prepareWorkspaceContext,
   prepareSemanticMemory,
   configureRuntimeModel,
+  ollamaModelSupportsVision,
 } = vi.hoisted(() => ({
   getRuntimeSettings: vi.fn(),
   updateRuntimeSettings: vi.fn(),
@@ -36,6 +37,7 @@ const {
   prepareWorkspaceContext: vi.fn(),
   prepareSemanticMemory: vi.fn(),
   configureRuntimeModel: vi.fn(),
+  ollamaModelSupportsVision: vi.fn(),
 }));
 
 vi.mock("./app-state-service.js", () => ({
@@ -79,6 +81,10 @@ vi.mock("./harness-service.js", () => ({
   harnessService: {
     configureRuntimeModel,
   },
+}));
+
+vi.mock("../lib/ollama.js", () => ({
+  ollamaModelSupportsVision,
 }));
 
 import { quickstartService } from "./quickstart-service.js";
@@ -213,6 +219,7 @@ describe("QuickstartService", () => {
       },
     );
     ensureOllamaModel.mockResolvedValue(false);
+    ollamaModelSupportsVision.mockResolvedValue(false);
     prepareSemanticMemory.mockResolvedValue({
       configuredWorkspaceRoot: "/tmp/droidagent",
       effectiveWorkspaceRoot: "/tmp/droidagent",
@@ -331,6 +338,21 @@ describe("QuickstartService", () => {
         "Selected Ollama as the default runtime.",
         "Created the phone URL through Tailscale.",
       ]),
+    );
+  });
+
+  it("does not prepare a fallback vision model when the selected model already supports vision", async () => {
+    ollamaModelSupportsVision.mockResolvedValue(true);
+    ensureOllamaModel.mockClear();
+
+    await quickstartService.prepare({
+      workspaceRoot: process.cwd(),
+      modelId: "qwen3.5:4b",
+    });
+
+    expect(ensureOllamaModel).toHaveBeenCalledTimes(1);
+    expect(ensureOllamaModel).toHaveBeenCalledWith(
+      "embeddinggemma:300m-qat-q8_0",
     );
   });
 

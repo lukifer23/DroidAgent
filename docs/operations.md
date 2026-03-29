@@ -17,13 +17,14 @@ pnpm stop
 pnpm restart
 ```
 
-`pnpm bootstrap` is the simpler host path now. It reuses a healthy local server when one already exists, prefers the LaunchAgent-managed host when installed, and only falls back to a background direct server start when the LaunchAgent has not been installed yet.
+`pnpm bootstrap` is the simpler host path now. It reuses a healthy local server when one already exists, prefers the LaunchAgent-managed host when installed, waits on an active managed maintenance cycle instead of launching a duplicate host, and only falls back to a background direct server start when the LaunchAgent has not been installed yet.
 
-Use `pnpm stop` when you need a clean local reset. It stops managed DroidAgent host processes and reaps orphaned repo-local OpenClaw workers instead of leaving stale background sessions around. `pnpm restart` runs that cleanup and then bootstraps the host again.
+Use `pnpm stop` when you need a clean local reset. It stops managed DroidAgent host processes, clears stale maintenance markers, and reaps orphaned repo-local OpenClaw workers instead of leaving stale background sessions around. `pnpm restart` runs that cleanup and then bootstraps the host again.
 
 ## Logs
 
 - DroidAgent logs: `~/.droidagent/logs`
+- Maintenance log: `~/.droidagent/logs/maintenance.log`
 - Job logs: `~/.droidagent/logs/jobs`
 - Rescue terminal logs: `~/.droidagent/logs/terminal`
 - OpenClaw gateway log: `~/.droidagent/logs/openclaw.log`
@@ -39,6 +40,7 @@ Use `pnpm stop` when you need a clean local reset. It stops managed DroidAgent h
 - OpenClaw profile: `~/.openclaw-droidagent`
 - LaunchAgent plist: `~/Library/LaunchAgents/com.droidagent.server.plist`
 - Signal config dir: `~/.droidagent/signal-cli`
+- Maintenance state mirror: `~/.droidagent/state/maintenance-status.json`
 
 ## Useful checks
 
@@ -57,6 +59,14 @@ pnpm perf:report
 - If you are currently running the server in a foreground terminal, stop that process after enabling the LaunchAgent so launchd can own port `4318`.
 - `pnpm bootstrap` now avoids starting a duplicate foreground server when the LaunchAgent path already owns the host.
 
+## Maintenance
+
+- Settings owns the explicit maintenance controls for `app`, `runtime`, and `remote` scope restarts plus `drain-only`.
+- Maintenance state is stored in SQLite and mirrored to `~/.droidagent/state/maintenance-status.json` so local scripts can avoid fighting an in-flight restart.
+- While maintenance is active, new chat sends, new jobs, and new terminal sessions are blocked.
+- Existing jobs are cancelled, the rescue terminal is closed with a visible reason, and active chat runs reconnect through the usual websocket resync path after recovery.
+- Remote-scope maintenance is localhost-only because it can sever the canonical Tailscale path.
+
 ## Remote access
 
 - Keep DroidAgent on loopback.
@@ -66,8 +76,11 @@ pnpm perf:report
 - Once the operator path is ready, daily use should happen from `Chat`; Setup moves out of the primary bottom-nav flow.
 - The Host drawer and Settings are the maintenance entry points. The rescue terminal stays outside the primary bottom nav so the operator flow stays focused on Chat, Files, Jobs, Models, and Settings.
 - The same quickstart path also seeds `MEMORY.md`, `PREFERENCES.md`, `HEARTBEAT.md`, daily notes under `memory/`, and the workspace `skills/` directory.
+- Durable memory capture is approval-gated. Chat messages and file selections create drafts first, then Settings is the review/apply surface.
+- Suggested shell blocks from assistant replies can become `Run in Chat` or `Open in Terminal`. In-chat runs stay inside the workspace job jail; terminal suggestions are inserted but never auto-executed.
 - The default local chat model is `qwen3.5:4b` with a `65k` context budget and thinking disabled.
-- The default local multimodal model is `qwen2.5vl:3b` for image and PDF analysis inside the chat composer.
+- When Ollama reports `vision` for the selected primary model, DroidAgent reuses that same model for image and PDF analysis inside the chat composer.
+- `qwen2.5vl:3b` only stays as the fallback multimodal model when the selected primary model is text-only.
 - Semantic memory defaults to local Ollama embeddings with `embeddinggemma:300m-qat-q8_0`; DroidAgent keeps fallback disabled so memory stays on-device instead of silently drifting to a cloud provider.
 - Keep durable personalization in `PREFERENCES.md`; DroidAgent includes it in semantic recall so smaller local models can stay more useful and more operator-specific over time.
 - Use the canonical remote URL for daily access when the same passkey provider already syncs to the phone.
@@ -80,6 +93,7 @@ pnpm perf:report
 - The Settings route shows the full client/server diagnostics card.
 - The Settings route also shows semantic-memory readiness, embedding/index status, and the current `65k` local context budget.
 - The Settings route now also exposes memory-prep timings so semantic-memory regressions are visible in the same diagnostics surface as chat, files, and jobs.
+- The Settings route also exposes editable pending memory drafts, current maintenance state, recent maintenance history, and timing sample age/count so stale telemetry is obvious.
 - The Settings route also shows the running build/version identity so the live host, screenshots, logs, and repo all stay on the same release line.
 - The chat route now accepts local images, PDFs, Markdown, JSON, logs, and common code/text files. DroidAgent stores them under `~/.droidagent/uploads` and passes them through the real OpenClaw tool path instead of a parallel mock transcript.
 - The chat route is the operator console: it surfaces live run state, tool summaries, approval cards, attachments, code blocks, and client-side per-run timings.

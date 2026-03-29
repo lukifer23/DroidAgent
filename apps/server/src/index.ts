@@ -7,7 +7,14 @@ import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { WebSocketServer } from "ws";
-import { ChatSendRequestSchema } from "@droidagent/shared";
+import {
+  ChatSendRequestSchema,
+  HostPressureRecoveryRequestSchema,
+  HostPressureRecoveryResultSchema,
+  MaintenanceRunRequestSchema,
+  MemoryDraftCreateRequestSchema,
+  MemoryDraftUpdateRequestSchema,
+} from "@droidagent/shared";
 
 import { db, schema } from "./db/index.js";
 import { accessService } from "./services/access-service.js";
@@ -23,10 +30,25 @@ import { harnessService } from "./services/harness-service.js";
 import { jobService } from "./services/job-service.js";
 import { keychainService } from "./services/keychain-service.js";
 import { launchAgentService } from "./services/launch-agent-service.js";
+import {
+  MaintenanceBlockedError,
+  MaintenanceConflictError,
+  MaintenanceLocalhostRequiredError,
+  maintenanceService,
+} from "./services/maintenance-service.js";
+import {
+  MemoryDraftNotFoundError,
+  MemoryDraftStateError,
+  memoryDraftService,
+} from "./services/memory-draft-service.js";
 import { openclawService } from "./services/openclaw-service.js";
 import { runtimeService } from "./services/runtime-service.js";
 import { appStateService } from "./services/app-state-service.js";
 import { buildInfoService } from "./services/build-info-service.js";
+import {
+  HostPressureBlockedError,
+  hostPressureService,
+} from "./services/host-pressure-service.js";
 import { quickstartService } from "./services/quickstart-service.js";
 import { signalService } from "./services/signal-service.js";
 import { startupService } from "./services/startup-service.js";
@@ -66,6 +88,26 @@ app.onError((error, c) => {
     return c.json({ error: error.message }, 400);
   }
   if (error instanceof AttachmentNotFoundError) {
+    return c.json({ error: error.message }, 404);
+  }
+  if (error instanceof MaintenanceBlockedError) {
+    return c.json({ error: error.message }, 423);
+  }
+  if (error instanceof HostPressureBlockedError) {
+    return c.json({ error: error.message }, 503);
+  }
+  if (
+    error instanceof MaintenanceConflictError ||
+    error instanceof MemoryDraftStateError
+  ) {
+    return c.json({ error: error.message }, 409);
+  }
+  if (
+    error instanceof MaintenanceLocalhostRequiredError
+  ) {
+    return c.json({ error: error.message }, 403);
+  }
+  if (error instanceof MemoryDraftNotFoundError) {
     return c.json({ error: error.message }, 404);
   }
   return c.json(
@@ -465,6 +507,66 @@ app.get("/api/diagnostics/performance", async (c) => {
   return c.json(performanceService.serverSnapshot());
 });
 
+app.get("/api/diagnostics/host-pressure", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await hostPressureService.getStatus(true));
+});
+
+app.post("/api/diagnostics/host-pressure/recover", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = HostPressureRecoveryRequestSchema.parse(
+    await c.req.json().catch(() => ({})),
+  );
+
+  const [jobs, terminalSnapshot] = await Promise.all([
+    jobService.listJobs(),
+    terminalService.getSnapshot(),
+  ]);
+  const activeJobs = jobs.filter(
+    (job) => job.status === "queued" || job.status === "running",
+  );
+  const activeTerminalSessionId =
+    terminalSnapshot.session?.status === "running"
+      ? terminalSnapshot.session.id
+      : null;
+
+  if (body.abortSessionRun && body.sessionId) {
+    await harnessService.abortMessage(body.sessionId);
+  }
+  if (body.cancelActiveJobs && activeJobs.length > 0) {
+    await jobService.cancelActiveJobs("Cancelled to recover from host pressure.");
+  }
+  if (body.closeTerminalSession && activeTerminalSessionId) {
+    await terminalService.closeSession(
+      activeTerminalSessionId,
+      "Closed to recover from host pressure.",
+    );
+  }
+
+  const status = await hostPressureService.getStatus(true);
+  await Promise.all([
+    body.sessionId ? websocketHub.pushChatHistory(body.sessionId) : Promise.resolve(),
+    body.sessionId ? websocketHub.publishSessionsUpdated() : Promise.resolve(),
+    websocketHub.publishHostPressureUpdated(true),
+  ]);
+
+  return c.json(
+    HostPressureRecoveryResultSchema.parse({
+      recoveredAt: new Date().toISOString(),
+      abortedSessionId: body.abortSessionRun ? body.sessionId : null,
+      cancelledJobCount: body.cancelActiveJobs ? activeJobs.length : 0,
+      closedTerminalSessionId: body.closeTerminalSession
+        ? activeTerminalSessionId
+        : null,
+      hostPressure: status,
+    }),
+  );
+});
+
 app.get("/api/terminal/session", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
@@ -476,6 +578,7 @@ app.post("/api/terminal/session", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
+  await maintenanceService.assertAllowsNewWork("terminal");
   const body = (await c.req.json()) as {
     scope?: "workspace" | "host";
     cwd?: string;
@@ -517,6 +620,57 @@ app.get("/api/memory/status", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   return c.json(await openclawService.memoryStatus());
+});
+
+app.get("/api/memory/drafts", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await memoryDraftService.listDrafts());
+});
+
+app.post("/api/memory/drafts", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = MemoryDraftCreateRequestSchema.parse(await c.req.json());
+  const draft = await memoryDraftService.createDraft(body);
+  await websocketHub.publishMemoryDraftsUpdated();
+  return c.json(draft, 201);
+});
+
+app.patch("/api/memory/drafts/:draftId", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = MemoryDraftUpdateRequestSchema.parse(await c.req.json());
+  const draft = await memoryDraftService.updateDraft(c.req.param("draftId"), body);
+  await websocketHub.publishMemoryDraftsUpdated();
+  return c.json(draft);
+});
+
+app.post("/api/memory/drafts/:draftId/apply", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const result = await memoryDraftService.applyDraft(c.req.param("draftId"));
+  await Promise.all([
+    websocketHub.publishMemoryDraftsUpdated(),
+    websocketHub.publishMemoryUpdated(),
+  ]);
+  return c.json(result);
+});
+
+app.post("/api/memory/drafts/:draftId/dismiss", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const draft = await memoryDraftService.dismissDraft(c.req.param("draftId"));
+  await websocketHub.publishMemoryDraftsUpdated();
+  return c.json(draft);
 });
 
 app.post("/api/memory/prepare", async (c) => {
@@ -579,6 +733,31 @@ app.post("/api/memory/today-note", async (c) => {
     });
     throw error;
   }
+});
+
+app.get("/api/maintenance/status", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await maintenanceService.getStatus());
+});
+
+app.post("/api/maintenance/run", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const body = MaintenanceRunRequestSchema.parse(await c.req.json());
+  const operation = await maintenanceService.requestOperation({
+    scope: body.scope,
+    action: body.action,
+    requestedByUserId: c.get("user")?.id ?? null,
+    requestedFromLocalhost: accessService.isLocalhostRequest(c),
+  });
+  await Promise.all([
+    websocketHub.publishMaintenanceUpdated(),
+    websocketHub.publishSessionsUpdated(),
+  ]);
+  return c.json(operation, 202);
 });
 
 app.get("/api/setup", async (c) => {
@@ -1207,6 +1386,8 @@ app.post("/api/sessions/:sessionId/messages", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
+  await maintenanceService.assertAllowsNewWork("chat");
+  await hostPressureService.assertAllowsAgentRuns("chat");
   const body = ChatSendRequestSchema.parse(await c.req.json());
   const sessionId = c.req.param("sessionId");
   let runId = "";
@@ -1338,6 +1519,8 @@ app.post("/api/jobs", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
+  await maintenanceService.assertAllowsNewWork("job");
+  await hostPressureService.assertAllowsAgentRuns("job");
   const user = c.get("user");
   const body = (await c.req.json()) as { command: string; cwd: string };
   const jobId = await jobService.startJob(
@@ -1416,8 +1599,19 @@ if (TEST_MODE && E2E_RESET_TOKEN && E2E_STATE_PATH && E2E_ROOT_DIR) {
     testHarnessService.reset();
     performanceService.reset();
 
+    const terminalSnapshot = await terminalService.getSnapshot();
+    if (terminalSnapshot.session) {
+      await terminalService.closeSession(
+        terminalSnapshot.session.id,
+        "The rescue terminal session is no longer active.",
+      );
+    }
+    await jobService.cancelActiveJobs("Cancelled during E2E reset.");
+
     await db.delete(schema.authChallenges);
     await db.delete(schema.jobs);
+    await db.delete(schema.memoryDrafts);
+    await db.delete(schema.maintenanceOperations);
     await appStateService.setJsonSetting(
       "runtimeSettings",
       fixture.seed.runtimeSettings,

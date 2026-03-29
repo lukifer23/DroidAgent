@@ -35,8 +35,9 @@ pnpm bootstrap
 ```
 
 `pnpm bootstrap` now reuses an already healthy local server, restarts the LaunchAgent-backed host when it is installed, and only falls back to a background direct server start when no LaunchAgent is present yet.
+If a managed maintenance restart is already in progress, bootstrap now waits for the host to recover instead of launching a duplicate instance.
 
-`pnpm stop` stops managed DroidAgent host processes and cleans up orphaned repo-local OpenClaw workers. `pnpm restart` runs that cleanup first, then starts the host again through the normal bootstrap path.
+`pnpm stop` stops managed DroidAgent host processes, clears stale maintenance markers, and cleans up orphaned repo-local OpenClaw workers. `pnpm restart` runs that cleanup first, then starts the host again through the normal bootstrap path.
 
 Manual local start:
 
@@ -58,7 +59,8 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - Ollama is the default local runtime path
 - the default local Ollama context budget is `65k`
 - the default local semantic-memory embedding model is `embeddinggemma:300m-qat-q8_0` on Ollama
-- the default local multimodal model is `qwen2.5vl:3b` on Ollama for image and PDF analysis
+- `qwen3.5:4b` is the default local chat model at a `65k` working context budget, and DroidAgent now reuses that same model for image/PDF work when Ollama reports `vision` capability
+- `qwen2.5vl:3b` remains the fallback local attachment model only when the selected primary model is text-only
 - semantic memory stays local-first with fallback disabled, so embeddings do not silently drift to a cloud provider
 - llama.cpp remains the advanced local runtime path
 - Tailscale Serve is the primary and only remote path exposed in the main UI right now
@@ -67,6 +69,8 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - Smart Context Management is on by default
 - the workspace is seeded with `AGENTS.md`, `TOOLS.md`, `MEMORY.md`, `PREFERENCES.md`, `HEARTBEAT.md`, a `memory/` folder, and a `skills/` folder
 - `PREFERENCES.md` is part of semantic recall so the operator can make a smaller local model feel more personal over time
+- durable memory writes stay approval-gated through editable memory drafts in Settings before they append to `MEMORY.md`, `PREFERENCES.md`, or `memory/YYYY-MM-DD.md`
+- assistant shell blocks can be promoted into `Run in Chat` or `Open in Terminal`; suggested commands are never auto-executed on the host
 
 ## Docs
 
@@ -81,6 +85,7 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 ## Important Paths
 
 - App state: `~/.droidagent`
+- Maintenance state mirror: `~/.droidagent/state/maintenance-status.json`
 - Job logs: `~/.droidagent/logs/jobs`
 - OpenClaw profile: `~/.openclaw-droidagent`
 - LaunchAgent plist: `~/Library/LaunchAgents/com.droidagent.server.plist`
@@ -91,10 +96,11 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - UI/UX overhaul now uses a modular style layer (`styles.css` + `styles/system.css` + `styles/motion.css`) with unified viewport-height calculations for Chat and Terminal shells to reduce layout jumps on navigation and mobile browser chrome changes.
 - Realtime dashboard synchronization now includes explicit harness updates and debounced full-snapshot reconciliation to keep UI state truthful after runtime/provider/channel/context/memory mutations.
 - Chat, Files, Jobs, Settings, and Terminal surfaces now include stronger loading/empty/error behavior and safer fallbacks when websocket transport is degraded.
+- Maintenance state is persisted in SQLite, mirrored to `~/.droidagent/state/maintenance-status.json` for local scripts, and surfaced in Settings plus the live chat shell so restarts are explicit instead of silent.
 - Browser-side heavy paths are hardened: streaming chat render path avoids unnecessary markdown parsing in simple deltas, terminal transcript trimming avoids full-buffer re-encode loops, and large job logs are browser-tailed.
 - File APIs are workspace-relative and text-only.
 - Chat attachments support local images, PDFs, Markdown, JSON, logs, and common code/text files through the real OpenClaw tool path.
-- The chat route is the primary operator surface: live run state, approvals, tool summaries, attachments, markdown/code rendering, and per-run client timings are all surfaced there.
+- The chat route is the primary operator surface: live run state, approvals, tool summaries, attachments, markdown/code rendering, editable durable-memory capture actions, suggested command promotion, and per-run client timings are all surfaced there.
 - Owner jobs run inside the configured workspace jail and persist replayable stdout and stderr logs.
 - The rescue terminal is a real PTY surface, separate from Jobs. It defaults to a workspace-scoped shell and exposes a deliberate host-shell escalation path for recovery work.
 - Browser acceptance now runs against a real server-backed Playwright harness; route interception and fake websocket replacement are no longer the primary test path.

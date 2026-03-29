@@ -115,6 +115,23 @@ export function FilesScreen() {
     setDirty(false);
   }
 
+  async function createDraftFromFile(
+    target: "memory" | "preferences" | "todayNote",
+  ) {
+    if (!loadedFile) {
+      return;
+    }
+
+    await postJson("/api/memory/drafts", {
+      target,
+      title: loadedFile.path,
+      content: editorValue.trim() || loadedFile.content.trim(),
+      sourceKind: "fileSelection",
+      sourceLabel: loadedFile.path,
+      sourceRef: loadedFile.path,
+    });
+  }
+
   return (
     <section className="files-panel">
       {dashboard?.memory ? (
@@ -233,6 +250,36 @@ export function FilesScreen() {
                   </small>
                 </div>
                 <div className="button-row">
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await createDraftFromFile("memory");
+                      }, "File captured as a memory draft.")
+                    }
+                  >
+                    Draft to Memory
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await createDraftFromFile("preferences");
+                      }, "File captured as a preferences draft.")
+                    }
+                  >
+                    Draft to Preferences
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      void runAction(async () => {
+                        await createDraftFromFile("todayNote");
+                      }, "File captured as today's note draft.")
+                    }
+                  >
+                    Draft to Today Note
+                  </button>
                   <button
                     className="secondary"
                     onClick={() => {

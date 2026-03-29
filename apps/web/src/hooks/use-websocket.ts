@@ -83,10 +83,31 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
     };
   }
 
+  if (event.type === "hostPressure.updated") {
+    return {
+      ...current,
+      hostPressure: event.payload,
+    };
+  }
+
+  if (event.type === "memoryDrafts.updated") {
+    return {
+      ...current,
+      memoryDrafts: event.payload,
+    };
+  }
+
   if (event.type === "harness.updated") {
     return {
       ...current,
       harness: event.payload,
+    };
+  }
+
+  if (event.type === "maintenance.updated") {
+    return {
+      ...current,
+      maintenance: event.payload,
     };
   }
 
@@ -323,8 +344,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
           payload.type === "channel.updated" ||
           payload.type === "launchAgent.updated" ||
           payload.type === "memory.updated" ||
+          payload.type === "memoryDrafts.updated" ||
           payload.type === "context.updated" ||
           payload.type === "harness.updated" ||
+          payload.type === "maintenance.updated" ||
           payload.type === "sessions.updated" ||
           payload.type === "job.updated" ||
           payload.type === "approval.updated" ||
@@ -336,7 +359,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
             payload.type === "providers.updated" ||
             payload.type === "channel.updated" ||
             payload.type === "context.updated" ||
-            payload.type === "memory.updated"
+            payload.type === "memory.updated" ||
+            payload.type === "memoryDrafts.updated" ||
+            payload.type === "maintenance.updated"
           ) {
             syncDashboardSnapshot();
           }
@@ -348,6 +373,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
             payload.type === "channel.updated" ||
             payload.type === "launchAgent.updated" ||
             payload.type === "memory.updated" ||
+            payload.type === "memoryDrafts.updated" ||
             payload.type === "context.updated"
           ) {
             void queryClient.invalidateQueries({ queryKey: ["startupDiagnostics"] });

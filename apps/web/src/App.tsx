@@ -12,7 +12,6 @@ import { DroidAgentAppProvider } from "./app-context";
 import { AppLayout } from "./app-layout";
 import { isOperatorReady } from "./lib/operator-readiness";
 import { ChatScreen } from "./screens/chat-screen";
-import { FilesScreen } from "./screens/files-screen";
 
 const loadSetupScreen = () => import("./screens/setup-screen");
 const loadSettingsScreen = () => import("./screens/settings-screen");
@@ -20,6 +19,7 @@ const loadJobsScreen = () => import("./screens/jobs-screen");
 const loadModelsScreen = () => import("./screens/models-screen");
 const loadChannelsScreen = () => import("./screens/channels-screen");
 const loadTerminalScreen = () => import("./screens/terminal-screen");
+const loadFilesScreen = () => import("./screens/files-screen");
 
 const SetupScreen = lazy(async () => ({
   default: (await loadSetupScreen()).SetupScreen,
@@ -39,6 +39,9 @@ const ChannelsScreen = lazy(async () => ({
 const TerminalScreen = lazy(async () => ({
   default: (await loadTerminalScreen()).TerminalScreen,
 }));
+const FilesScreen = lazy(async () => ({
+  default: (await loadFilesScreen()).FilesScreen,
+}));
 const preloadScreens = () =>
   Promise.all([
     loadSetupScreen(),
@@ -47,6 +50,7 @@ const preloadScreens = () =>
     loadModelsScreen(),
     loadChannelsScreen(),
     loadTerminalScreen(),
+    loadFilesScreen(),
   ]);
 
 function withLazyScreen(Component: ComponentType) {

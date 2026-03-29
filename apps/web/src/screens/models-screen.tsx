@@ -38,6 +38,10 @@ export function ModelsScreen() {
     (provider) => provider.id === "ollama-default",
   );
   const availableTools = harness?.availableTools ?? [];
+  const normalizedActiveModel =
+    harness?.activeModel?.replace(/^ollama\//, "") ?? null;
+  const normalizedImageModel =
+    harness?.imageModel?.replace(/^ollama\//, "") ?? null;
 
   return (
     <section className="stack-list">
@@ -81,7 +85,14 @@ export function ModelsScreen() {
             : "Attachments not ready"}
         </span>
         <small>
-          {harness?.imageModel ?? "No image model"} • pdf tool {availableTools.includes("pdf") ? "enabled" : "pending"}
+          {harness?.attachmentsEnabled
+            ? normalizedImageModel && normalizedActiveModel
+              ? normalizedImageModel === normalizedActiveModel
+                ? `${normalizedActiveModel} handles text, image, and PDF analysis directly`
+                : `${normalizedImageModel} handles image and PDF analysis separately`
+              : "Attachments are enabled"
+            : "No local multimodal model is configured yet."}{" "}
+          • pdf tool {availableTools.includes("pdf") ? "enabled" : "pending"}
         </small>
         <small>
           The chat composer can upload images, PDFs, Markdown, JSON, and code

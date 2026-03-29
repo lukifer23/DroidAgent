@@ -9,9 +9,12 @@ import { harnessService } from "./services/harness-service.js";
 import { jobService } from "./services/job-service.js";
 import { keychainService } from "./services/keychain-service.js";
 import { launchAgentService } from "./services/launch-agent-service.js";
+import { maintenanceService } from "./services/maintenance-service.js";
+import { memoryDraftService } from "./services/memory-draft-service.js";
 import { openclawService } from "./services/openclaw-service.js";
 import { performanceService } from "./services/performance-service.js";
 import { runtimeService } from "./services/runtime-service.js";
+import { hostPressureService } from "./services/host-pressure-service.js";
 import { startupService } from "./services/startup-service.js";
 import { terminalService } from "./services/terminal-service.js";
 
@@ -21,8 +24,19 @@ function send(ws: WebSocket, payload: unknown): void {
 
 export class WebsocketHub {
   private sockets = new Set<WebSocket>();
+  private hostPressureInterval: ReturnType<typeof setInterval> | null = null;
 
   attach(wss: WebSocketServer): void {
+    if (!this.hostPressureInterval) {
+      this.hostPressureInterval = setInterval(() => {
+        if (this.sockets.size === 0) {
+          return;
+        }
+        void this.publishHostPressureUpdated(true);
+      }, 15_000);
+      this.hostPressureInterval.unref?.();
+    }
+
     wss.on("connection", (ws) => {
       this.sockets.add(ws);
       void this.pushDashboard(ws);
@@ -236,6 +250,36 @@ export class WebsocketHub {
     );
   }
 
+  async publishHostPressureUpdated(force = false): Promise<void> {
+    dashboardService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "hostPressure.updated",
+        payload: await hostPressureService.getStatus(force),
+      }),
+    );
+  }
+
+  async publishMemoryDraftsUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "memoryDrafts.updated",
+        payload: await memoryDraftService.listDrafts(),
+      }),
+    );
+  }
+
+  async publishMaintenanceUpdated(): Promise<void> {
+    dashboardService.invalidate();
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "maintenance.updated",
+        payload: await maintenanceService.getStatus(),
+      }),
+    );
+  }
+
   async publishPerformanceUpdated(): Promise<void> {
     this.broadcast(
       ServerEventSchema.parse({
@@ -395,6 +439,8 @@ export class WebsocketHub {
       }
 
       if (command.type === "chat.send") {
+        await maintenanceService.assertAllowsNewWork("chat");
+        await hostPressureService.assertAllowsAgentRuns("chat");
         const { sessionId, text, attachments } = command.payload;
         const enqueueMetric = performanceService.start("server", "chat.send.enqueue", {
           transport: "ws",

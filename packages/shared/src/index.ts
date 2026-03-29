@@ -595,6 +595,144 @@ export const QuickstartResultSchema = z.object({
 });
 export type QuickstartResult = z.infer<typeof QuickstartResultSchema>;
 
+export const MemoryDraftTargetSchema = z.enum([
+  "memory",
+  "preferences",
+  "todayNote",
+]);
+export type MemoryDraftTarget = z.infer<typeof MemoryDraftTargetSchema>;
+
+export const MemoryDraftStatusSchema = z.enum([
+  "pending",
+  "applied",
+  "dismissed",
+  "failed",
+]);
+export type MemoryDraftStatus = z.infer<typeof MemoryDraftStatusSchema>;
+
+export const MemoryDraftSourceKindSchema = z.enum([
+  "chatMessage",
+  "fileSelection",
+  "memoryFlush",
+  "manual",
+]);
+export type MemoryDraftSourceKind = z.infer<typeof MemoryDraftSourceKindSchema>;
+
+export const MemoryDraftSchema = z.object({
+  id: z.string(),
+  target: MemoryDraftTargetSchema,
+  status: MemoryDraftStatusSchema,
+  title: z.string().nullable(),
+  content: z.string(),
+  sourceKind: MemoryDraftSourceKindSchema,
+  sourceLabel: z.string().nullable(),
+  sourceRef: z.string().nullable(),
+  sessionId: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  appliedAt: z.string().nullable(),
+  dismissedAt: z.string().nullable(),
+  failedAt: z.string().nullable(),
+  lastError: z.string().nullable(),
+  appliedPath: z.string().nullable(),
+});
+export type MemoryDraft = z.infer<typeof MemoryDraftSchema>;
+
+export const MemoryDraftCreateRequestSchema = z.object({
+  target: MemoryDraftTargetSchema,
+  title: z.string().trim().max(200).nullable().default(null),
+  content: z.string().trim().min(1),
+  sourceKind: MemoryDraftSourceKindSchema.default("manual"),
+  sourceLabel: z.string().trim().max(300).nullable().default(null),
+  sourceRef: z.string().trim().max(500).nullable().default(null),
+  sessionId: z.string().trim().max(200).nullable().default(null),
+});
+export type MemoryDraftCreateRequest = z.infer<
+  typeof MemoryDraftCreateRequestSchema
+>;
+
+export const MemoryDraftUpdateRequestSchema = z
+  .object({
+    target: MemoryDraftTargetSchema.optional(),
+    title: z.string().trim().max(200).nullable().optional(),
+    content: z.string().trim().min(1).optional(),
+  })
+  .refine(
+    (value) =>
+      value.target !== undefined ||
+      value.title !== undefined ||
+      value.content !== undefined,
+    {
+      message: "Update at least one draft field.",
+    },
+  );
+export type MemoryDraftUpdateRequest = z.infer<
+  typeof MemoryDraftUpdateRequestSchema
+>;
+
+export const MemoryDraftApplyResultSchema = z.object({
+  draft: MemoryDraftSchema,
+  memory: z.object({
+    effectiveWorkspaceRoot: z.string(),
+    memoryFilePath: z.string(),
+    todayNotePath: z.string(),
+  }),
+  reindexMode: z.enum(["incremental", "force"]),
+});
+export type MemoryDraftApplyResult = z.infer<
+  typeof MemoryDraftApplyResultSchema
+>;
+
+export const MaintenanceScopeSchema = z.enum(["app", "runtime", "remote"]);
+export type MaintenanceScope = z.infer<typeof MaintenanceScopeSchema>;
+
+export const MaintenanceActionSchema = z.enum(["restart", "drain-only"]);
+export type MaintenanceAction = z.infer<typeof MaintenanceActionSchema>;
+
+export const MaintenancePhaseSchema = z.enum([
+  "idle",
+  "queued",
+  "draining",
+  "stopping",
+  "starting",
+  "verifying",
+  "completed",
+  "failed",
+]);
+export type MaintenancePhase = z.infer<typeof MaintenancePhaseSchema>;
+
+export const MaintenanceOperationSchema = z.object({
+  id: z.string(),
+  scope: MaintenanceScopeSchema,
+  action: MaintenanceActionSchema,
+  phase: MaintenancePhaseSchema,
+  active: z.boolean(),
+  requestedAt: z.string(),
+  startedAt: z.string().nullable(),
+  updatedAt: z.string(),
+  finishedAt: z.string().nullable(),
+  requestedByUserId: z.string().nullable(),
+  requestedFromLocalhost: z.boolean(),
+  message: z.string().nullable(),
+  lastError: z.string().nullable(),
+});
+export type MaintenanceOperation = z.infer<typeof MaintenanceOperationSchema>;
+
+export const MaintenanceStatusSchema = z.object({
+  active: z.boolean(),
+  blocksNewWork: z.boolean(),
+  current: MaintenanceOperationSchema.nullable(),
+  recent: z.array(MaintenanceOperationSchema),
+  updatedAt: z.string(),
+});
+export type MaintenanceStatus = z.infer<typeof MaintenanceStatusSchema>;
+
+export const MaintenanceRunRequestSchema = z.object({
+  scope: MaintenanceScopeSchema,
+  action: MaintenanceActionSchema,
+});
+export type MaintenanceRunRequest = z.infer<typeof MaintenanceRunRequestSchema>;
+
 export const WorkspaceBootstrapFileStatusSchema = z.object({
   path: z.string(),
   exists: z.boolean(),
@@ -707,6 +845,8 @@ export const LatencySummarySchema = z.object({
   source: LatencySourceSchema,
   count: z.number().int().nonnegative(),
   lastDurationMs: z.number().nonnegative().nullable(),
+  lastEndedAt: z.string().nullable(),
+  sampleAgeMs: z.number().nonnegative().nullable(),
   minDurationMs: z.number().nonnegative().nullable(),
   maxDurationMs: z.number().nonnegative().nullable(),
   avgDurationMs: z.number().nonnegative().nullable(),
@@ -730,6 +870,95 @@ export const PerformanceSnapshotSchema = z.object({
 });
 export type PerformanceSnapshot = z.infer<typeof PerformanceSnapshotSchema>;
 
+export const HostPressureLevelSchema = z.enum([
+  "ok",
+  "warn",
+  "critical",
+  "unknown",
+]);
+export type HostPressureLevel = z.infer<typeof HostPressureLevelSchema>;
+
+export const HostPressureContributorIdSchema = z.enum([
+  "reclaimableMemory",
+  "ramUsage",
+  "swapUsage",
+  "cpuLoad",
+  "activeJobs",
+  "terminalSession",
+]);
+export type HostPressureContributorId = z.infer<
+  typeof HostPressureContributorIdSchema
+>;
+
+export const HostPressureContributorSeveritySchema = z.enum([
+  "ok",
+  "info",
+  "warn",
+  "critical",
+]);
+export type HostPressureContributorSeverity = z.infer<
+  typeof HostPressureContributorSeveritySchema
+>;
+
+export const HostPressureContributorSchema = z.object({
+  id: HostPressureContributorIdSchema,
+  label: z.string(),
+  severity: HostPressureContributorSeveritySchema,
+  value: z.string(),
+  detail: z.string(),
+});
+export type HostPressureContributor = z.infer<
+  typeof HostPressureContributorSchema
+>;
+
+export const HostPressureStatusSchema = z.object({
+  observedAt: z.string(),
+  health: HealthStateSchema,
+  level: HostPressureLevelSchema,
+  message: z.string(),
+  blocksAgentRuns: z.boolean(),
+  cpuLogicalCores: z.number().int().positive().nullable(),
+  load1m: z.number().nonnegative().nullable(),
+  load5m: z.number().nonnegative().nullable(),
+  load15m: z.number().nonnegative().nullable(),
+  loadRatio: z.number().nonnegative().nullable(),
+  memoryTotalBytes: z.number().int().nonnegative().nullable(),
+  memoryUsedBytes: z.number().int().nonnegative().nullable(),
+  memoryAvailableBytes: z.number().int().nonnegative().nullable(),
+  memoryUsedRatio: z.number().nonnegative().nullable(),
+  compressedBytes: z.number().int().nonnegative().nullable(),
+  swapTotalBytes: z.number().int().nonnegative().nullable(),
+  swapUsedBytes: z.number().int().nonnegative().nullable(),
+  swapUsedRatio: z.number().nonnegative().nullable(),
+  activeJobs: z.number().int().nonnegative(),
+  activeTerminalSession: z.boolean(),
+  contributors: z.array(HostPressureContributorSchema),
+  recommendations: z.array(z.string()),
+  lastError: z.string().nullable(),
+});
+export type HostPressureStatus = z.infer<typeof HostPressureStatusSchema>;
+
+export const HostPressureRecoveryRequestSchema = z.object({
+  sessionId: z.string().nullable().default(null),
+  abortSessionRun: z.boolean().default(true),
+  cancelActiveJobs: z.boolean().default(true),
+  closeTerminalSession: z.boolean().default(true),
+});
+export type HostPressureRecoveryRequest = z.infer<
+  typeof HostPressureRecoveryRequestSchema
+>;
+
+export const HostPressureRecoveryResultSchema = z.object({
+  recoveredAt: z.string(),
+  abortedSessionId: z.string().nullable(),
+  cancelledJobCount: z.number().int().nonnegative(),
+  closedTerminalSessionId: z.string().nullable(),
+  hostPressure: HostPressureStatusSchema,
+});
+export type HostPressureRecoveryResult = z.infer<
+  typeof HostPressureRecoveryResultSchema
+>;
+
 export const DashboardStateSchema = z.object({
   build: BuildInfoSchema,
   setup: SetupStateSchema,
@@ -746,7 +975,10 @@ export const DashboardStateSchema = z.object({
   channelConfig: ChannelConfigSummarySchema,
   harness: HarnessStatusSchema,
   memory: MemoryStatusSchema,
+  hostPressure: HostPressureStatusSchema,
+  memoryDrafts: z.array(MemoryDraftSchema),
   contextManagement: ContextManagementStatusSchema,
+  maintenance: MaintenanceStatusSchema,
   launchAgent: LaunchAgentStatusSchema,
   sessions: z.array(SessionSummarySchema),
   jobs: z.array(JobRecordSchema),
@@ -928,8 +1160,20 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
     payload: MemoryStatusSchema,
   }),
   z.object({
+    type: z.literal("hostPressure.updated"),
+    payload: HostPressureStatusSchema,
+  }),
+  z.object({
+    type: z.literal("memoryDrafts.updated"),
+    payload: z.array(MemoryDraftSchema),
+  }),
+  z.object({
     type: z.literal("harness.updated"),
     payload: HarnessStatusSchema,
+  }),
+  z.object({
+    type: z.literal("maintenance.updated"),
+    payload: MaintenanceStatusSchema,
   }),
   z.object({
     type: z.literal("error"),
