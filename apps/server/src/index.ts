@@ -164,6 +164,14 @@ function withMeasuredStreamRelay(
     onDelta(delta: string): void | Promise<void>;
     onDone(): void | Promise<void>;
     onError(message: string): void | Promise<void>;
+    onState?(state: {
+      stage: "accepted" | "streaming" | "tool_call" | "tool_result" | "approval_required" | "completed" | "failed";
+      label: string;
+      detail?: string | null;
+      toolName?: string | null;
+      approvalId?: string | null;
+      active?: boolean;
+    }): void | Promise<void>;
   },
 ) {
   const enqueueMetric = performanceService.start(
@@ -235,6 +243,27 @@ function withMeasuredStreamRelay(
         }
         await relay.onError(message);
       },
+      ...(relay.onState
+        ? {
+            onState: async (state: {
+              stage:
+                | "accepted"
+                | "streaming"
+                | "tool_call"
+                | "tool_result"
+                | "approval_required"
+                | "completed"
+                | "failed";
+              label: string;
+              detail?: string | null;
+              toolName?: string | null;
+              approvalId?: string | null;
+              active?: boolean;
+            }) => {
+              await relay.onState?.(state);
+            },
+          }
+        : {}),
     },
   };
 }
@@ -1136,6 +1165,13 @@ app.post("/api/sessions/:sessionId/messages", async (c) => {
     onDelta: async (delta) => {
       websocketHub.publishChatDelta(sessionId, runId, delta);
     },
+    onState: async (state) => {
+      websocketHub.publishChatRun({
+        sessionId,
+        runId,
+        ...state,
+      });
+    },
     onDone: async () => {
       websocketHub.publishChatDone(sessionId, runId);
       await websocketHub.pushChatHistory(sessionId);
@@ -1150,6 +1186,14 @@ app.post("/api/sessions/:sessionId/messages", async (c) => {
   const run = await harnessService.sendMessage(sessionId, body, measuredRelay.relay);
   runId = run.runId;
   measuredRelay.markAccepted();
+  websocketHub.publishChatRun({
+    sessionId,
+    runId,
+    stage: "accepted",
+    label: "Run accepted",
+    detail: "OpenClaw accepted the request and is starting the live run.",
+    active: true,
+  });
   return c.json({ ok: true, runId: run.runId }, 202);
 });
 

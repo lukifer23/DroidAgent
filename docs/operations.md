@@ -57,7 +57,8 @@ pnpm perf:report
 - Keep DroidAgent on loopback.
 - Use Tailscale Serve when you want private tailnet-only phone access.
 - If the normal macOS Tailscale daemon is unavailable, DroidAgent can start a userspace `tailscaled` process under `~/.droidagent/tailscale` and operate against its socket instead.
-- After owner sign-in, the Setup route is the fast path: it prepares the default local runtime path and creates the Tailscale phone URL automatically when Tailscale is already authenticated.
+- After owner sign-in, Setup is only the first-run wizard: it prepares the default local runtime path and creates the Tailscale phone URL automatically when Tailscale is already authenticated.
+- Once the operator path is ready, daily use should happen from `Chat`; Setup moves out of the primary bottom-nav flow.
 - The same quickstart path also seeds `MEMORY.md`, `PREFERENCES.md`, `HEARTBEAT.md`, daily notes under `memory/`, and the workspace `skills/` directory.
 - The default local chat model is `qwen3.5:4b` with a `65k` context budget and thinking disabled.
 - The default local multimodal model is `qwen2.5vl:3b` for image and PDF analysis inside the chat composer.
@@ -70,11 +71,12 @@ pnpm perf:report
 ## Diagnostics
 
 - Server timings are exposed at `GET /api/diagnostics/performance` for the signed-in owner.
-- The Settings route shows a compact client/server diagnostics card.
+- The Settings route shows the full client/server diagnostics card.
 - The Settings route also shows semantic-memory readiness, embedding/index status, and the current `65k` local context budget.
 - The Settings route now also exposes memory-prep timings so semantic-memory regressions are visible in the same diagnostics surface as chat, files, and jobs.
 - The Settings route also shows the running build/version identity so the live host, screenshots, logs, and repo all stay on the same release line.
 - The chat route now accepts local images, PDFs, Markdown, JSON, logs, and common code/text files. DroidAgent stores them under `~/.droidagent/uploads` and passes them through the real OpenClaw tool path instead of a parallel mock transcript.
+- The chat route is the operator console: it surfaces live run state, tool summaries, approval cards, attachments, code blocks, and client-side per-run timings.
 - Performance artifacts are written under `artifacts/perf/`.
 - Access, dashboard, runtime, provider, and startup-status reads use short-lived in-memory caches with explicit invalidation on mutations so the mobile shell stays responsive without serving long-lived stale state.
 - OpenClaw runs with default thinking disabled unless you explicitly re-enable it in-session, while smart context management still controls compaction, pruning, and memory flush policy.

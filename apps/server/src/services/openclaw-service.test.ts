@@ -665,10 +665,22 @@ describe("OpenClaw context management policy", () => {
     expect(messages[1]?.role).toBe("assistant");
     expect(messages[1]?.text).toContain("Tool call: read");
     expect(messages[1]?.text).toContain('"path": "/tmp/HEARTBEAT.md"');
+    expect(messages[1]?.parts).toEqual([
+      expect.objectContaining({
+        type: "tool_call_summary",
+        toolName: "read",
+      }),
+    ]);
     expect(messages[2]).toMatchObject({
       role: "tool",
       text: "HEARTBEAT_OK",
     });
+    expect(messages[2]?.parts).toEqual([
+      expect.objectContaining({
+        type: "markdown",
+        text: "HEARTBEAT_OK",
+      }),
+    ]);
   });
 
   it("strips attachment envelopes from history while preserving attachment metadata", async () => {
@@ -713,6 +725,15 @@ Inspect the attached files.`,
         id: "attachment-1",
         name: "notes.md",
         kind: "markdown",
+      }),
+    ]);
+    expect(messages[0]?.parts).toEqual([
+      expect.objectContaining({
+        type: "attachments",
+      }),
+      expect.objectContaining({
+        type: "markdown",
+        text: "Inspect the attached files.",
       }),
     ]);
   });

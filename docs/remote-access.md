@@ -27,6 +27,7 @@
 4. DroidAgent sets the Tailscale URL as canonical as part of that quickstart/manual enable path.
 5. If the same passkey provider already syncs to the phone, open the canonical URL directly and sign in.
 6. Use a one-time bootstrap link only when you need to enroll a new device-specific passkey after the canonical URL is healthy.
+7. After the device is enrolled, use the canonical URL for daily sign-in. Do not keep using bootstrap links for routine access.
 
 Notes:
 
@@ -41,6 +42,7 @@ Notes:
 - Localhost remains allowed only for explicit bootstrap and maintenance flows.
 - Phone bootstrap links are only issued when the current canonical URL is reachable.
 - Switching the canonical source clears any previously issued bootstrap link.
+- The first-run enrollment copy and the daily sign-in copy are intentionally different in the UI: device enrollment is a one-time action, daily sign-in happens at the canonical URL.
 
 ## Notes
 

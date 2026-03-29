@@ -62,6 +62,12 @@ export class TestHarnessService implements HarnessAdapter {
       sessionId: "web:operator",
       role: "assistant",
       text: "DroidAgent test harness is ready.",
+      parts: [
+        {
+          type: "markdown",
+          text: "DroidAgent test harness is ready.",
+        },
+      ],
       createdAt: nowIso(),
       status: "complete",
       source: "openclaw"
@@ -145,6 +151,12 @@ export class TestHarnessService implements HarnessAdapter {
         sessionId: sessionKey,
         role: "assistant",
         text: `Session ${sessionKey} is ready.`,
+        parts: [
+          {
+            type: "markdown",
+            text: `Session ${sessionKey} is ready.`,
+          },
+        ],
         createdAt: nowIso(),
         status: "complete",
         source: "openclaw"
@@ -185,6 +197,20 @@ export class TestHarnessService implements HarnessAdapter {
         sessionId: sessionKey,
         role: "user",
         text: message,
+        parts: [
+          ...(request.attachments.length > 0
+            ? [
+                {
+                  type: "attachments" as const,
+                  attachments: request.attachments,
+                },
+              ]
+            : []),
+          {
+            type: "markdown" as const,
+            text: message,
+          },
+        ],
         attachments: request.attachments,
         createdAt: nowIso(),
         status: "complete",
@@ -203,6 +229,15 @@ export class TestHarnessService implements HarnessAdapter {
       aborted: false
     };
     this.activeRuns.set(sessionKey, activeRun);
+    await relay.onState?.({
+      stage: "streaming",
+      label: request.attachments.length > 0 ? "Analyzing attachments" : "Reply streaming",
+      detail:
+        request.attachments.length > 0
+          ? `Inspecting ${request.attachments.length} attachment${request.attachments.length === 1 ? "" : "s"}.`
+          : "The test harness started replying.",
+      active: true,
+    });
 
     const streamNext = async (index: number) => {
       const current = this.activeRuns.get(sessionKey);
@@ -217,12 +252,24 @@ export class TestHarnessService implements HarnessAdapter {
             sessionId: sessionKey,
             role: "assistant",
             text: responseText,
+            parts: [
+              {
+                type: "markdown",
+                text: responseText,
+              },
+            ],
             createdAt: nowIso(),
             status: "complete",
             source: "openclaw"
           })
         );
         this.activeRuns.delete(sessionKey);
+        await relay.onState?.({
+          stage: "completed",
+          label: "Reply complete",
+          detail: "The test harness completed the response.",
+          active: false,
+        });
         await relay.onDone();
         return;
       }

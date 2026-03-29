@@ -337,17 +337,83 @@ export const ChatAttachmentSchema = z.object({
 });
 export type ChatAttachment = z.infer<typeof ChatAttachmentSchema>;
 
+export const ChatMessagePartSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("markdown"),
+    text: z.string(),
+  }),
+  z.object({
+    type: z.literal("attachments"),
+    attachments: z.array(ChatAttachmentSchema),
+  }),
+  z.object({
+    type: z.literal("tool_call_summary"),
+    toolName: z.string(),
+    summary: z.string(),
+    details: z.string().nullable().default(null),
+  }),
+  z.object({
+    type: z.literal("tool_result_summary"),
+    toolName: z.string().nullable().default(null),
+    summary: z.string(),
+    details: z.string().nullable().default(null),
+  }),
+  z.object({
+    type: z.literal("approval_request"),
+    approvalId: z.string().nullable().default(null),
+    title: z.string(),
+    details: z.string(),
+    resolution: z.enum(["pending", "approved", "denied"]).default("pending"),
+  }),
+  z.object({
+    type: z.literal("code_block"),
+    language: z.string().nullable().default(null),
+    code: z.string(),
+  }),
+  z.object({
+    type: z.literal("error"),
+    message: z.string(),
+    details: z.string().nullable().default(null),
+  }),
+]);
+export type ChatMessagePart = z.infer<typeof ChatMessagePartSchema>;
+
 export const ChatMessageSchema = z.object({
   id: z.string(),
   sessionId: z.string(),
   role: ChatRoleSchema,
   text: z.string(),
+  parts: z.array(ChatMessagePartSchema).default([]),
   attachments: z.array(ChatAttachmentSchema).default([]),
   createdAt: z.string(),
   status: z.enum(["streaming", "complete", "error"]).default("complete"),
   source: z.enum(["web", "signal", "openclaw"]).default("web"),
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
+
+export const ChatRunStageSchema = z.enum([
+  "accepted",
+  "streaming",
+  "tool_call",
+  "tool_result",
+  "approval_required",
+  "completed",
+  "failed",
+]);
+export type ChatRunStage = z.infer<typeof ChatRunStageSchema>;
+
+export const ChatRunStateSchema = z.object({
+  sessionId: z.string(),
+  runId: z.string(),
+  stage: ChatRunStageSchema,
+  label: z.string(),
+  detail: z.string().nullable().default(null),
+  toolName: z.string().nullable().default(null),
+  approvalId: z.string().nullable().default(null),
+  active: z.boolean().default(true),
+  updatedAt: z.string(),
+});
+export type ChatRunState = z.infer<typeof ChatRunStateSchema>;
 
 const ChatSendRequestBodySchema = z.object({
   text: z.string().default(""),
@@ -734,6 +800,10 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
       runId: z.string(),
       message: z.string(),
     }),
+  }),
+  z.object({
+    type: z.literal("chat.run"),
+    payload: ChatRunStateSchema,
   }),
   z.object({
     type: z.literal("job.output"),

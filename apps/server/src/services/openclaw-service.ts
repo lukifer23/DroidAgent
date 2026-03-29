@@ -24,6 +24,7 @@ import {
   type ChannelConfigSummary,
   type ChannelStatus,
   type ChatMessage,
+  type ChatMessagePart,
   type ChatSendRequest,
   type ContextManagementStatus,
   type HarnessStatus,
@@ -378,6 +379,60 @@ function extractDeltaText(payload: unknown): string {
   return "";
 }
 
+function extractDeltaToolNames(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+
+  const choices = Array.isArray((payload as { choices?: unknown }).choices)
+    ? ((payload as { choices: Array<Record<string, unknown>> }).choices ?? [])
+    : [];
+  const delta = choices[0]?.delta;
+  if (!delta || typeof delta !== "object") {
+    return [];
+  }
+
+  const toolCalls = Array.isArray(
+    (delta as { tool_calls?: unknown; toolCalls?: unknown }).tool_calls,
+  )
+    ? ((delta as { tool_calls: Array<Record<string, unknown>> }).tool_calls ?? [])
+    : Array.isArray((delta as { toolCalls?: unknown }).toolCalls)
+      ? ((delta as { toolCalls: Array<Record<string, unknown>> }).toolCalls ??
+        [])
+      : [];
+
+  return toolCalls
+    .map((entry) => {
+      const name =
+        typeof entry?.name === "string"
+          ? entry.name
+          : typeof entry?.function === "object" &&
+              entry.function &&
+              typeof (entry.function as { name?: unknown }).name === "string"
+            ? ((entry.function as { name: string }).name ?? null)
+            : null;
+      return name?.trim() || null;
+    })
+    .filter((value): value is string => Boolean(value));
+}
+
+function extractStreamError(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  if (
+    "error" in payload &&
+    payload.error &&
+    typeof payload.error === "object" &&
+    typeof (payload.error as { message?: unknown }).message === "string"
+  ) {
+    return (payload.error as { message: string }).message;
+  }
+
+  return null;
+}
+
 function formatStructuredValue(value: unknown): string {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -532,6 +587,159 @@ function stripGeneratedAttachmentInstructions(value: string): string {
   }
 
   return payload.text.trim() || remainder.trim() || "Inspect the attached files.";
+}
+
+function markdownPartsFromText(text: string): ChatMessagePart[] {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const parts: ChatMessagePart[] = [];
+  const codeBlockPattern = /```([a-z0-9_+\-.#]*)\n?([\s\S]*?)```/gi;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = codeBlockPattern.exec(trimmed)) !== null) {
+    const preceding = trimmed.slice(lastIndex, match.index).trim();
+    if (preceding) {
+      parts.push({
+        type: "markdown",
+        text: preceding,
+      });
+    }
+
+    const language = match[1]?.trim() || null;
+    const code = match[2]?.replace(/\n$/, "") ?? "";
+    if (code.trim()) {
+      parts.push({
+        type: "code_block",
+        language,
+        code,
+      });
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  const trailing = trimmed.slice(lastIndex).trim();
+  if (trailing) {
+    parts.push({
+      type: "markdown",
+      text: trailing,
+    });
+  }
+
+  return parts.length > 0
+    ? parts
+    : [
+        {
+          type: "markdown",
+          text: trimmed,
+        },
+      ];
+}
+
+function parseToolCallPart(text: string): ChatMessagePart | null {
+  const match = text.trim().match(/^Tool call:\s*([^\n]+)\n?([\s\S]*)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const toolName = match[1]?.trim() || "tool";
+  const details = match[2]?.trim() || null;
+  return {
+    type: "tool_call_summary",
+    toolName,
+    summary: `Calling ${toolName}`,
+    details,
+  };
+}
+
+function parseToolResultPart(text: string): ChatMessagePart | null {
+  const match = text.trim().match(/^Tool result(?:\s*-\s*([^\n]+))?\n?([\s\S]*)$/i);
+  if (!match) {
+    return null;
+  }
+
+  const toolName = match[1]?.trim() || null;
+  const details = match[2]?.trim() || null;
+  return {
+    type: "tool_result_summary",
+    toolName,
+    summary: toolName ? `${toolName} returned output` : "Tool returned output",
+    details,
+  };
+}
+
+function parseApprovalRequestPart(text: string): ChatMessagePart | null {
+  if (!/^Approval required/i.test(text.trim())) {
+    return null;
+  }
+
+  const approvalId =
+    text.match(/Approval required\s+\(id\s+([^)]+)\)/i)?.[1]?.trim() ?? null;
+
+  return {
+    type: "approval_request",
+    approvalId,
+    title: "Approval required",
+    details: text.trim(),
+    resolution: "pending",
+  };
+}
+
+function parseMessageParts(params: {
+  text: string;
+  attachments: ReturnType<typeof publicAttachmentsFromPayload>;
+  role: ChatMessage["role"];
+  status: ChatMessage["status"];
+}): ChatMessagePart[] {
+  const trimmed = params.text.trim();
+  const parts: ChatMessagePart[] = [];
+
+  if (params.attachments.length > 0) {
+    parts.push({
+      type: "attachments",
+      attachments: params.attachments,
+    });
+  }
+
+  if (!trimmed) {
+    return parts;
+  }
+
+  if (params.status === "error") {
+    parts.push({
+      type: "error",
+      message: trimmed,
+      details: null,
+    });
+    return parts;
+  }
+
+  const approvalPart = parseApprovalRequestPart(trimmed);
+  if (approvalPart) {
+    parts.push(approvalPart);
+    return parts;
+  }
+
+  if (params.role !== "user") {
+    const toolCallPart = parseToolCallPart(trimmed);
+    if (toolCallPart) {
+      parts.push(toolCallPart);
+      return parts;
+    }
+
+    const toolResultPart = parseToolResultPart(trimmed);
+    if (toolResultPart) {
+      parts.push(toolResultPart);
+      return parts;
+    }
+  }
+
+  parts.push(...markdownPartsFromText(trimmed));
+  return parts;
 }
 
 function renderHistoryContent(message: Record<string, unknown>): string {
@@ -788,6 +996,12 @@ function parseHistoryMessage(
     sessionId: sessionKey,
     role: resolveMessageRole(message.role),
     text: renderedText,
+    parts: parseMessageParts({
+      text: renderedText,
+      attachments: publicAttachmentsFromPayload(payload),
+      role: resolveMessageRole(message.role),
+      status: "complete",
+    }),
     attachments: publicAttachmentsFromPayload(payload),
     createdAt: resolveIsoTimestamp(message),
     status: "complete",
@@ -1651,6 +1865,10 @@ export class OpenClawService {
     controller: AbortController,
     relay: StreamRelayCallbacks,
   ): Promise<void> {
+    const seenToolNames = new Set<string>();
+    let firstDeltaSeen = false;
+    let approvalRaised = false;
+
     try {
       const response = await fetch(
         `${OPENCLAW_GATEWAY_HTTP_URL}${CHAT_COMPLETIONS_PATH}`,
@@ -1707,12 +1925,68 @@ export class OpenClawService {
 
           try {
             const parsed = JSON.parse(rawData) as unknown;
+            const streamError = extractStreamError(parsed);
+            if (streamError) {
+              throw new Error(streamError);
+            }
+
+            const toolNames = extractDeltaToolNames(parsed);
+            for (const toolName of toolNames) {
+              if (seenToolNames.has(toolName)) {
+                continue;
+              }
+              seenToolNames.add(toolName);
+              await relay.onState?.({
+                stage: "tool_call",
+                label: `Using ${toolName}`,
+                detail: `OpenClaw called the ${toolName} tool.`,
+                toolName,
+                active: true,
+              });
+            }
+
             const delta = extractDeltaText(parsed);
             if (delta) {
+              if (!firstDeltaSeen) {
+                firstDeltaSeen = true;
+                await relay.onState?.({
+                  stage: "streaming",
+                  label:
+                    seenToolNames.size > 0
+                      ? "Working through tool output"
+                      : "Reply streaming",
+                  detail:
+                    seenToolNames.size > 0
+                      ? "The live harness is returning output."
+                      : "The model started replying.",
+                  active: true,
+                });
+              }
+
+              if (
+                !approvalRaised &&
+                /Approval required/i.test(delta)
+              ) {
+                approvalRaised = true;
+                const approvalId =
+                  delta.match(/Approval required\s+\(id\s+([^)]+)\)/i)?.[1] ??
+                  null;
+                await relay.onState?.({
+                  stage: "approval_required",
+                  label: "Approval required",
+                  detail: delta.trim(),
+                  approvalId,
+                  active: true,
+                });
+              }
               await relay.onDelta(delta);
             }
-          } catch {
-            // Ignore malformed SSE frames from the local gateway and keep the stream alive.
+          } catch (error) {
+            if (error instanceof SyntaxError) {
+              // Ignore malformed SSE frames from the local gateway and keep the stream alive.
+              continue;
+            }
+            throw error;
           }
         }
       }
@@ -1721,22 +1995,80 @@ export class OpenClawService {
       if (trailing && trailing !== "[DONE]") {
         try {
           const parsed = JSON.parse(trailing) as unknown;
+          const streamError = extractStreamError(parsed);
+          if (streamError) {
+            throw new Error(streamError);
+          }
+
+          const toolNames = extractDeltaToolNames(parsed);
+          for (const toolName of toolNames) {
+            if (seenToolNames.has(toolName)) {
+              continue;
+            }
+            seenToolNames.add(toolName);
+            await relay.onState?.({
+              stage: "tool_call",
+              label: `Using ${toolName}`,
+              detail: `OpenClaw called the ${toolName} tool.`,
+              toolName,
+              active: true,
+            });
+          }
+
           const delta = extractDeltaText(parsed);
           if (delta) {
+            if (!firstDeltaSeen) {
+              firstDeltaSeen = true;
+              await relay.onState?.({
+                stage: "streaming",
+                label: "Reply streaming",
+                detail: "The model started replying.",
+                active: true,
+              });
+            }
             await relay.onDelta(delta);
           }
-        } catch {
-          // ignore malformed trailing data
+        } catch (error) {
+          if (error instanceof SyntaxError) {
+            // ignore malformed trailing data
+          } else {
+            throw error;
+          }
         }
       }
 
+      await relay.onState?.({
+        stage: seenToolNames.size > 0 ? "tool_result" : "completed",
+        label:
+          seenToolNames.size > 0
+            ? "Tool output received"
+            : "Reply complete",
+        detail:
+          seenToolNames.size > 0
+            ? "OpenClaw finished the tool-assisted reply."
+            : "The live run completed successfully.",
+        active: false,
+      });
       await relay.onDone();
     } catch (error) {
       if ((error as { name?: string }).name === "AbortError") {
+        await relay.onState?.({
+          stage: "completed",
+          label: "Run stopped",
+          detail: "The active run was cancelled.",
+          active: false,
+        });
         await relay.onDone();
         return;
       }
 
+      await relay.onState?.({
+        stage: "failed",
+        label: "Run failed",
+        detail:
+          error instanceof Error ? error.message : "OpenClaw stream failed.",
+        active: false,
+      });
       await relay.onError(
         error instanceof Error ? error.message : "OpenClaw stream failed.",
       );

@@ -2,6 +2,7 @@ import { TEST_MODE } from "../env.js";
 import type {
   ApprovalRecord,
   ChannelConfigSummary,
+  ChatRunStage,
   ChatSendRequest,
   ChannelStatus,
   ChatMessage,
@@ -17,6 +18,16 @@ export interface StreamRelayCallbacks {
   onDelta(delta: string): void | Promise<void>;
   onDone(): void | Promise<void>;
   onError(message: string): void | Promise<void>;
+  onState?(
+    state: {
+      stage: ChatRunStage;
+      label: string;
+      detail?: string | null;
+      toolName?: string | null;
+      approvalId?: string | null;
+      active?: boolean;
+    },
+  ): void | Promise<void>;
 }
 
 export interface HarnessRuntimeModelConfig {

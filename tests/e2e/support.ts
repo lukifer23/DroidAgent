@@ -53,7 +53,7 @@ export async function gotoSignedIn(page: Page, pathname: string): Promise<E2ESta
   await resetE2EState(page);
   await page.goto(new URL(pathname, state.baseUrl).toString());
   await expect(
-    page.locator(".topbar h1"),
+    page.locator(".topbar-copy h1"),
   ).toBeVisible();
   return state;
 }

@@ -267,6 +267,16 @@ describe("DashboardStateSchema", () => {
         sessionId: "web:operator",
         role: "user",
         text: payload.text,
+        parts: [
+          {
+            type: "attachments",
+            attachments: payload.attachments,
+          },
+          {
+            type: "markdown",
+            text: payload.text,
+          },
+        ],
         attachments: payload.attachments,
         createdAt: new Date().toISOString(),
         status: "complete",
@@ -275,6 +285,7 @@ describe("DashboardStateSchema", () => {
     });
 
     expect(message.payload.attachments).toHaveLength(2);
+    expect(message.payload.parts).toHaveLength(2);
   });
 
   it("accepts targeted access updates", () => {
@@ -441,6 +452,26 @@ describe("DashboardStateSchema", () => {
     });
 
     expect(event.type).toBe("performance.updated");
+  });
+
+  it("accepts chat run events", () => {
+    const event = ServerEventSchema.parse({
+      type: "chat.run",
+      payload: {
+        sessionId: "web:operator",
+        runId: "run-1",
+        stage: "approval_required",
+        label: "Approval required",
+        detail: "Host: gateway",
+        toolName: null,
+        approvalId: "approval-1",
+        active: true,
+        updatedAt: new Date().toISOString(),
+      },
+    });
+
+    expect(event.type).toBe("chat.run");
+    expect(event.payload.stage).toBe("approval_required");
   });
 
   it("accepts quickstart results", () => {

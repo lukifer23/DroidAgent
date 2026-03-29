@@ -238,6 +238,36 @@ export class WebsocketHub {
     );
   }
 
+  publishChatRun(params: {
+    sessionId: string;
+    runId: string;
+    stage: "accepted" | "streaming" | "tool_call" | "tool_result" | "approval_required" | "completed" | "failed";
+    label: string;
+    detail?: string | null;
+    toolName?: string | null;
+    approvalId?: string | null;
+    active?: boolean;
+  }): void {
+    this.broadcast(
+      ServerEventSchema.parse({
+        type: "chat.run",
+        payload: {
+          sessionId: params.sessionId,
+          runId: params.runId,
+          stage: params.stage,
+          label: params.label,
+          detail: params.detail ?? null,
+          toolName: params.toolName ?? null,
+          approvalId: params.approvalId ?? null,
+          active:
+            params.active ??
+            (params.stage !== "completed" && params.stage !== "failed"),
+          updatedAt: new Date().toISOString(),
+        },
+      }),
+    );
+  }
+
   async pushChatHistory(sessionId: string): Promise<void> {
     const messages = await harnessService.loadHistory(sessionId);
     this.broadcast(
@@ -311,6 +341,13 @@ export class WebsocketHub {
           text,
           attachments,
         }, {
+          onState: async (state) => {
+            this.publishChatRun({
+              sessionId,
+              runId,
+              ...state,
+            });
+          },
           onDelta: async (delta) => {
             if (!firstDeltaRecorded) {
               firstDeltaRecorded = true;
@@ -355,6 +392,14 @@ export class WebsocketHub {
         });
         runId = run.runId;
         enqueueMetric.finish();
+        this.publishChatRun({
+          sessionId,
+          runId,
+          stage: "accepted",
+          label: "Run accepted",
+          detail: "OpenClaw accepted the request and is starting the live run.",
+          active: true,
+        });
         return;
       }
 

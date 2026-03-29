@@ -1,35 +1,41 @@
 import {
-  startTransition,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type FormEvent,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
+  ApprovalRecord,
   ChatAttachment,
   ChatMessage,
+  ChatMessagePart,
   LatencySummary,
 } from "@droidagent/shared";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { useAuthQuery, useDashboardQuery, usePerformanceQuery } from "../app-data";
-import { useDroidAgentApp } from "../app-context";
+import { useAuthQuery, useDashboardQuery } from "../app-data";
+import {
+  useClientPerformanceSnapshot,
+  useDroidAgentApp,
+} from "../app-context";
 import { api, postFormData, postJson } from "../lib/api";
+import { useChatRuns } from "../lib/chat-run-store";
 import { useStreamingRuns } from "../lib/chat-stream-store";
 import { formatTokenBudget } from "../lib/formatters";
 
 function roleLabel(role: ChatMessage["role"]): string {
   if (role === "tool") {
-    return "Tool output";
+    return "Tool";
   }
 
   if (role === "system") {
     return "System";
   }
 
-  return role.charAt(0).toUpperCase() + role.slice(1);
+  return role === "assistant" ? "DroidAgent" : "You";
 }
 
 function formatMessageTime(value: string): string {
@@ -45,31 +51,16 @@ function formatMessageTime(value: string): string {
 }
 
 function formatLatency(summary: LatencySummary | undefined): string {
-  if (!summary?.p95DurationMs || !Number.isFinite(summary.p95DurationMs)) {
-    return "n/a";
+  const value = summary?.lastDurationMs ?? summary?.p95DurationMs ?? null;
+  if (!value || !Number.isFinite(value)) {
+    return "No samples";
   }
 
-  if (summary.p95DurationMs >= 1000) {
-    return `${(summary.p95DurationMs / 1000).toFixed(1)}s`;
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(1)}s`;
   }
 
-  return `${Math.round(summary.p95DurationMs)} ms`;
-}
-
-function formatToolName(value: string): string {
-  return value
-    .split(/[_:]/g)
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ");
-}
-
-function isToolTranscript(message: ChatMessage): boolean {
-  return (
-    message.role === "tool" ||
-    message.role === "system" ||
-    /^Tool (call|result)/.test(message.text)
-  );
+  return `${Math.round(value)} ms`;
 }
 
 function formatBytes(value: number): string {
@@ -103,57 +94,6 @@ function CopyButton({
     >
       {copied ? "Copied" : label}
     </button>
-  );
-}
-
-function MessageAttachments({ attachments }: { attachments: ChatAttachment[] }) {
-  if (attachments.length === 0) {
-    return null;
-  }
-
-  const imageAttachments = attachments.filter(
-    (attachment) => attachment.kind === "image",
-  );
-  const fileAttachments = attachments.filter(
-    (attachment) => attachment.kind !== "image",
-  );
-
-  return (
-    <div className="attachment-stack">
-      {imageAttachments.length > 0 ? (
-        <div className="attachment-image-grid">
-          {imageAttachments.map((attachment) => (
-            <a
-              key={attachment.id}
-              className="attachment-image-card"
-              href={attachment.url}
-              rel="noreferrer"
-              target="_blank"
-            >
-              <img alt={attachment.name} loading="lazy" src={attachment.url} />
-              <span>{attachment.name}</span>
-            </a>
-          ))}
-        </div>
-      ) : null}
-      {fileAttachments.length > 0 ? (
-        <div className="attachment-chip-row">
-          {fileAttachments.map((attachment) => (
-            <a
-              key={attachment.id}
-              className="attachment-chip"
-              href={attachment.url}
-              rel="noreferrer"
-              target="_blank"
-            >
-              <strong>{attachment.kind}</strong>
-              <span>{attachment.name}</span>
-              <small>{formatBytes(attachment.size)}</small>
-            </a>
-          ))}
-        </div>
-      ) : null}
-    </div>
   );
 }
 
@@ -205,23 +145,159 @@ function ChatMarkdown({ text }: { text: string }) {
   );
 }
 
-function MessageBody({ message }: { message: ChatMessage }) {
-  if (isToolTranscript(message)) {
+function AttachmentPart({
+  attachments,
+}: {
+  attachments: ChatAttachment[];
+}) {
+  const imageAttachments = attachments.filter(
+    (attachment) => attachment.kind === "image",
+  );
+  const fileAttachments = attachments.filter(
+    (attachment) => attachment.kind !== "image",
+  );
+
+  return (
+    <div className="attachment-stack">
+      {imageAttachments.length > 0 ? (
+        <div className="attachment-image-grid">
+          {imageAttachments.map((attachment) => (
+            <a
+              key={attachment.id}
+              className="attachment-image-card"
+              href={attachment.url}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <img alt={attachment.name} loading="lazy" src={attachment.url} />
+              <span>{attachment.name}</span>
+            </a>
+          ))}
+        </div>
+      ) : null}
+
+      {fileAttachments.length > 0 ? (
+        <div className="attachment-chip-row">
+          {fileAttachments.map((attachment) => (
+            <a
+              key={attachment.id}
+              className="attachment-chip"
+              href={attachment.url}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <strong>{attachment.kind}</strong>
+              <span>{attachment.name}</span>
+              <small>{formatBytes(attachment.size)}</small>
+            </a>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ApprovalCard({
+  approval,
+  onResolve,
+}: {
+  approval: ApprovalRecord | null;
+  onResolve: (approvalId: string, resolution: "approved" | "denied") => void;
+}) {
+  if (!approval) {
+    return null;
+  }
+
+  return (
+    <div className="inline-approval-card">
+      <div className="inline-approval-copy">
+        <strong>{approval.title}</strong>
+        <p>{approval.details}</p>
+      </div>
+      <div className="button-row compact-actions">
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => onResolve(approval.id, "denied")}
+        >
+          Deny
+        </button>
+        <button type="button" onClick={() => onResolve(approval.id, "approved")}>
+          Approve
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MessagePartView({
+  part,
+  approval,
+  onResolveApproval,
+}: {
+  part: ChatMessagePart;
+  approval: ApprovalRecord | null;
+  onResolveApproval: (approvalId: string, resolution: "approved" | "denied") => void;
+}) {
+  if (part.type === "markdown") {
     return (
-      <details className="message-details" open={message.role === "tool"}>
-        <summary>
-          {message.role === "tool"
-            ? "Inspect tool output"
-            : "Inspect tool transcript"}
-        </summary>
-        <pre>{message.text}</pre>
-      </details>
+      <div className="message-markdown">
+        <ChatMarkdown text={part.text} />
+      </div>
+    );
+  }
+
+  if (part.type === "attachments") {
+    return <AttachmentPart attachments={part.attachments} />;
+  }
+
+  if (part.type === "code_block") {
+    return <MarkdownCodeBlock className={part.language ?? undefined} text={part.code} />;
+  }
+
+  if (part.type === "tool_call_summary") {
+    return (
+      <div className="message-inline-card tool">
+        <strong>{part.summary}</strong>
+        <span>{part.toolName}</span>
+        {part.details ? (
+          <details className="message-details">
+            <summary>Inspect details</summary>
+            <pre>{part.details}</pre>
+          </details>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (part.type === "tool_result_summary") {
+    return (
+      <div className="message-inline-card result">
+        <strong>{part.summary}</strong>
+        {part.toolName ? <span>{part.toolName}</span> : null}
+        {part.details ? (
+          <details className="message-details">
+            <summary>Inspect details</summary>
+            <pre>{part.details}</pre>
+          </details>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (part.type === "approval_request") {
+    return (
+      <ApprovalCard
+        approval={approval}
+        onResolve={onResolveApproval}
+      />
     );
   }
 
   return (
-    <div className="message-markdown">
-      <ChatMarkdown text={message.text} />
+    <div className="message-inline-card error">
+      <strong>{part.message}</strong>
+      {part.details ? <span>{part.details}</span> : null}
     </div>
   );
 }
@@ -275,35 +351,36 @@ export function ChatScreen() {
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
-  const performanceQuery = usePerformanceQuery(Boolean(authQuery.data?.user));
   const dashboard = dashboardQuery.data;
-  const performance = performanceQuery.data;
+  const clientPerformanceSnapshot = useClientPerformanceSnapshot();
   const streamingRuns = useStreamingRuns();
+  const runStates = useChatRuns();
   const [chatInput, setChatInput] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>(
     [],
   );
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
-  const [pendingRun, setPendingRun] = useState<{
-    sessionId: string;
-    sentAt: number;
-  } | null>(null);
 
   const sessions = dashboard?.sessions ?? [];
   const activeSession =
     sessions.find((session) => session.id === selectedSessionId) ?? sessions[0];
   const selectedSessionKey = activeSession?.id ?? selectedSessionId;
+  const activeRun = selectedSessionKey ? runStates[selectedSessionKey] : null;
   const streaming = selectedSessionKey
     ? streamingRuns[selectedSessionKey]
     : undefined;
-  const transportReady = wsStatus === "connected" && Boolean(selectedSessionKey);
   const activeProvider = dashboard?.providers.find((provider) => provider.enabled);
   const openclawRuntime = dashboard?.runtimes.find(
     (runtime) => runtime.id === "openclaw",
   );
   const harness = dashboard?.harness;
+  const transportReady = wsStatus === "connected" && Boolean(selectedSessionKey);
+  const agentReady =
+    openclawRuntime?.state === "running" &&
+    Boolean(activeProvider?.enabled) &&
+    Boolean(harness?.configured);
 
-  const messagesQuery = useQuery({
+  const historyQuery = useQuery({
     queryKey: ["sessions", selectedSessionKey, "messages"],
     queryFn: () =>
       api<ChatMessage[]>(
@@ -313,18 +390,13 @@ export function ChatScreen() {
     staleTime: 15_000,
   });
 
-  const messages = useMemo(() => messagesQuery.data ?? [], [messagesQuery.data]);
-  const agentReady =
-    openclawRuntime?.state === "running" &&
-    Boolean(activeProvider?.enabled) &&
-    transportReady &&
-    Boolean(harness?.configured);
-  const metrics = useMemo(
+  const messages = useMemo(() => historyQuery.data ?? [], [historyQuery.data]);
+  const liveMetrics = useMemo(
     () => [
       {
         label: "First token",
         value: formatLatency(
-          performance?.metrics.find(
+          clientPerformanceSnapshot.metrics.find(
             (metric) => metric.name === "client.chat.submit_to_first_token",
           )?.summary,
         ),
@@ -332,7 +404,7 @@ export function ChatScreen() {
       {
         label: "Reply done",
         value: formatLatency(
-          performance?.metrics.find(
+          clientPerformanceSnapshot.metrics.find(
             (metric) => metric.name === "client.chat.submit_to_done",
           )?.summary,
         ),
@@ -340,54 +412,32 @@ export function ChatScreen() {
       {
         label: "Reconnect",
         value: formatLatency(
-          performance?.metrics.find(
+          clientPerformanceSnapshot.metrics.find(
             (metric) => metric.name === "client.ws.reconnect_to_resync",
           )?.summary,
         ),
       },
     ],
-    [performance?.metrics],
+    [clientPerformanceSnapshot.metrics],
   );
-  const capabilitySummary = [
+
+  const headerFacts = [
     activeProvider?.model ?? "No active model",
     activeProvider?.contextWindow
-      ? `${formatTokenBudget(activeProvider.contextWindow)} context`
-      : "Context pending",
+      ? formatTokenBudget(activeProvider.contextWindow)
+      : "context pending",
+    dashboard?.memory.semanticReady ? "memory indexed" : "memory pending",
     harness?.attachmentsEnabled && harness?.imageModel
       ? `vision ${harness.imageModel.replace(/^ollama\//, "")}`
       : "attachments unavailable",
-    dashboard?.memory.semanticReady ? "semantic memory ready" : "memory pending",
-    harness?.availableTools.length
-      ? `${harness.availableTools.length} tools`
-      : "tool policy pending",
   ];
-
-  useEffect(() => {
-    if (!pendingRun || pendingRun.sessionId !== selectedSessionKey) {
-      return;
-    }
-
-    if (streaming) {
-      return;
-    }
-
-    const hasAssistantReply = messages.some(
-      (message) =>
-        message.role === "assistant" &&
-        new Date(message.createdAt).getTime() >= pendingRun.sentAt,
-    );
-
-    if (hasAssistantReply) {
-      setPendingRun(null);
-    }
-  }, [messages, pendingRun, selectedSessionKey, streaming]);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({
       behavior: "smooth",
       block: "end",
     });
-  }, [messages.length, selectedSessionKey, streaming?.text]);
+  }, [messages.length, selectedSessionKey, streaming?.text, activeRun?.updatedAt]);
 
   async function uploadFiles(files: File[]) {
     if (files.length === 0) {
@@ -427,6 +477,48 @@ export function ChatScreen() {
     }
   }
 
+  async function handleResolveApproval(
+    approvalId: string,
+    resolution: "approved" | "denied",
+  ) {
+    if (
+      transportReady &&
+      sendRealtimeCommand({
+        type: "approval.resolve",
+        payload: {
+          approvalId,
+          resolution,
+        },
+      })
+    ) {
+      return;
+    }
+
+    await postJson(`/api/approvals/${encodeURIComponent(approvalId)}`, {
+      resolution,
+    });
+  }
+
+  async function handleAbortRun() {
+    if (!selectedSessionKey) {
+      return;
+    }
+
+    if (
+      transportReady &&
+      sendRealtimeCommand({
+        type: "chat.abort",
+        payload: {
+          sessionId: selectedSessionKey,
+        },
+      })
+    ) {
+      return;
+    }
+
+    await postJson(`/api/sessions/${encodeURIComponent(selectedSessionKey)}/abort`, {});
+  }
+
   async function handleSendChat() {
     const nextText = chatInput.trim();
     const nextAttachments = pendingAttachments;
@@ -440,6 +532,20 @@ export function ChatScreen() {
       sessionId: selectedSessionKey,
       role: "user",
       text: nextText || "Inspect the attached files.",
+      parts: [
+        ...(nextAttachments.length > 0
+          ? [
+              {
+                type: "attachments" as const,
+                attachments: nextAttachments,
+              },
+            ]
+          : []),
+        {
+          type: "markdown" as const,
+          text: nextText || "Inspect the attached files.",
+        },
+      ],
       attachments: nextAttachments,
       createdAt: new Date().toISOString(),
       status: "complete",
@@ -452,11 +558,6 @@ export function ChatScreen() {
     );
 
     trackChatSubmit(selectedSessionKey);
-    const startedAt = Date.now();
-    setPendingRun({
-      sessionId: selectedSessionKey,
-      sentAt: startedAt,
-    });
 
     try {
       const sentLive =
@@ -485,149 +586,109 @@ export function ChatScreen() {
         ["sessions", selectedSessionKey, "messages"],
         previousMessages,
       );
-      setPendingRun(null);
       throw error;
     }
   }
 
+  function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    void runAction(async () => {
+      await handleSendChat();
+    });
+  }
+
   return (
-    <section className="chat-shell">
-      <article className="chat-status-bar panel-card compact">
-        <div className="chat-status-copy">
-          <div className="journey-kicker">Live OpenClaw Session</div>
+    <section className="operator-chat-shell">
+      <article className="operator-chat-header panel-card compact">
+        <div className="operator-chat-copy">
+          <div className="journey-kicker">Live OpenClaw session</div>
           <h2>{activeSession?.title ?? "Operator Chat"}</h2>
           <p>
-            {agentReady
-              ? "This is the real OpenClaw gateway session on your Mac. Files, edits, exec approvals, semantic memory, and multimodal attachments all flow through the live harness."
-              : "The chat shell is loaded, but the live OpenClaw path is not fully ready yet."}
+            Real agent session on your Mac. Files, exec approvals, multimodal
+            attachments, semantic memory, and tool calls all route through the
+            live harness.
           </p>
         </div>
-        <div className="chat-status-meta">
+
+        <div className="operator-chat-meta">
           <div className="status-chip-row">
             <span className={`status-chip${agentReady ? " ready" : ""}`}>
               {agentReady ? "Agent live" : "Agent unavailable"}
             </span>
             <span className={`status-chip${transportReady ? " ready" : ""}`}>
-              {transportReady ? "WebSocket live" : "Reconnecting"}
+              {transportReady ? "WebSocket live" : "HTTP fallback"}
             </span>
             <span
               className={`status-chip${dashboard?.memory.semanticReady ? " ready" : ""}`}
             >
-              {dashboard?.memory.semanticReady
-                ? "Memory indexed"
-                : "Memory pending"}
+              {dashboard?.memory.semanticReady ? "Memory indexed" : "Memory pending"}
             </span>
           </div>
-          <div className="metric-strip compact">
-            {metrics.map((metric) => (
-              <article key={metric.label} className="metric-chip">
+
+          <div className="operator-fact-row">
+            {headerFacts.map((fact) => (
+              <span key={fact} className="operator-fact-chip">
+                {fact}
+              </span>
+            ))}
+          </div>
+
+          <div className="metric-strip operator-metrics">
+            {liveMetrics.map((metric) => (
+              <div key={metric.label} className="metric-chip">
                 <strong>{metric.label}</strong>
                 <span>{metric.value}</span>
-              </article>
+              </div>
             ))}
           </div>
         </div>
       </article>
 
       {sessions.length > 1 ? (
-        <aside className="session-strip" aria-label="Sessions">
+        <div className="session-strip operator-session-strip">
           {sessions.map((session) => (
             <button
               key={session.id}
-              className={`session-pill${
-                session.id === selectedSessionKey ? " active" : ""
-              }`}
-              onClick={() =>
-                startTransition(() => {
-                  setSelectedSessionId(session.id);
-                })
-              }
+              type="button"
+              className={`session-pill${session.id === selectedSessionKey ? " active" : ""}`}
+              onClick={() => setSelectedSessionId(session.id)}
             >
               <strong>{session.title}</strong>
-              <span>{session.lastMessagePreview || "No messages yet"}</span>
+              <span>{session.lastMessagePreview}</span>
             </button>
           ))}
-        </aside>
+        </div>
       ) : null}
 
-      <div className="chat-surface">
-        <div className="chat-surface-header">
-          <div className="chat-capability-row">
-            {capabilitySummary.map((entry) => (
-              <span key={entry} className="status-chip ready">
-                {entry}
-              </span>
-            ))}
-          </div>
-          {harness?.availableTools.length ? (
-            <details className="chat-tools-panel">
-              <summary>Available tools and permissions</summary>
-              <div className="tool-pill-grid">
-                {harness.availableTools.map((tool) => (
-                  <span key={tool} className="tool-pill">
-                    {formatToolName(tool)}
-                  </span>
-                ))}
-              </div>
-              <small>
-                Exec policy: {harness.execHost} • {harness.execSecurity} •{" "}
-                {harness.execAsk}
-              </small>
-            </details>
-          ) : null}
+      <details className="chat-tools-panel operator-tools-panel">
+        <summary>Tools and permissions</summary>
+        <div className="tool-pill-grid">
+          {harness?.availableTools.map((tool) => (
+            <span key={tool} className="tool-pill">
+              {tool.replace(/[_:]/g, " ")}
+            </span>
+          ))}
         </div>
+        <div className="operator-tools-copy">
+          <small>
+            Exec host: {harness?.execHost ?? "unknown"} • security:{" "}
+            {harness?.execSecurity ?? "unknown"} • ask policy:{" "}
+            {harness?.execAsk ?? "unknown"}
+          </small>
+          <small>
+            Workspace-only FS: {harness?.workspaceOnlyFs ? "yes" : "no"} •
+            session memory: {harness?.sessionMemoryEnabled ? "on" : "off"}
+          </small>
+        </div>
+      </details>
 
-        {(dashboard?.approvals ?? []).length > 0 ? (
-          <article className="approval-banner panel-card compact">
-            <div>
-              <strong>Action needed</strong>
-              <small>
-                The agent is waiting on {dashboard?.approvals.length} approval
-                {dashboard?.approvals.length === 1 ? "" : "s"} before it can
-                continue a command.
-              </small>
-            </div>
-            <div className="button-row compact-actions">
-              {dashboard?.approvals.map((approval) => (
-                <button
-                  key={approval.id}
-                  className="secondary"
-                  onClick={() =>
-                    void runAction(async () => {
-                      await postJson(`/api/approvals/${approval.id}`, {
-                        resolution: "approved",
-                      });
-                    }, "Approval granted.")
-                  }
-                >
-                  Approve {approval.title}
-                </button>
-              ))}
-            </div>
-          </article>
-        ) : null}
-
-        <div className="chat-message-list">
-          {messagesQuery.isLoading && messages.length === 0 ? (
-            <article className="panel-card compact empty-thread">
-              <strong>Loading the live session</strong>
-              <small>Pulling the current OpenClaw thread from the gateway.</small>
-            </article>
-          ) : null}
-
-          {messages.length === 0 && !streaming && !messagesQuery.isLoading ? (
-            <article className="panel-card compact empty-thread">
-              <strong>Fresh operator thread</strong>
-              <small>
-                Ask DroidAgent to inspect code, edit files, summarize a PDF,
-                inspect an image, search memory, or run approved commands on
-                this Mac.
-              </small>
-            </article>
-          ) : null}
-
+      <article className="chat-thread-panel panel-card compact">
+        <div className="chat-message-list operator-thread">
           {messages.map((message) => (
-            <article key={message.id} className={`message-card ${message.role}`}>
+            <article
+              key={message.id}
+              className={`message-card ${message.role}`}
+            >
               <div className="message-meta">
                 <div className="message-meta-copy">
                   <header>{roleLabel(message.role)}</header>
@@ -635,8 +696,42 @@ export function ChatScreen() {
                 </div>
                 <CopyButton text={message.text} />
               </div>
-              <MessageAttachments attachments={message.attachments} />
-              <MessageBody message={message} />
+
+              <div className="message-part-stack">
+                {(message.parts.length > 0
+                  ? message.parts
+                  : [
+                      {
+                        type: "markdown",
+                        text: message.text,
+                      } as const,
+                    ]
+                ).map((part, index) => {
+                  const approval =
+                    part.type === "approval_request"
+                      ? dashboard?.approvals.find(
+                          (entry) =>
+                            part.approvalId && entry.id === part.approvalId,
+                        ) ??
+                        (dashboard?.approvals.length === 1
+                          ? dashboard.approvals[0]!
+                          : null)
+                      : null;
+
+                  return (
+                    <MessagePartView
+                      key={`${message.id}-${part.type}-${index}`}
+                      part={part}
+                      approval={approval}
+                      onResolveApproval={(approvalId, resolution) => {
+                        void runAction(async () => {
+                          await handleResolveApproval(approvalId, resolution);
+                        });
+                      }}
+                    />
+                  );
+                })}
+              </div>
             </article>
           ))}
 
@@ -644,129 +739,124 @@ export function ChatScreen() {
             <article className="message-card assistant streaming">
               <div className="message-meta">
                 <div className="message-meta-copy">
-                  <header>Assistant</header>
-                  <span>live</span>
+                  <header>DroidAgent</header>
+                  <span>Live</span>
                 </div>
               </div>
-              <p>{streaming.text || "Starting the run..."}</p>
-            </article>
-          ) : pendingRun?.sessionId === selectedSessionKey ? (
-            <article className="message-card assistant streaming pending">
-              <div className="message-meta">
-                <div className="message-meta-copy">
-                  <header>Assistant</header>
-                  <span>queued</span>
-                </div>
+              <div className="message-markdown">
+                <ChatMarkdown text={streaming.text || "Working..."} />
               </div>
-              <p>Starting the OpenClaw run…</p>
             </article>
           ) : null}
+
+          {activeRun ? (
+            <article
+              className={`run-state-card ${activeRun.active ? "active" : "complete"} ${activeRun.stage}`}
+            >
+              <div>
+                <strong>{activeRun.label}</strong>
+                {activeRun.detail ? <p>{activeRun.detail}</p> : null}
+              </div>
+              {activeRun.stage === "approval_required" ? (
+                <ApprovalCard
+                  approval={
+                    dashboard?.approvals.find(
+                      (approval) =>
+                        activeRun.approvalId &&
+                        approval.id === activeRun.approvalId,
+                    ) ?? (dashboard?.approvals.length === 1
+                      ? dashboard.approvals[0]!
+                      : null)
+                  }
+                  onResolve={(approvalId, resolution) => {
+                    void runAction(async () => {
+                      await handleResolveApproval(approvalId, resolution);
+                    });
+                  }}
+                />
+              ) : null}
+            </article>
+          ) : null}
+
           <div ref={threadEndRef} />
         </div>
+      </article>
 
-        <form
-          className="composer composer-rich"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void runAction(handleSendChat);
-          }}
-        >
-          <div className="composer-shell">
-            <PendingAttachmentList
-              attachments={pendingAttachments}
-              onRemove={(attachmentId) =>
-                setPendingAttachments((current) =>
-                  current.filter((attachment) => attachment.id !== attachmentId),
-                )
-              }
-            />
+      <form className="composer composer-rich operator-composer" onSubmit={handleSubmit}>
+        <div className="composer-shell">
+          <PendingAttachmentList
+            attachments={pendingAttachments}
+            onRemove={(attachmentId) =>
+              setPendingAttachments((current) =>
+                current.filter((entry) => entry.id !== attachmentId),
+              )
+            }
+          />
 
-            <textarea
-              value={chatInput}
-              onChange={(event) => setChatInput(event.target.value)}
-              onPaste={(event) => {
-                const files = Array.from(event.clipboardData.files ?? []);
-                if (files.length === 0) {
-                  return;
-                }
-                event.preventDefault();
-                void runAction(async () => {
-                  await uploadFiles(files);
-                });
-              }}
-              placeholder="Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command..."
-              disabled={!selectedSessionKey}
-            />
+          <textarea
+            value={chatInput}
+            onChange={(event) => setChatInput(event.target.value)}
+            placeholder="Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command..."
+            disabled={!agentReady || uploadingAttachments}
+          />
+
+          <div className="composer-footer">
             <small className="composer-status">
-              {agentReady
-                ? `Live OpenClaw session ready. ${harness?.toolProfile ?? "coding"} tools, ${harness?.execAsk ?? "on-miss"} exec approvals, ${harness?.imageModel ? "multimodal attachments" : "text chat"}, and ${dashboard?.memory.semanticReady ? "semantic memory" : "memory indexing"} are active.`
-                : "The live agent path is not fully ready yet. Fix the harness/runtime path before sending the next run."}
+              {activeRun?.active
+                ? `${activeRun.label}${activeRun.detail ? ` • ${activeRun.detail}` : ""}`
+                : agentReady
+                  ? `Live OpenClaw session ready. ${harness?.availableTools.length ?? 0} tools available.`
+                  : "The live OpenClaw path is not ready yet."}
             </small>
-          </div>
 
-          <div className="composer-actions">
-            <input
-              ref={fileInputRef}
-              accept="image/*,.pdf,.md,.markdown,.txt,.log,.json,.yaml,.yml,.toml,.csv,.xml,.js,.jsx,.ts,.tsx,.py,.rb,.go,.rs,.java,.sh,.zsh"
-              className="hidden-file-input"
-              multiple
-              onChange={(event) => {
-                const files = Array.from(event.target.files ?? []);
-                void runAction(async () => {
-                  await uploadFiles(files);
-                });
-              }}
-              type="file"
-            />
-            <button
-              type="button"
-              className="secondary"
-              disabled={!agentReady || uploadingAttachments}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              {uploadingAttachments ? "Uploading…" : "Attach"}
-            </button>
-            <button
-              type="submit"
-              disabled={
-                !agentReady ||
-                (!chatInput.trim() && pendingAttachments.length === 0) ||
-                uploadingAttachments
-              }
-            >
-              {pendingRun?.sessionId === selectedSessionKey || streaming
-                ? "Working…"
-                : "Send"}
-            </button>
-            {streaming ? (
+            <div className="composer-actions">
+              <input
+                ref={fileInputRef}
+                className="hidden-file-input"
+                type="file"
+                multiple
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  void runAction(async () => {
+                    await uploadFiles(files);
+                  });
+                }}
+              />
               <button
                 type="button"
                 className="secondary"
-                onClick={() =>
-                  void runAction(async () => {
-                    const aborted =
-                      wsStatus === "connected" &&
-                      sendRealtimeCommand({
-                        type: "chat.abort",
-                        payload: {
-                          sessionId: selectedSessionKey,
-                        },
-                      });
-                    if (!aborted) {
-                      await postJson(
-                        `/api/sessions/${encodeURIComponent(selectedSessionKey)}/abort`,
-                        {},
-                      );
-                    }
-                  }, "Run aborted.")
+                disabled={uploadingAttachments}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {uploadingAttachments ? "Attaching..." : "Attach"}
+              </button>
+              {activeRun?.active ? (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() =>
+                    void runAction(async () => {
+                      await handleAbortRun();
+                    })
+                  }
+                >
+                  Stop
+                </button>
+              ) : null}
+              <button
+                type="submit"
+                disabled={
+                  !agentReady ||
+                  uploadingAttachments ||
+                  (!chatInput.trim() && pendingAttachments.length === 0)
                 }
               >
-                Abort
+                Send
               </button>
-            ) : null}
+            </div>
           </div>
-        </form>
-      </div>
+        </div>
+      </form>
     </section>
   );
 }

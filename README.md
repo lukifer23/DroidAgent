@@ -9,8 +9,8 @@ DroidAgent is a macOS-first, single-owner control plane for OpenClaw with a mobi
 - `apps/server`
   - Hono API, passkey auth, SQLite app state, Keychain-backed cloud secrets, canonical-origin enforcement, workspace-scoped files and jobs, OpenClaw orchestration, build/version identity, and owner-authenticated websocket fanout
 - `apps/web`
-  - installable React/Vite PWA with Setup, Chat, Files, Jobs, Models, and Settings as the primary operator routes
-  - fold-friendly layout, reconnect-safe streaming, dedicated chat surface, light/dark themes, multimodal attachments, diagnostics card, and subtle motion tuned for operator use
+  - installable React/Vite PWA with a chat-first operator shell, first-run Setup, Files, Jobs, Models, and Settings
+  - fold-friendly layout, reconnect-safe streaming, a dedicated OpenClaw operator console, light/dark themes, multimodal attachments, compact host-status surfaces, and subtle motion tuned for operator use
 - `packages/shared`
   - shared Zod contracts for dashboard, auth, files, jobs, channels, access state, and diagnostics telemetry
 
@@ -44,7 +44,7 @@ node apps/server/dist/index.js
 
 Then open `http://localhost:4318`.
 
-After the owner passkey is enrolled, the `Setup` route now drives the common path with one quickstart action: workspace, Ollama, OpenClaw, default model, and the phone URL when Tailscale is already authenticated on the Mac.
+After the owner passkey is enrolled, `Setup` owns only the first-run path: workspace, Ollama, OpenClaw, the default local models, semantic memory prep, and the phone URL when Tailscale is already authenticated on the Mac. Once that path is ready, DroidAgent opens into `Chat`, not a separate dashboard.
 
 ## Product Defaults
 
@@ -86,6 +86,7 @@ After the owner passkey is enrolled, the `Setup` route now drives the common pat
 
 - File APIs are workspace-relative and text-only.
 - Chat attachments support local images, PDFs, Markdown, JSON, logs, and common code/text files through the real OpenClaw tool path.
+- The chat route is the primary operator surface: live run state, approvals, tool summaries, attachments, markdown/code rendering, and per-run client timings are all surfaced there.
 - Owner jobs run inside the configured workspace jail and persist replayable stdout and stderr logs.
 - Browser acceptance now runs against a real server-backed Playwright harness; route interception and fake websocket replacement are no longer the primary test path.
 - Performance reporting is advisory in this pass. `verify:full` enforces correctness; the perf scripts produce artifacts under `artifacts/perf/`.

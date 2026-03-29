@@ -1,8 +1,15 @@
 import fs from "node:fs/promises";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 import { gotoSignedIn } from "./support";
+
+async function expectNoHorizontalOverflow(page: Page) {
+  const hasOverflow = await page.evaluate(() => {
+    return document.documentElement.scrollWidth > document.documentElement.clientWidth;
+  });
+  expect(hasOverflow).toBe(false);
+}
 
 test("shows the passkey auth screen before sign-in", async ({
   page,
@@ -21,28 +28,33 @@ test("shows the passkey auth screen before sign-in", async ({
 test("loads the signed-in shell and bottom-nav routes", async ({ page }) => {
   await gotoSignedIn(page, "/chat");
 
-  await expect(page.locator(".topbar h1")).toBeVisible();
+  await expect(page.locator(".topbar-copy h1")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Host status" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
   await page.getByRole("link", { name: "Files" }).click();
   await expect(
     page.getByRole("button", { name: "Create Directory" }),
   ).toBeVisible();
+  await expectNoHorizontalOverflow(page);
   await page.getByRole("link", { name: "Settings" }).click();
   await expect(
     page.getByRole("heading", { name: "Performance Diagnostics" }),
   ).toBeVisible();
+  await expectNoHorizontalOverflow(page);
 });
 
 test("loads the simplified setup screen", async ({ page }) => {
   await gotoSignedIn(page, "/setup");
 
   await expect(
-    page.getByRole("heading", { name: /Make this Mac and your phone ready/i }),
+    page.getByRole("heading", { name: /Get this Mac and your phone ready/i }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", {
-      name: /Preparing DroidAgent|Prepare This Mac|Finish Phone Access|Refresh Status/i,
+      name: /Preparing DroidAgent|Prepare host|Refresh status/i,
     }),
   ).toBeVisible();
+  await expectNoHorizontalOverflow(page);
 });
 
 test("streams chat replies through the real websocket path", async ({
@@ -50,11 +62,6 @@ test("streams chat replies through the real websocket path", async ({
 }, testInfo) => {
   await gotoSignedIn(page, "/chat");
   const prompt = `hello from e2e ${testInfo.project.name}`;
-  const assistantReply = page
-    .locator(".message-card.assistant p")
-    .filter({
-      hasText: new RegExp(`^Test harness reply: ${prompt}$`),
-    });
   const sendButton = page.getByRole("button", { name: "Send" });
 
   await page
@@ -65,12 +72,13 @@ test("streams chat replies through the real websocket path", async ({
   await expect(sendButton).toBeEnabled();
   await sendButton.click();
 
+  await expect(page.getByText(prompt, { exact: true })).toBeVisible();
   await expect(
-    page
-      .locator(".message-card.user p")
-      .filter({ hasText: new RegExp(`^${prompt}$`) }),
+    page.getByText(`Test harness reply: ${prompt}`, { exact: true }).last(),
   ).toBeVisible();
-  await expect(assistantReply.last()).toBeVisible();
+  await expect(
+    page.locator(".metric-chip span").filter({ hasText: /ms|s/ }).first(),
+  ).toBeVisible();
 });
 
 test("uploads chat attachments and shows them in the live thread", async ({
@@ -95,7 +103,10 @@ test("uploads chat attachments and shows them in the live thread", async ({
     }),
   ).toBeVisible();
   await expect(
-    page.locator(".message-card.assistant p").filter({
+    page.getByText(/Test harness reply: Inspect the attached files\. \(1 attachment\)/i).last(),
+  ).toBeVisible();
+  await expect(
+    page.locator(".run-state-card, .message-card.assistant").filter({
       hasText: /1 attachment/i,
     }).last(),
   ).toBeVisible();
@@ -135,11 +146,6 @@ test("reconnects after a temporary offline period", async ({ page }) => {
     /You are offline|Reconnecting to DroidAgent/i,
   );
   const prompt = "reconnect check";
-  const assistantReply = page
-    .locator(".message-card.assistant p")
-    .filter({
-      hasText: new RegExp(`^Test harness reply: ${prompt}$`),
-    });
 
   await page.context().setOffline(true);
   await page.evaluate(() => {
@@ -152,7 +158,7 @@ test("reconnects after a temporary offline period", async ({ page }) => {
     window.dispatchEvent(new Event("online"));
   });
   await expect(reconnectBanner).toHaveCount(0);
-  await expect(page.locator(".topbar h1")).toBeVisible();
+  await expect(page.locator(".topbar-copy h1")).toBeVisible();
   const sendButton = page.getByRole("button", { name: "Send" });
   await page
     .getByPlaceholder(
@@ -161,5 +167,7 @@ test("reconnects after a temporary offline period", async ({ page }) => {
     .fill(prompt);
   await expect(sendButton).toBeEnabled();
   await sendButton.click();
-  await expect(assistantReply.last()).toBeVisible();
+  await expect(
+    page.getByText(`Test harness reply: ${prompt}`, { exact: true }).last(),
+  ).toBeVisible();
 });

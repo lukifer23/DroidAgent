@@ -1,9 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type {
-  BootstrapLink,
-  QuickstartResult,
-  StartupDiagnostic,
-} from "@droidagent/shared";
+import type { BootstrapLink, QuickstartResult } from "@droidagent/shared";
 import QRCode from "qrcode";
 import { Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -15,54 +11,38 @@ import {
 } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { postJson } from "../lib/api";
-import { formatTokenBudget } from "../lib/formatters";
 
 const DEFAULT_OLLAMA_MODEL = "qwen3.5:4b";
 
-interface ReadinessItem {
+interface SetupStep {
   label: string;
   value: string;
   detail: string;
   ready: boolean;
 }
 
-function summarizeHealth(ok: boolean, ready: string, pending: string) {
-  return ok ? ready : pending;
-}
-
-function progressPercent(items: { ready: boolean }[]): number {
-  if (items.length === 0) {
-    return 0;
-  }
-
-  const readyCount = items.filter((item) => item.ready).length;
-  return Math.round((readyCount / items.length) * 100);
-}
-
 export function SetupScreen() {
   const queryClient = useQueryClient();
   const autoPrepareTriggeredRef = useRef(false);
   const bootstrapIssuedRef = useRef(false);
-  const { runAction, setNotice, setErrorMessage } = useDroidAgentApp();
+  const { runAction, setErrorMessage, setNotice } = useDroidAgentApp();
   const dashboardQuery = useDashboardQuery(true);
-  const startupDiagnosticsQuery = useStartupDiagnosticsQuery(true);
+  const diagnosticsQuery = useStartupDiagnosticsQuery(true);
   const accessQuery = useAccessQuery();
   const dashboard = dashboardQuery.data;
   const access = accessQuery.data;
 
   const [workspaceInput, setWorkspaceInput] = useState(".");
   const [setupModel, setSetupModel] = useState(DEFAULT_OLLAMA_MODEL);
-  const [llamaModel, setLlamaModel] = useState("gemma-3-1b-it");
-  const [phoneUrl, setPhoneUrl] = useState<string | null>(null);
+  const [activeAction, setActiveAction] = useState<
+    "idle" | "quickstart"
+  >("idle");
+  const [quickstartResult, setQuickstartResult] =
+    useState<QuickstartResult | null>(null);
   const [bootstrapLink, setBootstrapLink] = useState<BootstrapLink | null>(
     null,
   );
   const [phoneQr, setPhoneQr] = useState<string | null>(null);
-  const [quickstartResult, setQuickstartResult] =
-    useState<QuickstartResult | null>(null);
-  const [activeAction, setActiveAction] = useState<
-    "idle" | "quickstart" | "workspace" | "model" | "llama"
-  >("idle");
 
   useEffect(() => {
     if (dashboard?.setup.workspaceRoot) {
@@ -71,27 +51,81 @@ export function SetupScreen() {
   }, [dashboard?.setup.workspaceRoot]);
 
   useEffect(() => {
-    const ollamaProvider = dashboard?.providers.find(
-      (provider) => provider.id === "ollama-default",
+    const provider = dashboard?.providers.find(
+      (entry) => entry.id === "ollama-default",
     );
-    const nextModel =
-      ollamaProvider?.model ??
-      dashboard?.setup.selectedModel ??
-      DEFAULT_OLLAMA_MODEL;
-    setSetupModel(nextModel);
+    setSetupModel(
+      provider?.model ?? dashboard?.setup.selectedModel ?? DEFAULT_OLLAMA_MODEL,
+    );
   }, [dashboard?.providers, dashboard?.setup.selectedModel]);
 
-  useEffect(() => {
-    setPhoneUrl(access?.canonicalOrigin?.origin ?? null);
-  }, [access?.canonicalOrigin?.origin]);
-
-  const localhostHostnames = useMemo(
-    () => new Set(["localhost", "127.0.0.1", "::1", "[::1]"]),
-    [],
+  const passkeyReady = Boolean(dashboard?.setup.passkeyConfigured);
+  const workspaceReady = Boolean(dashboard?.setup.workspaceRoot);
+  const runtimeReady =
+    dashboard?.runtimes.find((runtime) => runtime.id === "ollama")?.state ===
+      "running" &&
+    dashboard?.runtimes.find((runtime) => runtime.id === "openclaw")?.state ===
+      "running";
+  const memoryReady = Boolean(dashboard?.memory.semanticReady);
+  const tailscaleReady = Boolean(access?.tailscaleStatus.authenticated);
+  const remoteReady = Boolean(access?.canonicalOrigin?.origin);
+  const localhostMaintenance = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
+    window.location.hostname,
   );
-  const localhostMaintenance = localhostHostnames.has(window.location.hostname);
-  const enrollmentUrl = bootstrapLink?.bootstrapUrl ?? null;
-  const phoneLaunchUrl = enrollmentUrl ?? phoneUrl;
+
+  const steps = useMemo<SetupStep[]>(
+    () => [
+      {
+        label: "Owner access",
+        value: passkeyReady ? "Ready" : "Required",
+        detail: passkeyReady
+          ? "Owner passkey is enrolled."
+          : "Create or add the owner passkey first.",
+        ready: passkeyReady,
+      },
+      {
+        label: "This Mac",
+        value: workspaceReady && runtimeReady && memoryReady ? "Prepared" : "Needs prep",
+        detail:
+          workspaceReady && runtimeReady && memoryReady
+            ? "Workspace, local runtime, OpenClaw, and semantic memory are ready."
+            : "DroidAgent can prepare the normal local path in one pass.",
+        ready: workspaceReady && runtimeReady && memoryReady,
+      },
+      {
+        label: "Tailnet",
+        value: tailscaleReady ? "Connected" : "Not signed in",
+        detail: tailscaleReady
+          ? "This Mac is authenticated to Tailscale."
+          : access?.tailscaleStatus.healthMessage ??
+            "Sign in to Tailscale on this Mac.",
+        ready: tailscaleReady,
+      },
+      {
+        label: "Phone access",
+        value: remoteReady ? "Live" : "Waiting",
+        detail:
+          access?.canonicalOrigin?.origin ??
+          "Publish the private phone URL after the Mac is prepared.",
+        ready: remoteReady,
+      },
+    ],
+    [
+      access?.canonicalOrigin?.origin,
+      access?.tailscaleStatus.healthMessage,
+      memoryReady,
+      passkeyReady,
+      remoteReady,
+      runtimeReady,
+      tailscaleReady,
+      workspaceReady,
+    ],
+  );
+
+  const readyCount = steps.filter((step) => step.ready).length;
+  const phoneLaunchUrl = bootstrapLink?.bootstrapUrl ?? access?.canonicalOrigin?.origin ?? null;
+  const canIssueEnrollmentLink =
+    localhostMaintenance && passkeyReady && remoteReady;
 
   useEffect(() => {
     if (!phoneLaunchUrl) {
@@ -101,243 +135,9 @@ export function SetupScreen() {
 
     void QRCode.toDataURL(phoneLaunchUrl, {
       margin: 1,
-      width: 280,
+      width: 240,
     }).then(setPhoneQr);
   }, [phoneLaunchUrl]);
-
-  const ollamaRuntime = dashboard?.runtimes.find(
-    (runtime) => runtime.id === "ollama",
-  );
-  const openclawRuntime = dashboard?.runtimes.find(
-    (runtime) => runtime.id === "openclaw",
-  );
-  const ollamaProvider = dashboard?.providers.find(
-    (provider) => provider.id === "ollama-default",
-  );
-  const memoryStatus = dashboard?.memory;
-  const diagnostics =
-    startupDiagnosticsQuery.data ?? dashboard?.startupDiagnostics ?? [];
-
-  const passkeyConfigured = Boolean(dashboard?.setup.passkeyConfigured);
-  const workspaceReady = Boolean(dashboard?.setup.workspaceRoot);
-  const memoryScaffoldReady = Boolean(memoryStatus?.ready);
-  const memoryReady = Boolean(memoryStatus?.semanticReady);
-  const ollamaReady = ollamaRuntime?.state === "running";
-  const openclawReady = openclawRuntime?.state === "running";
-  const providerSelected = ollamaProvider?.enabled === true;
-  const providerModelMatches = ollamaProvider?.model === setupModel;
-  const hostReady =
-    workspaceReady &&
-    memoryScaffoldReady &&
-    memoryReady &&
-    ollamaReady &&
-    openclawReady &&
-    providerSelected &&
-    providerModelMatches;
-  const tailscaleReady = Boolean(access?.tailscaleStatus.authenticated);
-  const remoteReady = Boolean(
-    access?.serveStatus.enabled && access?.canonicalOrigin?.origin,
-  );
-  const canIssueEnrollmentLink =
-    localhostMaintenance && passkeyConfigured && remoteReady;
-
-  const readinessSteps = useMemo<ReadinessItem[]>(
-    () => [
-      {
-        label: "Owner Access",
-        value: passkeyConfigured ? "Passkey enrolled" : "Passkey required",
-        detail: passkeyConfigured
-          ? "The owner login is already configured for this DroidAgent instance."
-          : "Sign in with the owner passkey first so DroidAgent can finish the rest automatically.",
-        ready: passkeyConfigured,
-      },
-      {
-        label: "This Mac",
-        value: hostReady ? "Ready" : "Needs prep",
-        detail: hostReady
-          ? "Workspace, memory, Ollama, OpenClaw, and the default model are in place."
-          : "DroidAgent can prepare the common local path for you.",
-        ready: hostReady,
-      },
-      {
-        label: "Tailscale",
-        value: tailscaleReady ? "Connected" : "Not signed in",
-        detail: tailscaleReady
-          ? "This Mac is authenticated to the tailnet."
-          : "Sign in to Tailscale on this Mac to unlock the private phone URL.",
-        ready: tailscaleReady,
-      },
-      {
-        label: "Phone URL",
-        value: remoteReady ? "Live" : "Waiting",
-        detail: remoteReady
-          ? (access?.canonicalOrigin?.origin ?? "Phone URL ready")
-          : tailscaleReady
-            ? "DroidAgent can publish the Tailscale phone URL now."
-            : "The phone URL appears after Tailscale is connected.",
-        ready: remoteReady,
-      },
-    ],
-    [
-      access?.canonicalOrigin?.origin,
-      hostReady,
-      passkeyConfigured,
-      remoteReady,
-      tailscaleReady,
-    ],
-  );
-
-  const hostChecklist = useMemo<ReadinessItem[]>(
-    () => [
-      {
-        label: "Workspace",
-        value: summarizeHealth(
-          workspaceReady,
-          dashboard?.setup.workspaceRoot ?? "Ready",
-          "Will default to this repo",
-        ),
-        detail: workspaceReady
-          ? "Files, jobs, and editing are already scoped to the selected workspace."
-          : "DroidAgent will use this repo root unless you override it below.",
-        ready: workspaceReady,
-      },
-      {
-        label: "Workspace Memory",
-        value: summarizeHealth(
-          memoryScaffoldReady,
-          "Bootstrapped",
-          "Will be created automatically",
-        ),
-        detail: memoryScaffoldReady
-          ? `MEMORY.md, skills, and daily notes are ready under ${memoryStatus?.effectiveWorkspaceRoot ?? dashboard?.setup.workspaceRoot ?? "the workspace"}.`
-          : "DroidAgent will seed durable memory files, daily notes, workspace skills, and a personal preferences file for you.",
-        ready: memoryScaffoldReady,
-      },
-      {
-        label: "Semantic Memory",
-        value: summarizeHealth(
-          memoryReady,
-          "Local index live",
-          "Will be prepared automatically",
-        ),
-        detail: memoryReady
-          ? `${memoryStatus?.embeddingProvider ?? "unknown"}/${memoryStatus?.embeddingModel ?? "unknown"} • ${memoryStatus?.indexedFiles ?? 0} files • ${memoryStatus?.indexedChunks ?? 0} chunks`
-          : memoryStatus?.embeddingProbeError ??
-            "DroidAgent will pull a local embedding model and build the semantic index for memory, sessions, preferences, and skills.",
-        ready: memoryReady,
-      },
-      {
-        label: "Ollama",
-        value: summarizeHealth(
-          ollamaReady,
-          "Running",
-          ollamaRuntime?.healthMessage ?? "Will start automatically",
-        ),
-        detail: ollamaReady
-          ? "The default local runtime is up."
-          : "The quickstart path will start Ollama and check the selected model.",
-        ready: ollamaReady,
-      },
-      {
-        label: "OpenClaw",
-        value: summarizeHealth(
-          openclawReady,
-          "Ready",
-          openclawRuntime?.healthMessage ?? "Will start automatically",
-        ),
-        detail: openclawReady
-          ? "The agent harness is ready for live sessions."
-          : "DroidAgent will prepare the local harness automatically.",
-        ready: openclawReady,
-      },
-      {
-        label: "Default Model",
-        value: summarizeHealth(
-          providerModelMatches && providerSelected,
-          setupModel,
-          "Will prepare automatically",
-        ),
-        detail:
-          providerModelMatches && providerSelected
-            ? `The default Ollama provider is already pointing at the chosen model with a ${formatTokenBudget(
-                ollamaProvider?.contextWindow,
-              )} context budget.`
-            : "DroidAgent will pin this model for the first chat.",
-        ready: providerModelMatches && providerSelected,
-      },
-    ],
-    [
-      dashboard?.setup.workspaceRoot,
-      ollamaReady,
-      ollamaRuntime?.healthMessage,
-      openclawReady,
-      openclawRuntime?.healthMessage,
-      providerModelMatches,
-      providerSelected,
-      setupModel,
-      memoryReady,
-      memoryScaffoldReady,
-      memoryStatus?.effectiveWorkspaceRoot,
-      memoryStatus?.embeddingModel,
-      memoryStatus?.embeddingProvider,
-      memoryStatus?.embeddingProbeError,
-      memoryStatus?.indexedChunks,
-      memoryStatus?.indexedFiles,
-      workspaceReady,
-    ],
-  );
-
-  const remoteChecklist = useMemo<ReadinessItem[]>(
-    () => [
-      {
-        label: "Tailnet Sign-In",
-        value: tailscaleReady ? "Authenticated" : "Required",
-        detail: tailscaleReady
-          ? "This Mac can now publish a private remote URL over Tailscale."
-          : (access?.tailscaleStatus.healthMessage ??
-            "Finish Tailscale sign-in on this Mac first."),
-        ready: tailscaleReady,
-      },
-      {
-        label: "Private Phone URL",
-        value: remoteReady ? "Published" : "Not published yet",
-        detail: remoteReady
-          ? (access?.canonicalOrigin?.origin ?? "Remote URL ready")
-          : "DroidAgent uses Tailscale Serve for the phone URL in the guided path.",
-        ready: remoteReady,
-      },
-      {
-        label: "Phone Sign-In",
-        value:
-          remoteReady && passkeyConfigured
-            ? "Ready now"
-            : "Waiting for the URL",
-        detail:
-          remoteReady && passkeyConfigured
-            ? "Open the phone URL. If this device does not already have an owner passkey, use a one-time device enrollment link first."
-            : "Once the URL is live, DroidAgent is ready for the phone browser or PWA shell.",
-        ready: remoteReady && passkeyConfigured,
-      },
-    ],
-    [
-      access?.canonicalOrigin?.origin,
-      access?.tailscaleStatus.healthMessage,
-      passkeyConfigured,
-      remoteReady,
-      tailscaleReady,
-    ],
-  );
-
-  const readinessPercent = progressPercent(readinessSteps);
-  const hostPercent = progressPercent(hostChecklist);
-  const remotePercent = progressPercent(remoteChecklist);
-  const readyCount = readinessSteps.filter((item) => item.ready).length;
-
-  const primaryActionLabel = !hostReady
-    ? "Prepare This Mac"
-    : remoteReady
-      ? "Everything Looks Ready"
-      : "Finish Phone Access";
 
   async function refreshSetupQueries() {
     await Promise.all([
@@ -359,7 +159,6 @@ export function SetupScreen() {
         modelId: setupModel,
       });
       setQuickstartResult(result);
-      setPhoneUrl(result.phoneUrl);
       if (!result.remoteReady) {
         setBootstrapLink(null);
         bootstrapIssuedRef.current = false;
@@ -368,7 +167,7 @@ export function SetupScreen() {
       setNotice(
         result.remoteReady
           ? "DroidAgent is ready."
-          : (result.remotePendingReason ?? "This Mac is ready."),
+          : result.remotePendingReason ?? "This Mac is ready.",
       );
     } finally {
       setActiveAction("idle");
@@ -380,8 +179,7 @@ export function SetupScreen() {
       return;
     }
 
-    const shouldAutoPrepare = !hostReady || (tailscaleReady && !remoteReady);
-    if (!shouldAutoPrepare) {
+    if ((workspaceReady && runtimeReady && memoryReady) && (!tailscaleReady || remoteReady)) {
       return;
     }
 
@@ -389,7 +187,16 @@ export function SetupScreen() {
     void runAction(async () => {
       await executeQuickstart();
     });
-  }, [access, dashboard, hostReady, remoteReady, runAction, tailscaleReady]);
+  }, [
+    access,
+    dashboard,
+    memoryReady,
+    remoteReady,
+    runAction,
+    runtimeReady,
+    tailscaleReady,
+    workspaceReady,
+  ]);
 
   useEffect(() => {
     if (
@@ -410,85 +217,143 @@ export function SetupScreen() {
       });
   }, [bootstrapLink, canIssueEnrollmentLink]);
 
-  async function copyLink(value: string, message: string) {
-    if (!value) {
-      return;
-    }
-
+  async function copyValue(value: string, successMessage: string) {
     try {
       await navigator.clipboard.writeText(value);
-      setNotice(message);
+      setNotice(successMessage);
     } catch {
-      setErrorMessage("Clipboard access failed. Copy the remote URL manually.");
+      setErrorMessage("Clipboard access failed. Copy the value manually.");
     }
   }
 
   return (
-    <section className="stack-list setup-screen">
-      <section className="panel-card quickstart-hero">
-        <div className="setup-hero-heading">
+    <section className="setup-wizard">
+      <article className="panel-card setup-wizard-hero">
+        <div className="setup-wizard-copy">
+          <div className="eyebrow">Quickstart</div>
+          <h2>Get this Mac and your phone ready.</h2>
+          <p>
+            One pass should handle the normal path: workspace, Ollama, OpenClaw,
+            65k local context, semantic memory, then the private Tailscale URL.
+          </p>
+        </div>
+
+        <div className="setup-wizard-actions">
+          <strong>
+            {readyCount}/{steps.length} setup steps ready
+          </strong>
+          <div className="button-row compact-actions">
+            <button
+              type="button"
+              disabled={activeAction !== "idle"}
+              onClick={() =>
+                void runAction(async () => {
+                  await executeQuickstart();
+                })
+              }
+            >
+              {activeAction === "quickstart"
+                ? "Preparing DroidAgent..."
+                : remoteReady
+                  ? "Refresh status"
+                  : "Prepare host"}
+            </button>
+            {workspaceReady && runtimeReady ? (
+              <Link className="button-link secondary" to="/chat">
+                Open chat
+              </Link>
+            ) : null}
+          </div>
+        </div>
+      </article>
+
+      <section className="setup-step-list">
+        {steps.map((step) => (
+          <article
+            key={step.label}
+            className={`setup-step-card ${step.ready ? "ready" : ""}`}
+          >
+            <div>
+              <strong>{step.label}</strong>
+              <span>{step.value}</span>
+            </div>
+            <p>{step.detail}</p>
+          </article>
+        ))}
+      </section>
+
+      <section className="setup-wizard-grid">
+        <article className="panel-card compact setup-phone-card">
           <div className="panel-heading">
-            <div className="eyebrow">Quickstart</div>
-            <h2>Make this Mac and your phone ready.</h2>
-            <p className="setup-intro">
-              DroidAgent should handle the normal path in one pass: shared
-              workspace, Ollama, OpenClaw, a 65k local context budget, local
-              semantic memory with embeddings, then the private Tailscale phone
-              URL.
+            <h3>Phone access</h3>
+            <p>
+              Use a one-time enrollment link for a new device, then use the
+              normal Tailscale URL for daily sign-in.
             </p>
           </div>
-          <div className="setup-hero-stats">
-            <strong>
-              {readyCount}/{readinessSteps.length} core checks live
-            </strong>
-            <small>
-              {remoteReady
-                ? "You can move straight into chat and phone access."
-                : tailscaleReady
-                  ? "Only the phone URL is left."
-                  : "This Mac still needs Tailscale sign-in for phone access."}
-            </small>
-          </div>
-        </div>
 
-        <div className="health-meter hero-meter">
-          <span style={{ width: `${readinessPercent}%` }} />
-        </div>
-
-        <div className="status-chip-row">
-          {readinessSteps.map((item) => (
-            <div
-              key={item.label}
-              className={`status-chip${item.ready ? " ready" : ""}`}
-            >
-              {item.label}
+          {phoneLaunchUrl ? (
+            <div className="setup-phone-shell">
+              <div className="link-preview-card">
+                <strong>
+                  {bootstrapLink ? "Device enrollment link" : "Daily phone URL"}
+                </strong>
+                <input value={phoneLaunchUrl} readOnly />
+                <div className="button-row compact-actions">
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => void copyValue(phoneLaunchUrl, "Phone link copied.")}
+                  >
+                    Copy link
+                  </button>
+                  {bootstrapLink ? (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() =>
+                        void runAction(async () => {
+                          const link = await postJson<BootstrapLink>(
+                            "/api/access/bootstrap",
+                            {},
+                          );
+                          setBootstrapLink(link);
+                        })
+                      }
+                    >
+                      Refresh enrollment link
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              {phoneQr ? (
+                <img
+                  alt="Phone enrollment QR code"
+                  className="setup-qr"
+                  src={phoneQr}
+                />
+              ) : null}
             </div>
-          ))}
-        </div>
+          ) : (
+            <div className="journey-check">
+              <strong>Waiting for phone URL</strong>
+              <span>
+                Finish Tailscale sign-in on this Mac and run the host prep once.
+              </span>
+            </div>
+          )}
+        </article>
 
-        <div className="button-row quickstart-actions">
-          <button
-            disabled={activeAction !== "idle"}
-            onClick={() =>
-              void runAction(async () => {
-                await executeQuickstart();
-              })
-            }
-          >
-            {activeAction === "quickstart"
-              ? "Preparing DroidAgent..."
-              : primaryActionLabel}
-          </button>
-          {hostReady ? (
-            <Link className="button-link secondary" to="/chat">
-              Open Chat
-            </Link>
-          ) : null}
-        </div>
+        <article className="panel-card compact">
+          <div className="panel-heading">
+            <h3>What DroidAgent handled</h3>
+            <p>
+              The quickstart should stay automatic. Advanced inputs remain here,
+              but they are not the primary path.
+            </p>
+          </div>
 
-        {quickstartResult ? (
-          <section className="quickstart-activity">
-            <strong>What DroidAgent just handled</strong>
+          {quickstartResult ? (
             <div className="journey-checklist">
               {quickstartResult.actions.map((action) => (
                 <div key={action} className="journey-check ready">
@@ -496,308 +361,39 @@ export function SetupScreen() {
                 </div>
               ))}
             </div>
-            {quickstartResult.remotePendingReason ? (
-              <small>{quickstartResult.remotePendingReason}</small>
-            ) : null}
-          </section>
-        ) : null}
+          ) : null}
 
-        <div className="link-preview-card phone-launch-card">
-          <div className="phone-launch-head">
-            <strong>{enrollmentUrl ? "Add This Phone" : "Phone URL"}</strong>
-            {remoteReady ? (
-              <span className="status-chip ready">Live</span>
-            ) : (
-              <span className="status-chip">Waiting</span>
-            )}
+          <div className="field-stack">
+            <label>
+              Workspace root
+              <input
+                value={workspaceInput}
+                onChange={(event) => setWorkspaceInput(event.target.value)}
+              />
+            </label>
+            <label>
+              Default model
+              <input
+                value={setupModel}
+                onChange={(event) => setSetupModel(event.target.value)}
+              />
+            </label>
           </div>
-          {phoneLaunchUrl ? (
-            <>
-              <div className="link-preview-row">
-                <input value={phoneLaunchUrl} readOnly />
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() =>
-                    void copyLink(
-                      phoneLaunchUrl,
-                      enrollmentUrl
-                        ? "Phone enrollment link copied."
-                        : "Phone URL copied.",
-                    )
-                  }
-                >
-                  Copy
-                </button>
-              </div>
-              {enrollmentUrl ? (
-                <>
-                  <small>
-                    Scan this QR from the Mac or open this one-time link on the
-                    Fold. It adds a passkey on that phone directly, so daily
-                    sign-in can happen there without the Mac passkey.
-                  </small>
-                  {phoneUrl ? (
-                    <div className="link-preview-row secondary-row">
-                      <input value={phoneUrl} readOnly />
-                      <button
-                        type="button"
-                        className="secondary"
-                        onClick={() =>
-                          void copyLink(phoneUrl, "Daily phone URL copied.")
-                        }
-                      >
-                        Copy Daily URL
-                      </button>
-                    </div>
-                  ) : null}
-                  <small>
-                    After enrollment, daily use is just the Tailscale URL
-                    above. The one-time device link can be discarded.
-                  </small>
-                </>
-              ) : (
-                <small>
-                  Open this on the phone and sign in with the owner passkey.
-                  Additional device passkeys can be added later from Settings.
-                </small>
-              )}
-              {phoneQr ? (
-                <img
-                  className="setup-qr"
-                  src={phoneQr}
-                  alt={
-                    enrollmentUrl
-                      ? "Phone device enrollment QR code"
-                      : "Remote sign-in URL QR code"
-                  }
-                />
-              ) : null}
-            </>
-          ) : (
-            <small>
-              {tailscaleReady
-                ? "DroidAgent can publish the phone URL now. Run the quickstart again if it has not appeared yet."
-                : "Sign in to Tailscale on this Mac first. DroidAgent will keep the remote path private and tailnet-scoped."}
-            </small>
-          )}
-        </div>
-      </section>
 
-      <section className="setup-overview-grid">
-        <article
-          className={`panel-card compact status-section-card${hostReady ? " active-card" : ""}`}
-        >
-          <div className="status-section-header">
-            <div>
-              <div className="journey-kicker">Local Readiness</div>
-              <h3>This Mac</h3>
-            </div>
-            <strong className="status-counter">
-              {hostChecklist.filter((item) => item.ready).length}/
-              {hostChecklist.length}
-            </strong>
-          </div>
-          <div className="health-meter">
-            <span style={{ width: `${hostPercent}%` }} />
-          </div>
-          <div className="status-list">
-            {hostChecklist.map((item) => (
-              <article
-                key={item.label}
-                className={`health-row${item.ready ? " ready" : ""}`}
-              >
-                <div className="health-row-top">
-                  <strong>{item.label}</strong>
-                  <span className={`status-chip${item.ready ? " ready" : ""}`}>
-                    {item.value}
-                  </span>
-                </div>
-                <small>{item.detail}</small>
-              </article>
-            ))}
-          </div>
-        </article>
-
-        <article
-          className={`panel-card compact status-section-card${remoteReady ? " active-card" : ""}`}
-        >
-          <div className="status-section-header">
-            <div>
-              <div className="journey-kicker">Phone Access</div>
-              <h3>Tailscale Path</h3>
-            </div>
-            <strong className="status-counter">
-              {remoteChecklist.filter((item) => item.ready).length}/
-              {remoteChecklist.length}
-            </strong>
-          </div>
-          <div className="health-meter">
-            <span style={{ width: `${remotePercent}%` }} />
-          </div>
-          <div className="status-list">
-            {remoteChecklist.map((item) => (
-              <article
-                key={item.label}
-                className={`health-row${item.ready ? " ready" : ""}`}
-              >
-                <div className="health-row-top">
-                  <strong>{item.label}</strong>
-                  <span className={`status-chip${item.ready ? " ready" : ""}`}>
-                    {item.value}
-                  </span>
-                </div>
-                <small>{item.detail}</small>
-              </article>
-            ))}
-          </div>
-        </article>
-      </section>
-
-      <details className="panel-card details-card">
-        <summary>Manual Controls</summary>
-        <div className="advanced-stack">
-          <article className="panel-card compact">
-            <h3>Workspace and Local Model</h3>
-            <p>
-              Override the default workspace or local model only when you need
-              something different than the quickstart path.
-            </p>
-            <small>
-              Local default: {setupModel} with{" "}
-              {formatTokenBudget(ollamaProvider?.contextWindow)} context, smart
-              trimming, and workspace memory bootstrap.
-            </small>
-            <div className="field-stack">
-              <label>
-                Workspace root
-                <input
-                  value={workspaceInput}
-                  onChange={(event) => setWorkspaceInput(event.target.value)}
-                />
-              </label>
-              <label>
-                Ollama model
-                <input
-                  value={setupModel}
-                  onChange={(event) => setSetupModel(event.target.value)}
-                />
-              </label>
-              <div className="button-row">
-                <button
-                  disabled={activeAction !== "idle"}
-                  onClick={() =>
-                    void runAction(async () => {
-                      setActiveAction("workspace");
-                      try {
-                        const requestedWorkspaceRoot =
-                          workspaceInput.trim() === "." &&
-                          dashboard?.setup.workspaceRoot
-                            ? dashboard.setup.workspaceRoot
-                            : workspaceInput;
-                        await postJson("/api/setup/workspace", {
-                          workspaceRoot: requestedWorkspaceRoot,
-                        });
-                        await refreshSetupQueries();
-                      } finally {
-                        setActiveAction("idle");
-                      }
-                    }, "Workspace updated.")
-                  }
-                >
-                  Save Workspace
-                </button>
-                <button
-                  className="secondary"
-                  disabled={activeAction !== "idle"}
-                  onClick={() =>
-                    void runAction(async () => {
-                      setActiveAction("model");
-                      try {
-                        await postJson("/api/setup/model", {
-                          runtimeId: "ollama",
-                          modelId: setupModel,
-                        });
-                        await refreshSetupQueries();
-                      } finally {
-                        setActiveAction("idle");
-                      }
-                    }, "Ollama model updated.")
-                  }
-                >
-                  Use This Model
-                </button>
-              </div>
-            </div>
-          </article>
-
-          <article className="panel-card compact">
-            <h3>Alternative Runtime</h3>
-            <p>
-              llama.cpp remains the advanced local path when you want a smaller
-              direct runtime with Metal defaults.
-            </p>
-            <div className="field-stack">
-              <label>
-                llama.cpp preset
-                <select
-                  value={llamaModel}
-                  onChange={(event) => setLlamaModel(event.target.value)}
-                >
-                  <option value="gemma-3-1b-it">Gemma 3 1B IT</option>
-                  <option value="qwen3-8b-instruct">Qwen3 8B Instruct</option>
-                </select>
-              </label>
-              <div className="button-row">
-                <button
-                  className="secondary"
-                  disabled={activeAction !== "idle"}
-                  onClick={() =>
-                    void runAction(async () => {
-                      setActiveAction("llama");
-                      try {
-                        await postJson("/api/setup/runtime", {
-                          runtimeId: "llamaCpp",
-                        });
-                        await postJson("/api/runtime/llamaCpp/models", {
-                          modelId: llamaModel,
-                        });
-                        await refreshSetupQueries();
-                      } finally {
-                        setActiveAction("idle");
-                      }
-                    }, "llama.cpp prepared.")
-                  }
-                >
-                  Prepare llama.cpp
-                </button>
-              </div>
-            </div>
-          </article>
-
-          <article className="panel-card compact">
-            <h3>Diagnostics</h3>
-            <div className="status-list">
-              {diagnostics.map((diagnostic: StartupDiagnostic) => (
-                <article
-                  key={diagnostic.id}
-                  className={`health-row${diagnostic.health === "ok" ? " ready" : ""}`}
-                >
-                  <div className="health-row-top">
+          {diagnosticsQuery.data?.length ? (
+            <div className="journey-checklist">
+              {diagnosticsQuery.data
+                .filter((diagnostic) => diagnostic.health !== "ok")
+                .map((diagnostic) => (
+                  <div key={diagnostic.id} className="journey-check">
                     <strong>{diagnostic.id}</strong>
-                    <span
-                      className={`status-chip${diagnostic.health === "ok" ? " ready" : ""}`}
-                    >
-                      {diagnostic.health === "ok" ? "OK" : "Needs review"}
-                    </span>
+                    <span>{diagnostic.message}</span>
                   </div>
-                  <small>{diagnostic.message}</small>
-                </article>
-              ))}
+                ))}
             </div>
-          </article>
-        </div>
-      </details>
+          ) : null}
+        </article>
+      </section>
     </section>
   );
 }

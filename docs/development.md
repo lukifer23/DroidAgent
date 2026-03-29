@@ -35,6 +35,7 @@ pnpm verify:full
   - builds the workspace and runs Playwright against the real built DroidAgent server
   - Playwright starts a temp HOME, temp SQLite DB, temp workspace, and a seeded owner session
   - tests do not intercept `/api/**` and do not replace `window.WebSocket`
+  - acceptance is chat-first now: the signed-in operator shell, live chat state, attachments, files, jobs, reconnect, and layout stability on Fold-sized viewports
 - `pnpm perf:e2e`
   - runs advisory Playwright perf scenarios and writes artifacts under `artifacts/perf/`
 

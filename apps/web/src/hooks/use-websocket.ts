@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { ClientCommand, DashboardState, JobOutputSnapshot, ServerEvent } from "@droidagent/shared";
 
 import { chatStreamStore } from "../lib/chat-stream-store";
+import { chatRunStore } from "../lib/chat-run-store";
 import { clientPerformance } from "../lib/client-performance";
 
 const INITIAL_DELAY_MS = 500;
@@ -253,6 +254,19 @@ export function useWebSocket(options: UseWebSocketOptions) {
           }
           chatStreamStore.clear(payload.payload.sessionId);
           delete pendingStreamRunsRef.current[payload.payload.sessionId];
+        }
+        if (payload.type === "chat.run") {
+          chatRunStore.setRun(payload.payload);
+          if (!payload.payload.active) {
+            if (
+              payload.payload.stage === "completed" ||
+              payload.payload.stage === "failed"
+            ) {
+              window.setTimeout(() => {
+                chatRunStore.clear(payload.payload.sessionId);
+              }, 4000);
+            }
+          }
         }
         if (payload.type === "job.output") {
           const chunkBytes = new TextEncoder().encode(payload.payload.chunk).length;

@@ -40,11 +40,12 @@ Run `pnpm doctor` after bootstrap when you want a non-mutating environment check
 3. Use the quickstart action to let DroidAgent prepare the workspace, Ollama, OpenClaw, the default local chat model, the default local multimodal model, and the default local embedding model automatically.
 4. The same quickstart pass also seeds the workspace memory, preferences, and skills scaffold automatically, then builds the local semantic-memory index.
 5. If Tailscale is already authenticated on the Mac, quickstart also creates the phone URL automatically.
-6. Use Manual Controls only when you want a different workspace, a different local model, or llama.cpp.
-7. Optionally enroll additional passkeys from Settings.
-8. Optionally store cloud-provider keys in Keychain.
-9. Optionally install and start the LaunchAgent if you want launchd to own the host process permanently.
-10. Optionally configure Signal from the Channels route.
+6. After those checks are ready, DroidAgent routes daily use into `Chat`, not back into Setup.
+7. Use Manual Controls only when you want a different workspace, a different local model, or llama.cpp.
+8. Optionally enroll additional passkeys from Settings.
+9. Optionally store cloud-provider keys in Keychain.
+10. Optionally install and start the LaunchAgent if you want launchd to own the host process permanently.
+11. Optionally configure Signal from Settings.
 
 The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailscale remote + Ollama local runtime`.
 
@@ -56,7 +57,7 @@ The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailsc
 4. Authenticate Tailscale on the Mac before expecting DroidAgent to publish the phone URL.
 5. If the same passkey provider already syncs to the phone, open the canonical remote URL directly and sign in.
 6. Use a one-time bootstrap link only when you need to enroll a new device-specific passkey after the canonical URL is healthy.
-7. Use the canonical remote URL for daily phone access.
+7. Use the canonical remote URL for daily phone access after enrollment; bootstrap links are only for adding a device.
 8. The default local model path is `qwen3.5:4b` at `65k` context with thinking disabled, smart context management enabled, `qwen2.5vl:3b` handling image/PDF chat attachments locally, and `embeddinggemma:300m-qat-q8_0` handling semantic memory locally.
 9. The running host reports its own build/version line in Settings and diagnostics so screenshots, docs, and support notes stay aligned.
 

@@ -1,14 +1,15 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
+  Activity,
   Bot,
   FolderTree,
-  Gauge,
   Hammer,
   MessagesSquare,
   Settings2,
   ShieldCheck,
   Smartphone,
   Sparkles,
+  X,
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
@@ -21,20 +22,19 @@ import { AuthScreen } from "./screens/auth-screen";
 import { postJson } from "./lib/api";
 
 const navItems = [
-  { to: "/setup", label: "Setup", icon: Sparkles },
-  { to: "/chat", label: "Chat", icon: MessagesSquare },
-  { to: "/files", label: "Files", icon: FolderTree },
-  { to: "/jobs", label: "Jobs", icon: Hammer },
-  { to: "/models", label: "Models", icon: Bot },
-  { to: "/settings", label: "Settings", icon: Settings2 },
+  { to: "/setup", label: "Setup", icon: Sparkles, readyOnly: false },
+  { to: "/chat", label: "Chat", icon: MessagesSquare, readyOnly: true },
+  { to: "/files", label: "Files", icon: FolderTree, readyOnly: true },
+  { to: "/jobs", label: "Jobs", icon: Hammer, readyOnly: true },
+  { to: "/models", label: "Models", icon: Bot, readyOnly: true },
+  { to: "/settings", label: "Settings", icon: Settings2, readyOnly: true },
 ] as const;
 
-function meterPercent(completed: number, total: number): number {
-  if (total === 0) {
-    return 0;
-  }
-
-  return Math.round((completed / total) * 100);
+interface HostStatusItem {
+  label: string;
+  value: string;
+  detail: string;
+  tone: "good" | "warn";
 }
 
 export function AppLayout() {
@@ -51,15 +51,30 @@ export function AppLayout() {
   const authQuery = useAuthQuery();
   const accessQuery = useAccessQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const [hostDrawerOpen, setHostDrawerOpen] = useState(false);
+
   const access = accessQuery.data;
   const dashboard = dashboardQuery.data;
   const operatorReady = isOperatorReady(dashboard);
   const isSetupRoute = location.pathname === "/setup";
   const isChatRoute = location.pathname === "/chat";
+  const activeProvider = dashboard?.providers.find((provider) => provider.enabled);
+  const runtimeCount =
+    dashboard?.runtimes.filter((runtime) => runtime.state === "running")
+      .length ?? 0;
+  const passkeyCount = dashboard?.setup.passkeyConfigured ? 1 : 0;
+  const pendingApprovals = dashboard?.approvals.length ?? 0;
+  const navItemsForState = navItems.filter(
+    (item) => !operatorReady || item.readyOnly,
+  );
 
   useEffect(() => {
     finishRouteTransition(location.pathname);
   }, [finishRouteTransition, location.pathname]);
+
+  useEffect(() => {
+    setHostDrawerOpen(false);
+  }, [location.pathname]);
 
   if (authQuery.isLoading) {
     return <main className="app-shell loading">Loading DroidAgent...</main>;
@@ -69,130 +84,127 @@ export function AppLayout() {
     return <AuthScreen />;
   }
 
-  const runtimeCount =
-    dashboard?.runtimes.filter((runtime) => runtime.state === "running")
-      .length ?? 0;
-  const memoryReady = Boolean(dashboard?.memory.semanticReady);
-  const pendingApprovals = dashboard?.approvals.length ?? 0;
-  const activeProvider = dashboard?.providers.find((provider) => provider.enabled);
-  const setupCompletion = meterPercent(
-    [
-      dashboard?.setup.passkeyConfigured,
-      dashboard?.setup.workspaceRoot,
-      memoryReady,
-      dashboard?.setup.selectedRuntime,
-      dashboard?.setup.selectedModel,
-      dashboard?.setup.remoteAccessEnabled,
-      dashboard?.canonicalUrl,
-    ].filter(Boolean).length,
-    7,
-  );
-  const hostCompletion = meterPercent(
-    [
-      dashboard?.setup.workspaceRoot,
-      memoryReady,
-      runtimeCount > 0,
-      dashboard?.launchAgent.running,
-      dashboard?.setup.selectedModel,
-    ].filter(Boolean).length,
-    5,
-  );
-  const remoteReady = Boolean(access?.canonicalOrigin?.origin);
-  const remoteCompletion = remoteReady
-    ? 100
-    : access?.tailscaleStatus.authenticated
-      ? 68
-      : 20;
-  const systemCards = [
+  const topbarMeta = [
+    access?.canonicalOrigin?.origin ? "Tailscale live" : "Local-first",
+    activeProvider?.model ?? dashboard?.setup.selectedModel ?? "No model",
+    activeProvider?.contextWindow
+      ? formatTokenBudget(activeProvider.contextWindow)
+      : null,
+    dashboard?.memory.semanticReady ? "memory ready" : "memory pending",
+    `v${dashboard?.build.version ?? "unknown"}`,
+  ]
+    .filter(Boolean)
+    .join(" • ");
+
+  const hostStatusItems: HostStatusItem[] = [
     {
-      key: "system",
-      icon: ShieldCheck,
-      label: "System",
-      value: operatorReady ? "Ready" : "Needs attention",
-      detail: operatorReady
-        ? "Core setup is in place and DroidAgent is ready to operate."
-        : `${setupCompletion}% of the guided setup path is complete.`,
-      progress: operatorReady ? 100 : setupCompletion,
-      tone: operatorReady ? "good" : "warn",
+      label: "Owner access",
+      value: passkeyCount > 0 ? "Ready" : "Pending",
+      detail:
+        passkeyCount > 0
+          ? "The owner passkey is enrolled."
+          : "Finish owner passkey setup before using remote control.",
+      tone: passkeyCount > 0 ? "good" : "warn",
     },
     {
-      key: "remote",
-      icon: Smartphone,
-      label: "Phone access",
-      value: remoteReady ? "Tailscale live" : "Local only",
-      detail: remoteReady
-        ? (access?.canonicalOrigin?.origin ?? dashboard?.canonicalUrl)
-        : access?.tailscaleStatus.authenticated
-          ? "Enable the Tailscale URL from Setup or Settings to finish phone access."
-          : "Sign in to Tailscale on this Mac to publish a private phone URL.",
-      progress: remoteCompletion,
-      tone: remoteReady
-        ? "good"
-        : access?.tailscaleStatus.authenticated
-          ? "warn"
-          : "muted",
+      label: "Remote access",
+      value: access?.canonicalOrigin?.origin ? "Live" : "Local only",
+      detail:
+        access?.canonicalOrigin?.origin ??
+        access?.tailscaleStatus.healthMessage ??
+        "Tailscale is not ready yet.",
+      tone: access?.canonicalOrigin?.origin ? "good" : "warn",
     },
     {
-      key: "runtime",
-      icon: Bot,
       label: "Runtime",
       value: runtimeCount > 0 ? `${runtimeCount} live` : "Not running",
       detail: activeProvider?.model
-        ? `${activeProvider.model} • ${formatTokenBudget(activeProvider.contextWindow)} context • ${memoryReady ? "semantic memory live" : "semantic memory pending"}`
-        : "Select a local model to make the common path feel instant.",
-      progress: runtimeCount > 0 ? hostCompletion : 24,
+        ? `${activeProvider.model} • ${formatTokenBudget(activeProvider.contextWindow)}`
+        : "Select and start a local runtime.",
       tone: runtimeCount > 0 ? "good" : "warn",
     },
     {
-      key: "activity",
-      icon: Gauge,
-      label: pendingApprovals > 0 ? "Approvals" : "Sessions",
-      value:
-        pendingApprovals > 0
-          ? `${pendingApprovals} waiting`
-          : `${dashboard?.sessions.length ?? 0} active`,
+      label: "Memory",
+      value: dashboard?.memory.semanticReady ? "Indexed" : "Pending",
+      detail: dashboard?.memory.semanticReady
+        ? `${dashboard.memory.indexedFiles} files • ${dashboard.memory.indexedChunks} chunks`
+        : dashboard?.memory.embeddingProbeError ??
+          "Semantic memory is not prepared yet.",
+      tone: dashboard?.memory.semanticReady ? "good" : "warn",
+    },
+    {
+      label: "Approvals",
+      value: pendingApprovals > 0 ? `${pendingApprovals} waiting` : "Clear",
       detail:
         pendingApprovals > 0
-          ? "The approval queue needs attention before agent exec can continue."
-          : "Chat, files, jobs, and models stay one tap away in the bottom bar.",
-      progress:
-        pendingApprovals > 0
-          ? 56
-          : Math.min(100, 36 + (dashboard?.sessions.length ?? 0) * 18),
+          ? "One or more OpenClaw actions need approval."
+          : "No agent approvals are blocking progress.",
       tone: pendingApprovals > 0 ? "warn" : "good",
     },
-  ] as const;
+    {
+      label: "LaunchAgent",
+      value: dashboard?.launchAgent.running ? "Running" : "Needs attention",
+      detail:
+        dashboard?.launchAgent.healthMessage ??
+        "LaunchAgent health is still loading.",
+      tone: dashboard?.launchAgent.running ? "good" : "warn",
+    },
+  ];
 
   return (
     <main className={`app-shell${isChatRoute ? " chat-route-shell" : ""}`}>
-      <header className={`topbar${isChatRoute ? " compact" : ""}`}>
-        <div className="topbar-copy">
-          <div className="eyebrow">DroidAgent</div>
-          <h1>{isChatRoute ? "Live Operator Chat" : "Control Center"}</h1>
-          <small className="topbar-meta">
-            {isChatRoute
-              ? "Real OpenClaw session"
-              : remoteReady
-                ? "Tailscale live"
-                : "Local-first"}{" "}
-            •{" "}
-            {activeProvider?.model ?? dashboard?.setup.selectedModel ?? "No model"}
-            {activeProvider?.contextWindow
-              ? ` • ${formatTokenBudget(activeProvider.contextWindow)}`
-              : ""}{" "}
-            • {memoryReady ? "memory ready" : "memory pending"} • v
-            {dashboard?.build.version ?? "unknown"}
-          </small>
+      <header className={`topbar-shell${isChatRoute ? " compact" : ""}`}>
+        <div className="topbar">
+          <div className="topbar-copy">
+            <div className="eyebrow">DroidAgent</div>
+            <h1>{isSetupRoute ? "Setup" : isChatRoute ? "Operator Chat" : "Operator Console"}</h1>
+            <small className="topbar-meta">{topbarMeta}</small>
+          </div>
+
+          <div className="topbar-actions">
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => setHostDrawerOpen(true)}
+            >
+              Host status
+            </button>
+            <button
+              className="ghost-button"
+              onClick={async () => {
+                await postJson("/api/auth/logout", {});
+                await queryClient.invalidateQueries({ queryKey: ["auth"] });
+              }}
+            >
+              Sign out
+            </button>
+          </div>
         </div>
-        <button
-          className="ghost-button"
-          onClick={async () => {
-            await postJson("/api/auth/logout", {});
-            await queryClient.invalidateQueries({ queryKey: ["auth"] });
-          }}
-        >
-          Sign out
-        </button>
+
+        <div className="topbar-status-row">
+          <span className={`status-chip${operatorReady ? " ready" : ""}`}>
+            <ShieldCheck size={14} />
+            {operatorReady ? "Operator ready" : "Setup required"}
+          </span>
+          <span
+            className={`status-chip${access?.canonicalOrigin?.origin ? " ready" : ""}`}
+          >
+            <Smartphone size={14} />
+            {access?.canonicalOrigin?.origin ? "Phone live" : "Phone pending"}
+          </span>
+          <span className={`status-chip${runtimeCount > 0 ? " ready" : ""}`}>
+            <Bot size={14} />
+            {runtimeCount > 0 ? "Runtime live" : "Runtime pending"}
+          </span>
+          <span
+            className={`status-chip${pendingApprovals > 0 ? "" : " ready"}`}
+          >
+            <Activity size={14} />
+            {pendingApprovals > 0
+              ? `${pendingApprovals} approval${pendingApprovals === 1 ? "" : "s"}`
+              : "No approvals waiting"}
+          </span>
+        </div>
       </header>
 
       {!isOnline ? (
@@ -205,50 +217,15 @@ export function AppLayout() {
           Reconnecting to DroidAgent...
         </section>
       ) : null}
-      {notice ? (
-        <section className="status-banner success">{notice}</section>
-      ) : null}
+      {notice ? <section className="status-banner success">{notice}</section> : null}
       {errorMessage ? (
         <section className="status-banner error">{errorMessage}</section>
       ) : null}
 
-      {!isChatRoute ? (
-        <section className="system-rail">
-          {systemCards.map((card) => {
-          const Icon = card.icon;
-          return (
-            <article
-              key={card.key}
-              className={`panel-card compact system-rail-card ${card.tone}`}
-            >
-              <div className="system-rail-head">
-                <div className={`system-rail-icon ${card.tone}`}>
-                  <Icon size={18} />
-                </div>
-                <span>{card.label}</span>
-              </div>
-              <strong>{card.value}</strong>
-              <div className="health-meter">
-                <span style={{ width: `${card.progress}%` }} />
-              </div>
-              <small>{card.detail}</small>
-            </article>
-          );
-          })}
-        </section>
-      ) : null}
-
       {!operatorReady && !isSetupRoute ? (
         <section className="status-banner offline">
-          DroidAgent still needs a quick setup pass before phone control feels
-          normal. <Link to="/setup">Finish setup</Link>
-        </section>
-      ) : null}
-
-      {location.pathname === "/channels" ? (
-        <section className="status-banner offline">
-          Signal is available, but the primary path stays in the web shell. Use
-          Channels only when you need the optional Signal integration.
+          DroidAgent still needs a short setup pass before the live operator flow
+          is ready. <Link to="/setup">Finish setup</Link>
         </section>
       ) : null}
 
@@ -260,7 +237,7 @@ export function AppLayout() {
         </div>
 
         <nav className="bottom-nav">
-          {navItems.map((item) => {
+          {navItemsForState.map((item) => {
             const Icon = item.icon;
             return (
               <Link
@@ -277,6 +254,60 @@ export function AppLayout() {
           })}
         </nav>
       </section>
+
+      {hostDrawerOpen ? (
+        <div
+          className="drawer-backdrop"
+          onClick={() => setHostDrawerOpen(false)}
+          role="presentation"
+        >
+          <aside
+            className="host-drawer panel-card"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="drawer-header">
+              <div>
+                <div className="eyebrow">Host Status</div>
+                <h2>Mac, runtime, and remote access</h2>
+              </div>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setHostDrawerOpen(false)}
+                aria-label="Close host status"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="host-status-list">
+              {hostStatusItems.map((item) => (
+                <article
+                  key={item.label}
+                  className={`host-status-row ${item.tone}`}
+                >
+                  <div>
+                    <strong>{item.label}</strong>
+                    <span>{item.value}</span>
+                  </div>
+                  <small>{item.detail}</small>
+                </article>
+              ))}
+            </div>
+
+            <div className="drawer-actions">
+              {!operatorReady ? (
+                <Link className="button-link secondary" to="/setup">
+                  Finish setup
+                </Link>
+              ) : null}
+              <Link className="button-link secondary" to="/settings">
+                Open settings
+              </Link>
+            </div>
+          </aside>
+        </div>
+      ) : null}
     </main>
   );
 }

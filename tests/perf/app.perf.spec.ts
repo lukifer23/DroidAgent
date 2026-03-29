@@ -18,7 +18,7 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
 
   const loadStart = performance.now();
   await page.goto(new URL("/chat", state.baseUrl).toString());
-  await expect(page.locator(".topbar h1")).toBeVisible();
+  await expect(page.locator(".topbar-copy h1")).toBeVisible();
   metrics.push({
     name: "initial_load_ms",
     durationMs: Number((performance.now() - loadStart).toFixed(2))
@@ -40,7 +40,6 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   ).toBeVisible();
 
   const prompt = `perf-${projectName}`;
-  const assistantMessages = page.locator(".message-card.assistant p");
   const sendButton = page.getByRole("button", { name: "Send" });
   await page
     .getByPlaceholder(
@@ -50,20 +49,14 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   await expect(sendButton).toBeEnabled();
   const sendStart = performance.now();
   await sendButton.click();
-  await page.waitForFunction(() => {
-    const assistantParagraphs = [...document.querySelectorAll<HTMLElement>(".message-card.assistant p")];
-    return assistantParagraphs.some((element) => {
-      const text = element.textContent?.trim() ?? "";
-      return text.startsWith("Test harness");
-    });
-  });
+  const responseLocator = page.getByText(`Test harness reply: ${prompt}`, {
+    exact: true,
+  }).last();
+  await expect(responseLocator).toBeVisible();
   metrics.push({
     name: "chat_first_token_ms",
     durationMs: Number((performance.now() - sendStart).toFixed(2))
   });
-  await expect(
-    assistantMessages.filter({ hasText: new RegExp(`^Test harness reply: ${prompt}$`) }).last()
-  ).toBeVisible();
   metrics.push({
     name: "chat_done_ms",
     durationMs: Number((performance.now() - sendStart).toFixed(2))
