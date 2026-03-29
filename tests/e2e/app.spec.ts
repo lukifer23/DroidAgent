@@ -195,6 +195,76 @@ test("captures a chat message as a memory draft, edits it, and applies it", asyn
     .toBe(true);
 });
 
+test("repairs missing workspace memory files before opening them", async ({
+  page,
+}) => {
+  const state = await gotoSignedIn(page, "/files");
+
+  await fs.rm(`${state.workspaceRoot}/MEMORY.md`, { force: true });
+
+  await page.getByRole("button", { name: "Open MEMORY.md" }).click();
+  await expect(page.locator(".editor-textarea")).toContainText(
+    "Durable Memory",
+  );
+});
+
+test("rejects stale memory draft mutations with a conflict response", async ({
+  page,
+}) => {
+  const state = await gotoSignedIn(page, "/chat");
+  const prompt = "remember the stale draft path";
+
+  await page
+    .getByPlaceholder(
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
+    )
+    .fill(prompt);
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const userMessage = page.locator(".message-card.user").filter({
+    hasText: prompt,
+  });
+  await expect(userMessage).toBeVisible();
+  await userMessage.locator(".message-utility-tray summary").click();
+  await userMessage.getByRole("button", { name: "Memory" }).click();
+
+  const draftsResponse = await page.request.get(
+    new URL("/api/memory/drafts", state.baseUrl).toString(),
+  );
+  expect(draftsResponse.ok()).toBe(true);
+  const drafts = (await draftsResponse.json()) as Array<{
+    id: string;
+    updatedAt: string;
+  }>;
+  const draft = drafts[0];
+  expect(draft).toBeTruthy();
+
+  const firstUpdate = await page.request.patch(
+    new URL(`/api/memory/drafts/${encodeURIComponent(draft!.id)}`, state.baseUrl).toString(),
+    {
+      data: {
+        expectedUpdatedAt: draft!.updatedAt,
+        title: "Fresh title",
+      },
+    },
+  );
+  expect(firstUpdate.ok()).toBe(true);
+
+  const staleUpdate = await page.request.patch(
+    new URL(`/api/memory/drafts/${encodeURIComponent(draft!.id)}`, state.baseUrl).toString(),
+    {
+      data: {
+        expectedUpdatedAt: draft!.updatedAt,
+        title: "Stale title",
+      },
+    },
+  );
+  expect(staleUpdate.status()).toBe(409);
+  await expect(staleUpdate.json()).resolves.toMatchObject({
+    error: expect.stringMatching(/changed since it was loaded/i),
+  });
+});
+
 test("surfaces file conflicts from disk changes and allows reload", async ({
   page,
 }) => {
@@ -247,6 +317,87 @@ test("runs a suggested shell block inside chat", async ({ page }) => {
       hasText: /suggested-job-ok/i,
     }).last(),
   ).toBeVisible();
+});
+
+test("creates, closes, and restores chat sessions from the rail", async ({
+  page,
+}) => {
+  await gotoSignedIn(page, "/chat");
+
+  await page.getByRole("button", { name: "New chat" }).click();
+  await expect(page.getByText("New chat ready.")).toBeVisible();
+
+  const sessionPicker = page.locator(".operator-session-picker select");
+  await expect(sessionPicker).toBeVisible();
+  await expect(sessionPicker.locator("option")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "Close chat" }).click();
+  await expect(page.getByText("Chat closed.")).toBeVisible();
+
+  const archivedCard = page.locator(".operator-session-archive-card").first();
+  await expect(archivedCard).toBeVisible();
+  await archivedCard.getByRole("button", { name: "Restore" }).click();
+
+  await expect(page.getByText("Archived chat restored.")).toBeVisible();
+  await expect(sessionPicker.locator("option")).toHaveCount(2);
+});
+
+test("closes the main operator chat and immediately replaces it", async ({
+  page,
+}) => {
+  await gotoSignedIn(page, "/chat");
+
+  await expect(page.locator(".operator-chat-overview-copy h2")).toHaveText(
+    "Operator Chat",
+  );
+  await page.getByRole("button", { name: "Close chat" }).click();
+  await expect(page.getByText("Chat closed.")).toBeVisible();
+
+  await expect(page.locator(".operator-chat-overview-copy h2")).toHaveText(
+    "Operator Chat 2",
+  );
+  await expect(
+    page.locator(".operator-session-archive-card").filter({
+      hasText: "Operator Chat",
+    }),
+  ).toBeVisible();
+});
+
+test("runs a suggested shell block inside a newly created chat session", async ({
+  page,
+}) => {
+  await gotoSignedIn(page, "/chat");
+
+  await page.getByRole("button", { name: "New chat" }).click();
+  await expect(page.getByText("New chat ready.")).toBeVisible();
+
+  const sessionPicker = page.locator(".operator-session-picker select");
+  await expect(sessionPicker).toBeVisible();
+  const activeSessionValue = await sessionPicker.inputValue();
+  expect(activeSessionValue).not.toBe("web:operator");
+
+  await page
+    .getByPlaceholder(
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
+    )
+    .fill("show a shell block");
+  await page.getByRole("button", { name: "Send" }).click();
+
+  const assistantMessage = page.locator(".message-card.assistant").filter({
+    hasText: "Runnable shell example:",
+  });
+  await expect(assistantMessage).toBeVisible();
+  await assistantMessage.getByRole("button", { name: "Run in Chat" }).click();
+
+  const inlineJobCard = page.locator(".chat-inline-job-card");
+  await expect(inlineJobCard).toBeVisible();
+  await expect(inlineJobCard).toContainText("suggested-job-ok");
+  await expect(
+    page.locator(".message-card.assistant").filter({
+      hasText: /suggested-job-ok/i,
+    }).last(),
+  ).toBeVisible();
+  await expect(sessionPicker).toHaveValue(activeSessionValue);
 });
 
 test("opens a suggested shell block in the terminal without executing it", async ({

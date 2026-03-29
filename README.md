@@ -68,7 +68,7 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - Signal stays optional and secondary to the web shell
 - Smart Context Management is on by default
 - the workspace is seeded with `AGENTS.md`, `TOOLS.md`, `MEMORY.md`, `PREFERENCES.md`, `HEARTBEAT.md`, a `memory/` folder, and a `skills/` folder
-- `PREFERENCES.md` is part of semantic recall so the operator can make a smaller local model feel more personal over time
+- semantic recall is intentionally biased toward `PREFERENCES.md`, then `MEMORY.md`, then dated notes and session memory so smaller local models stay more personal and more useful
 - durable memory writes stay approval-gated through editable memory drafts in Settings before they append to `MEMORY.md`, `PREFERENCES.md`, or `memory/YYYY-MM-DD.md`
 - assistant shell blocks can be promoted into `Run in Chat` or `Open in Terminal`; suggested commands are never auto-executed on the host
 
@@ -81,6 +81,7 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - [Remote Access Guide](./docs/remote-access.md)
 - [Architecture](./docs/architecture.md)
 - [Security](./docs/security.md)
+- [Experimental Roadmap](./docs/experimental-roadmap.md)
 
 ## Important Paths
 
@@ -95,9 +96,11 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 
 - UI/UX overhaul now uses a modular style layer (`styles.css` + `styles/system.css` + `styles/motion.css`) with unified viewport-height calculations for Chat and Terminal shells to reduce layout jumps on navigation and mobile browser chrome changes.
 - Realtime dashboard synchronization now includes explicit harness updates and debounced full-snapshot reconciliation to keep UI state truthful after runtime/provider/channel/context/memory mutations.
+- First-class workspace memory files are scaffold-repaired on demand, and draft apply/dismiss mutations are revision-checked so fast mobile interactions do not silently race each other.
 - Chat, Files, Jobs, Settings, and Terminal surfaces now include stronger loading/empty/error behavior and safer fallbacks when websocket transport is degraded.
 - Maintenance state is persisted in SQLite, mirrored to `~/.droidagent/state/maintenance-status.json` for local scripts, and surfaced in Settings plus the live chat shell so restarts are explicit instead of silent.
 - Browser-side heavy paths are hardened: streaming chat render path avoids unnecessary markdown parsing in simple deltas, terminal transcript trimming avoids full-buffer re-encode loops, and large job logs are browser-tailed.
+- Server diagnostics now split chat accept, first-delta wait, first-delta forward, full relay, memory draft apply, and memory reindex timings so operator latency surfaces stay honest.
 - File APIs are workspace-relative and text-only.
 - Chat attachments support local images, PDFs, Markdown, JSON, logs, and common code/text files through the real OpenClaw tool path.
 - The chat route is the primary operator surface: live run state, approvals, tool summaries, attachments, markdown/code rendering, editable durable-memory capture actions, suggested command promotion, and per-run client timings are all surfaced there.

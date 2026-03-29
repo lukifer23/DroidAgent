@@ -304,7 +304,12 @@ describe("OpenClaw context management policy", () => {
             provider: "ollama",
             fallback: "none",
             model: "embeddinggemma:300m-qat-q8_0",
-            extraPaths: ["MEMORY.md", "PREFERENCES.md", "skills/**/*.md"],
+            extraPaths: [
+              "PREFERENCES.md",
+              "MEMORY.md",
+              "memory/**/*.md",
+              "skills/**/*.md",
+            ],
             cache: {
               enabled: true,
               maxEntries: 50000,
@@ -330,9 +335,9 @@ describe("OpenClaw context management policy", () => {
               enabled: true,
               softThresholdTokens: 5242,
               systemPrompt:
-                "Session nearing compaction. Store durable memories now.",
+                "Session nearing compaction. Store durable memories now in a short structured note.",
               prompt:
-                "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
+                "Append durable notes to memory/YYYY-MM-DD.md with sections Summary, Decisions, Next Steps, and Durable Memory Candidates. Reply with NO_REPLY if nothing durable should be stored.",
             },
           },
           contextPruning: {
@@ -437,7 +442,12 @@ describe("OpenClaw context management policy", () => {
             provider: "ollama",
             fallback: "none",
             model: "embeddinggemma:300m-qat-q8_0",
-            extraPaths: ["MEMORY.md", "PREFERENCES.md", "skills/**/*.md"],
+            extraPaths: [
+              "PREFERENCES.md",
+              "MEMORY.md",
+              "memory/**/*.md",
+              "skills/**/*.md",
+            ],
             sync: {
               sessions: {
                 deltaMessages: 50,
@@ -463,9 +473,9 @@ describe("OpenClaw context management policy", () => {
               enabled: true,
               softThresholdTokens: 5242,
               prompt:
-                "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
+                "Append durable notes to memory/YYYY-MM-DD.md with sections Summary, Decisions, Next Steps, and Durable Memory Candidates. Reply with NO_REPLY if nothing durable should be stored.",
               systemPrompt:
-                "Session nearing compaction. Store durable memories now.",
+                "Session nearing compaction. Store durable memories now in a short structured note.",
             },
           },
           contextPruning: {

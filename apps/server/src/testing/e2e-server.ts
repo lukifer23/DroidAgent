@@ -61,6 +61,46 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
   const now = new Date().toISOString();
   const workspaceFiles: E2EWorkspaceFile[] = [
     {
+      path: "AGENTS.md",
+      content: "# DroidAgent Operator Rules\n",
+    },
+    {
+      path: "TOOLS.md",
+      content: "# DroidAgent Tooling Notes\n",
+    },
+    {
+      path: "IDENTITY.md",
+      content: "# Identity\n",
+    },
+    {
+      path: "USER.md",
+      content: "# User\n",
+    },
+    {
+      path: "SOUL.md",
+      content: "# Tone\n",
+    },
+    {
+      path: "MEMORY.md",
+      content: "# Durable Memory\n",
+    },
+    {
+      path: "PREFERENCES.md",
+      content: "# Personal Preferences\n",
+    },
+    {
+      path: "HEARTBEAT.md",
+      content: "# Heartbeat\n",
+    },
+    {
+      path: "memory/README.md",
+      content: "# Workspace Memory Notes\n",
+    },
+    {
+      path: "skills/README.md",
+      content: "# Workspace Skills\n",
+    },
+    {
       path: "notes.txt",
       content: "first pass",
     },
@@ -85,8 +125,10 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
 
   await Promise.all(
     workspaceFiles.map(async (file) => {
+      const targetPath = path.join(workspaceRoot, file.path);
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(
-        path.join(workspaceRoot, file.path),
+        targetPath,
         file.content,
         "utf8",
       );

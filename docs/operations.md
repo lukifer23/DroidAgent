@@ -76,6 +76,7 @@ pnpm perf:report
 - Once the operator path is ready, daily use should happen from `Chat`; Setup moves out of the primary bottom-nav flow.
 - The Host drawer and Settings are the maintenance entry points. The rescue terminal stays outside the primary bottom nav so the operator flow stays focused on Chat, Files, Jobs, Models, and Settings.
 - The same quickstart path also seeds `MEMORY.md`, `PREFERENCES.md`, `HEARTBEAT.md`, daily notes under `memory/`, and the workspace `skills/` directory.
+- First-class workspace memory files are scaffold-repaired on demand, so `memory.status`, `memory.prepare`, `memory.today-note`, and opening `MEMORY.md` or `PREFERENCES.md` do not leak raw missing-file errors on a real host.
 - Durable memory capture is approval-gated. Chat messages and file selections create drafts first, then Settings is the review/apply surface.
 - Suggested shell blocks from assistant replies can become `Run in Chat` or `Open in Terminal`. In-chat runs stay inside the workspace job jail; terminal suggestions are inserted but never auto-executed.
 - The default local chat model is `qwen3.5:4b` with a `65k` context budget and thinking disabled.
@@ -93,7 +94,8 @@ pnpm perf:report
 - The Settings route shows the full client/server diagnostics card.
 - The Settings route also shows semantic-memory readiness, embedding/index status, and the current `65k` local context budget.
 - The Settings route now also exposes memory-prep timings so semantic-memory regressions are visible in the same diagnostics surface as chat, files, and jobs.
-- The Settings route also exposes editable pending memory drafts, current maintenance state, recent maintenance history, and timing sample age/count so stale telemetry is obvious.
+- The Settings route also exposes editable pending memory drafts, current maintenance state, recent maintenance history, and timing sample age/count plus `ok`/`warn`/`error` sample totals so stale or degraded telemetry is obvious.
+- Chat timing is split into accept, first-delta wait, first-delta forward, and full relay duration so model latency and DroidAgent overhead are not conflated.
 - The Settings route also shows the running build/version identity so the live host, screenshots, logs, and repo all stay on the same release line.
 - The chat route now accepts local images, PDFs, Markdown, JSON, logs, and common code/text files. DroidAgent stores them under `~/.droidagent/uploads` and passes them through the real OpenClaw tool path instead of a parallel mock transcript.
 - The chat route is the operator console: it surfaces live run state, tool summaries, approval cards, attachments, code blocks, and client-side per-run timings.

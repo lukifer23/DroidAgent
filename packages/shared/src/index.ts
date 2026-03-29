@@ -651,8 +651,15 @@ export type MemoryDraftCreateRequest = z.infer<
   typeof MemoryDraftCreateRequestSchema
 >;
 
-export const MemoryDraftUpdateRequestSchema = z
-  .object({
+export const MemoryDraftRevisionRequestSchema = z.object({
+  expectedUpdatedAt: z.string().trim().min(1),
+});
+export type MemoryDraftRevisionRequest = z.infer<
+  typeof MemoryDraftRevisionRequestSchema
+>;
+
+export const MemoryDraftUpdateRequestSchema = MemoryDraftRevisionRequestSchema
+  .extend({
     target: MemoryDraftTargetSchema.optional(),
     title: z.string().trim().max(200).nullable().optional(),
     content: z.string().trim().min(1).optional(),
@@ -670,17 +677,36 @@ export type MemoryDraftUpdateRequest = z.infer<
   typeof MemoryDraftUpdateRequestSchema
 >;
 
+export const MemoryDraftApplyRequestSchema = MemoryDraftRevisionRequestSchema;
+export type MemoryDraftApplyRequest = z.infer<
+  typeof MemoryDraftApplyRequestSchema
+>;
+
+export const MemoryDraftDismissRequestSchema = MemoryDraftRevisionRequestSchema;
+export type MemoryDraftDismissRequest = z.infer<
+  typeof MemoryDraftDismissRequestSchema
+>;
+
 export const MemoryDraftApplyResultSchema = z.object({
   draft: MemoryDraftSchema,
+  outcome: z.enum(["applied", "alreadyApplied"]),
   memory: z.object({
     effectiveWorkspaceRoot: z.string(),
     memoryFilePath: z.string(),
     todayNotePath: z.string(),
   }),
-  reindexMode: z.enum(["incremental", "force"]),
+  reindexMode: z.enum(["incremental", "force"]).nullable(),
 });
 export type MemoryDraftApplyResult = z.infer<
   typeof MemoryDraftApplyResultSchema
+>;
+
+export const MemoryDraftDismissResultSchema = z.object({
+  draft: MemoryDraftSchema,
+  outcome: z.enum(["dismissed", "alreadyDismissed"]),
+});
+export type MemoryDraftDismissResult = z.infer<
+  typeof MemoryDraftDismissResultSchema
 >;
 
 export const MaintenanceScopeSchema = z.enum(["app", "runtime", "remote"]);
@@ -844,6 +870,9 @@ export const LatencySummarySchema = z.object({
   name: z.string(),
   source: LatencySourceSchema,
   count: z.number().int().nonnegative(),
+  okCount: z.number().int().nonnegative(),
+  warnCount: z.number().int().nonnegative(),
+  errorCount: z.number().int().nonnegative(),
   lastDurationMs: z.number().nonnegative().nullable(),
   lastEndedAt: z.string().nullable(),
   sampleAgeMs: z.number().nonnegative().nullable(),

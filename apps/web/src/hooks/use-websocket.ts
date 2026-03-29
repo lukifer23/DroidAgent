@@ -354,6 +354,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
           payload.type === "approvals.updated"
         ) {
           queryClient.setQueryData<DashboardState | undefined>(["dashboard"], (current) => updateDashboardState(current, payload));
+          if (payload.type === "sessions.updated") {
+            void queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] });
+          }
           if (
             payload.type === "runtime.updated" ||
             payload.type === "providers.updated" ||

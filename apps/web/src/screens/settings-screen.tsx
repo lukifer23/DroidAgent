@@ -9,8 +9,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import type {
   BootstrapLink,
   CloudProviderSummary,
+  DashboardState,
   HostPressureStatus,
   MemoryDraft,
+  MemoryDraftApplyResult,
+  MemoryDraftDismissResult,
   MemoryDraftTarget,
   PerformanceSnapshot,
 } from "@droidagent/shared";
@@ -23,7 +26,7 @@ import {
   usePerformanceQuery,
 } from "../app-data";
 import { useClientPerformanceSnapshot, useDroidAgentApp } from "../app-context";
-import { api, patchJson, postJson } from "../lib/api";
+import { ApiError, api, patchJson, postJson } from "../lib/api";
 import { clientPerformance } from "../lib/client-performance";
 import { formatTokenBudget } from "../lib/formatters";
 
@@ -48,7 +51,14 @@ function metricDescription(
           ? `${Math.round(ageMs / 1_000)}s old`
           : `${Math.round(ageMs)}ms old`
       : "age unknown";
-  return `${label}: p95 ${p95 ?? 0} ms • last ${last ?? 0} ms • ${metric.summary.count} samples • ${ageLabel}`;
+  const outcomeBits = [
+    `${metric.summary.count} samples`,
+    metric.summary.errorCount > 0 ? `${metric.summary.errorCount} errors` : null,
+    metric.summary.warnCount > 0 ? `${metric.summary.warnCount} warns` : null,
+  ]
+    .filter(Boolean)
+    .join(" • ");
+  return `${label}: p95 ${p95 ?? 0} ms • last ${last ?? 0} ms • ${outcomeBits} • ${ageLabel}`;
 }
 
 function formatHostBytes(value: number | null | undefined): string {
@@ -74,6 +84,29 @@ function hostPressureTone(
     return "warn";
   }
   return "good";
+}
+
+function upsertDashboardMemoryDraft(
+  dashboard: DashboardState,
+  nextDraft: MemoryDraft,
+): DashboardState {
+  const memoryDrafts = dashboard.memoryDrafts.some(
+    (draft) => draft.id === nextDraft.id,
+  )
+    ? dashboard.memoryDrafts.map((draft) =>
+        draft.id === nextDraft.id ? nextDraft : draft,
+      )
+    : [nextDraft, ...dashboard.memoryDrafts];
+
+  memoryDrafts.sort(
+    (left, right) =>
+      new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime(),
+  );
+
+  return {
+    ...dashboard,
+    memoryDrafts,
+  };
 }
 
 export function SettingsScreen() {
@@ -267,7 +300,24 @@ export function SettingsScreen() {
   }
 
   async function handleApplyDraft(draft: MemoryDraft) {
-    await postJson(`/api/memory/drafts/${encodeURIComponent(draft.id)}/apply`, {});
+    try {
+      const result = await postJson<MemoryDraftApplyResult>(
+        `/api/memory/drafts/${encodeURIComponent(draft.id)}/apply`,
+        {
+          expectedUpdatedAt: draft.updatedAt,
+        },
+      );
+      queryClient.setQueryData<DashboardState | undefined>(
+        ["dashboard"],
+        (current) =>
+          current ? upsertDashboardMemoryDraft(current, result.draft) : current,
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      }
+      throw error;
+    }
     await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
   }
 
@@ -276,11 +326,29 @@ export function SettingsScreen() {
     if (!edit) {
       return;
     }
-    await patchJson(`/api/memory/drafts/${encodeURIComponent(draft.id)}`, {
-      target: edit.target,
-      title: edit.title.trim() || null,
-      content: edit.content.trim(),
-    });
+    try {
+      const updatedDraft = await patchJson<MemoryDraft>(
+        `/api/memory/drafts/${encodeURIComponent(draft.id)}`,
+        {
+          expectedUpdatedAt: draft.updatedAt,
+          target: edit.target,
+          title: edit.title.trim() || null,
+          content: edit.content.trim(),
+        },
+      );
+      queryClient.setQueryData<DashboardState | undefined>(
+        ["dashboard"],
+        (current) =>
+          current
+            ? upsertDashboardMemoryDraft(current, updatedDraft)
+            : current,
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      }
+      throw error;
+    }
     setDraftEdits((current) => {
       const next = { ...current };
       delete next[draft.id];
@@ -290,10 +358,24 @@ export function SettingsScreen() {
   }
 
   async function handleDismissDraft(draft: MemoryDraft) {
-    await postJson(
-      `/api/memory/drafts/${encodeURIComponent(draft.id)}/dismiss`,
-      {},
-    );
+    try {
+      const result = await postJson<MemoryDraftDismissResult>(
+        `/api/memory/drafts/${encodeURIComponent(draft.id)}/dismiss`,
+        {
+          expectedUpdatedAt: draft.updatedAt,
+        },
+      );
+      queryClient.setQueryData<DashboardState | undefined>(
+        ["dashboard"],
+        (current) =>
+          current ? upsertDashboardMemoryDraft(current, result.draft) : current,
+      );
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      }
+      throw error;
+    }
     await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
   }
 
@@ -1349,8 +1431,22 @@ export function SettingsScreen() {
             <small>
               {metricDescription(
                 performanceQuery.data,
-                "chat.stream.firstDeltaRelay",
-                "Relay to first delta",
+                "chat.send.submitToAccepted",
+                "Submit to accepted",
+              )}
+            </small>
+            <small>
+              {metricDescription(
+                performanceQuery.data,
+                "chat.stream.acceptedToFirstDelta",
+                "Accepted to first delta",
+              )}
+            </small>
+            <small>
+              {metricDescription(
+                performanceQuery.data,
+                "chat.stream.firstDeltaForward",
+                "First delta forward",
               )}
             </small>
             <small>
@@ -1372,6 +1468,13 @@ export function SettingsScreen() {
                 performanceQuery.data,
                 "memory.prepare",
                 "Memory prepare",
+              )}
+            </small>
+            <small>
+              {metricDescription(
+                performanceQuery.data,
+                "memory.reindex",
+                "Memory reindex",
               )}
             </small>
             <small>

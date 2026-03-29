@@ -55,6 +55,9 @@ function summarize(name: string, source: LatencySource, samples: LatencySample[]
   const lastSample = samples.at(-1) ?? null;
   const lastDurationMs = lastSample?.durationMs ?? null;
   const lastEndedAt = lastSample?.endedAt ?? null;
+  const okCount = samples.filter((sample) => sample.context.outcome !== "error" && sample.context.outcome !== "warn").length;
+  const warnCount = samples.filter((sample) => sample.context.outcome === "warn").length;
+  const errorCount = samples.filter((sample) => sample.context.outcome === "error").length;
   const sampleAgeMs = lastEndedAt
     ? Math.max(0, Date.now() - new Date(lastEndedAt).getTime())
     : null;
@@ -62,6 +65,9 @@ function summarize(name: string, source: LatencySource, samples: LatencySample[]
     name,
     source,
     count: samples.length,
+    okCount,
+    warnCount,
+    errorCount,
     lastDurationMs,
     lastEndedAt,
     sampleAgeMs: sampleAgeMs === null ? null : Number(sampleAgeMs.toFixed(2)),

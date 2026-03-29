@@ -30,14 +30,16 @@ Server-side:
 - `http.get./api/access`
 - `http.get./api/dashboard`
 - `dashboard.snapshot`
-- `chat.send.enqueue`
-- `chat.stream.firstDeltaRelay`
-- `chat.stream.completeRelay`
+- `chat.send.submitToAccepted`
+- `chat.stream.acceptedToFirstDelta`
+- `chat.stream.firstDeltaForward`
+- `chat.stream.acceptedToCompleteRelay`
 - `file.read`
 - `file.write`
 - `job.start`
 - `job.firstOutput`
 - `memory.prepare`
+- `memory.reindex`
 - `memory.draft.apply`
 - `memory.todayNote`
 
@@ -64,7 +66,22 @@ Notable implementation guardrails in this pass:
 - jobs output rendering tails large logs in-browser to avoid large full-text DOM updates
 - websocket-driven dashboard patches are reconciled with debounced full snapshot pulls after high-impact runtime/provider/channel/context/memory mutations
 
-The Settings diagnostics view now shows p95, last sample, sample count, and sample age so old latency numbers are easier to spot before they mislead an operator.
+The Settings diagnostics view now shows p95, last sample, sample count, `ok`/`warn`/`error` counts, and sample age so old or unhealthy latency numbers are easier to spot before they mislead an operator.
+
+## Chat Timing Split
+
+Server chat relay timing is intentionally broken into separate slices:
+
+- `chat.send.submitToAccepted`
+  - browser submit to DroidAgent accepting the run
+- `chat.stream.acceptedToFirstDelta`
+  - DroidAgent accepted the run and waited for the first upstream delta
+- `chat.stream.firstDeltaForward`
+  - DroidAgent overhead to forward the first received delta to the browser
+- `chat.stream.acceptedToCompleteRelay`
+  - DroidAgent relay duration from accept to end-of-stream
+
+This keeps model time, relay overhead, and browser-observed latency from being mixed into a single misleading number.
 
 ## Advisory Budgets
 
@@ -75,7 +92,7 @@ The Settings diagnostics view now shows p95, last sample, sample count, and samp
 - file open and save for <= `256 KB` text files p95 <= `500 ms`
 - DroidAgent relay overhead from accepted chat submit to first forwarded token p95 <= `150 ms`
 
-Model generation time is recorded separately from DroidAgent overhead.
+Model generation time is recorded separately from DroidAgent relay overhead. Reindex and memory-draft timings are also tracked independently so semantic-memory maintenance work does not get folded into chat latency.
 
 OpenClaw is configured with `agents.defaults.thinkingDefault = "off"` by default in DroidAgent to reduce avoidable latency on models that expose a reasoning or thinking mode.
 

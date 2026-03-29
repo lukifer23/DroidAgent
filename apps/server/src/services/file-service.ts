@@ -6,6 +6,7 @@ import path from "node:path";
 import { FileContentSchema, WorkspaceEntrySchema } from "@droidagent/shared";
 
 import { appStateService } from "./app-state-service.js";
+import { openclawService } from "./openclaw-service.js";
 import { performanceService } from "./performance-service.js";
 
 const MAX_PATH_COMPONENTS = 64;
@@ -47,6 +48,10 @@ function toPosixRelative(root: string, absolutePath: string): string {
 
 function mimeTypeFor(target: string): string {
   return MIME_TYPES[path.extname(target).toLowerCase()] ?? "text/plain";
+}
+
+function isFirstClassMemoryPath(target: string): boolean {
+  return target === "MEMORY.md" || target === "PREFERENCES.md";
 }
 
 export class FileConflictError extends Error {
@@ -205,7 +210,11 @@ export class FileService {
       target
     });
     try {
-      const { absolutePath, clientPath } = await this.resolveWithinRoot(target);
+      const normalizedTarget = normalizeClientPath(target);
+      if (isFirstClassMemoryPath(normalizedTarget)) {
+        await openclawService.prepareWorkspaceContext();
+      }
+      const { absolutePath, clientPath } = await this.resolveWithinRoot(normalizedTarget);
       const stat = await fs.stat(absolutePath);
       if (stat.isDirectory()) {
         throw new Error("Target is a directory, not a file.");

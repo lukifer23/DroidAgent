@@ -6,13 +6,19 @@ import { desc, eq } from "drizzle-orm";
 
 import {
   MemoryDraftApplyResultSchema,
+  MemoryDraftApplyRequestSchema,
   MemoryDraftCreateRequestSchema,
+  MemoryDraftDismissRequestSchema,
+  MemoryDraftDismissResultSchema,
   MemoryDraftSchema,
   MemoryDraftUpdateRequestSchema,
   nowIso,
   type MemoryDraft,
   type MemoryDraftApplyResult,
+  type MemoryDraftApplyRequest,
   type MemoryDraftCreateRequest,
+  type MemoryDraftDismissRequest,
+  type MemoryDraftDismissResult,
   type MemoryDraftUpdateRequest,
 } from "@droidagent/shared";
 
@@ -113,7 +119,59 @@ export class MemoryDraftNotFoundError extends Error {}
 
 export class MemoryDraftStateError extends Error {}
 
+export class MemoryDraftStaleError extends Error {}
+
 export class MemoryDraftService {
+  private buildMemoryPaths(status: Awaited<ReturnType<typeof openclawService.memoryStatus>>) {
+    return {
+      effectiveWorkspaceRoot: status.effectiveWorkspaceRoot,
+      memoryFilePath: status.memoryFilePath,
+      todayNotePath: status.todayNotePath,
+    };
+  }
+
+  private assertPendingDraft(
+    draft: MemoryDraft,
+    action: "edit" | "apply" | "dismiss",
+  ): void {
+    if (draft.status === "pending") {
+      return;
+    }
+
+    if (action === "apply" && draft.status === "dismissed") {
+      throw new MemoryDraftStateError(
+        "A dismissed memory draft cannot be applied.",
+      );
+    }
+
+    if (action === "dismiss" && draft.status === "applied") {
+      throw new MemoryDraftStateError(
+        "An applied memory draft cannot be dismissed.",
+      );
+    }
+
+    throw new MemoryDraftStateError(
+      action === "edit"
+        ? "Only pending memory drafts can be edited."
+        : action === "apply"
+          ? "Only pending memory drafts can be applied."
+          : "Only pending memory drafts can be dismissed.",
+    );
+  }
+
+  private assertExpectedRevision(
+    draft: MemoryDraft,
+    expectedUpdatedAt: string,
+  ): void {
+    if (draft.updatedAt === expectedUpdatedAt) {
+      return;
+    }
+
+    throw new MemoryDraftStaleError(
+      "This memory draft changed since it was loaded. Reload the latest draft state before trying again.",
+    );
+  }
+
   async listDrafts(limit = 20): Promise<MemoryDraft[]> {
     const records = await db.query.memoryDrafts.findMany({
       orderBy: (drafts) => [desc(drafts.updatedAt)],
@@ -163,13 +221,10 @@ export class MemoryDraftService {
     input: MemoryDraftUpdateRequest,
   ): Promise<MemoryDraft> {
     const draft = await this.getDraft(draftId);
-    if (draft.status !== "pending") {
-      throw new MemoryDraftStateError(
-        "Only pending memory drafts can be edited.",
-      );
-    }
+    this.assertPendingDraft(draft, "edit");
 
     const parsed = MemoryDraftUpdateRequestSchema.parse(input);
+    this.assertExpectedRevision(draft, parsed.expectedUpdatedAt);
     await db
       .update(schema.memoryDrafts)
       .set({
@@ -186,13 +241,20 @@ export class MemoryDraftService {
     return await this.getDraft(draft.id);
   }
 
-  async dismissDraft(draftId: string): Promise<MemoryDraft> {
+  async dismissDraft(
+    draftId: string,
+    input: MemoryDraftDismissRequest,
+  ): Promise<MemoryDraftDismissResult> {
+    const parsed = MemoryDraftDismissRequestSchema.parse(input);
     const draft = await this.getDraft(draftId);
-    if (draft.status !== "pending") {
-      throw new MemoryDraftStateError(
-        "Only pending memory drafts can be dismissed.",
-      );
+    if (draft.status === "dismissed") {
+      return MemoryDraftDismissResultSchema.parse({
+        draft,
+        outcome: "alreadyDismissed",
+      });
     }
+    this.assertPendingDraft(draft, "dismiss");
+    this.assertExpectedRevision(draft, parsed.expectedUpdatedAt);
     const timestamp = nowIso();
     await db
       .update(schema.memoryDrafts)
@@ -203,31 +265,42 @@ export class MemoryDraftService {
         lastError: null,
       })
       .where(eq(schema.memoryDrafts.id, draft.id));
-    return await this.getDraft(draft.id);
+    return MemoryDraftDismissResultSchema.parse({
+      draft: await this.getDraft(draft.id),
+      outcome: "dismissed",
+    });
   }
 
-  async applyDraft(draftId: string): Promise<MemoryDraftApplyResult> {
+  async applyDraft(
+    draftId: string,
+    input: MemoryDraftApplyRequest,
+  ): Promise<MemoryDraftApplyResult> {
+    const parsed = MemoryDraftApplyRequestSchema.parse(input);
     const draft = await this.getDraft(draftId);
-    if (draft.status !== "pending") {
-      throw new MemoryDraftStateError(
-        "Only pending memory drafts can be applied.",
-      );
+    await openclawService.prepareWorkspaceContext();
+    const currentMemoryStatus = await openclawService.memoryStatus();
+    if (draft.status === "applied") {
+      return MemoryDraftApplyResultSchema.parse({
+        draft,
+        outcome: "alreadyApplied",
+        memory: this.buildMemoryPaths(currentMemoryStatus),
+        reindexMode: null,
+      });
     }
+    this.assertPendingDraft(draft, "apply");
+    this.assertExpectedRevision(draft, parsed.expectedUpdatedAt);
 
     const metric = performanceService.start("server", "memory.draft.apply", {
       target: draft.target,
       sourceKind: draft.sourceKind,
     });
 
-    await openclawService.prepareWorkspaceContext();
-    const memoryStatus = await openclawService.memoryStatus();
-
     const targetPath =
       draft.target === "preferences"
-        ? path.join(memoryStatus.effectiveWorkspaceRoot, "PREFERENCES.md")
+        ? path.join(currentMemoryStatus.effectiveWorkspaceRoot, "PREFERENCES.md")
         : draft.target === "todayNote"
           ? await openclawService.ensureTodayMemoryNote()
-          : memoryStatus.memoryFilePath;
+          : currentMemoryStatus.memoryFilePath;
     const existingContent = await readUtf8OrEmpty(targetPath);
     const nextContent = appendMarkdownBlock(
       existingContent,
@@ -268,16 +341,14 @@ export class MemoryDraftService {
     metric.finish({
       target: appliedDraft.target,
       reindexMode,
+      outcome: reindexError ? "warn" : "ok",
       reindexOutcome: reindexError ? "warning" : "ok",
     });
 
     return MemoryDraftApplyResultSchema.parse({
       draft: appliedDraft,
-      memory: {
-        effectiveWorkspaceRoot: memoryStatus.effectiveWorkspaceRoot,
-        memoryFilePath: memoryStatus.memoryFilePath,
-        todayNotePath: memoryStatus.todayNotePath,
-      },
+      outcome: "applied",
+      memory: this.buildMemoryPaths(currentMemoryStatus),
       reindexMode,
     });
   }

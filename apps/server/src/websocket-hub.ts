@@ -14,6 +14,7 @@ import { memoryDraftService } from "./services/memory-draft-service.js";
 import { openclawService } from "./services/openclaw-service.js";
 import { performanceService } from "./services/performance-service.js";
 import { runtimeService } from "./services/runtime-service.js";
+import { sessionLifecycleService } from "./services/session-lifecycle-service.js";
 import { hostPressureService } from "./services/host-pressure-service.js";
 import { startupService } from "./services/startup-service.js";
 import { terminalService } from "./services/terminal-service.js";
@@ -294,7 +295,7 @@ export class WebsocketHub {
     this.broadcast(
       ServerEventSchema.parse({
         type: "sessions.updated",
-        payload: await harnessService.listSessions()
+        payload: await sessionLifecycleService.listActiveSessions()
       })
     );
   }
@@ -389,6 +390,9 @@ export class WebsocketHub {
 
   async pushChatHistory(sessionId: string): Promise<void> {
     const messages = await harnessService.loadHistory(sessionId);
+    await sessionLifecycleService.observeSession(sessionId, {
+      messages,
+    });
     this.broadcast(
       ServerEventSchema.parse({
         type: "chat.history",
@@ -425,6 +429,9 @@ export class WebsocketHub {
       const command = ClientCommandSchema.parse(JSON.parse(raw));
       if (command.type === "chat.history") {
         const messages = await harnessService.loadHistory(command.payload.sessionId);
+        await sessionLifecycleService.observeSession(command.payload.sessionId, {
+          messages,
+        });
         send(
           ws,
           ServerEventSchema.parse({
@@ -442,18 +449,15 @@ export class WebsocketHub {
         await maintenanceService.assertAllowsNewWork("chat");
         await hostPressureService.assertAllowsAgentRuns("chat");
         const { sessionId, text, attachments } = command.payload;
-        const enqueueMetric = performanceService.start("server", "chat.send.enqueue", {
+        await sessionLifecycleService.observeSession(sessionId, {
+          restore: true,
+        });
+        const submitToAcceptedMetric = performanceService.start("server", "chat.send.submitToAccepted", {
           transport: "ws",
           sessionId
         });
-        const firstDeltaMetric = performanceService.start("server", "chat.stream.firstDeltaRelay", {
-          transport: "ws",
-          sessionId
-        });
-        const streamMetric = performanceService.start("server", "chat.stream.completeRelay", {
-          transport: "ws",
-          sessionId
-        });
+        let acceptedToFirstDeltaMetric: ReturnType<typeof performanceService.start> | null = null;
+        let acceptedToCompleteMetric: ReturnType<typeof performanceService.start> | null = null;
         let firstDeltaRecorded = false;
         let finished = false;
         let runId = "";
@@ -470,22 +474,35 @@ export class WebsocketHub {
             });
           },
           onDelta: async (delta) => {
+            const isFirstDelta = !firstDeltaRecorded;
             if (!firstDeltaRecorded) {
               firstDeltaRecorded = true;
-              firstDeltaMetric.finish();
+              acceptedToFirstDeltaMetric?.finish({
+                outcome: "ok"
+              });
             }
+            const forwardMetric = isFirstDelta
+              ? performanceService.start("server", "chat.stream.firstDeltaForward", {
+                  transport: "ws",
+                  sessionId
+                })
+              : null;
             this.publishChatDelta(sessionId, runId, delta);
+            forwardMetric?.finish({
+              outcome: "ok",
+              chars: delta.length
+            });
           },
           onDone: async () => {
             if (!firstDeltaRecorded) {
               firstDeltaRecorded = true;
-              firstDeltaMetric.finish({
+              acceptedToFirstDeltaMetric?.finish({
                 outcome: "no-delta"
               });
             }
             if (!finished) {
               finished = true;
-              streamMetric.finish({
+              acceptedToCompleteMetric?.finish({
                 outcome: "done"
               });
             }
@@ -496,13 +513,13 @@ export class WebsocketHub {
           onError: async (message) => {
             if (!firstDeltaRecorded) {
               firstDeltaRecorded = true;
-              firstDeltaMetric.finish({
-                outcome: "no-delta"
+              acceptedToFirstDeltaMetric?.finish({
+                outcome: "error"
               });
             }
             if (!finished) {
               finished = true;
-              streamMetric.finish({
+              acceptedToCompleteMetric?.finish({
                 outcome: "error"
               });
             }
@@ -512,7 +529,17 @@ export class WebsocketHub {
           }
         });
         runId = run.runId;
-        enqueueMetric.finish();
+        submitToAcceptedMetric.finish({
+          outcome: "ok"
+        });
+        acceptedToFirstDeltaMetric = performanceService.start("server", "chat.stream.acceptedToFirstDelta", {
+          transport: "ws",
+          sessionId
+        });
+        acceptedToCompleteMetric = performanceService.start("server", "chat.stream.acceptedToCompleteRelay", {
+          transport: "ws",
+          sessionId
+        });
         this.publishChatRun({
           sessionId,
           runId,

@@ -14,6 +14,7 @@ import type {
   ChatAttachment,
   ChatMessage,
   ChatMessagePart,
+  DashboardState,
   HostPressureContributor,
   HostPressureRecoveryResult,
   JobRecord,
@@ -36,6 +37,12 @@ import { useStreamingRuns } from "../lib/chat-stream-store";
 import { formatTokenBudget } from "../lib/formatters";
 
 const TERMINAL_PREFILL_STORAGE_KEY = "droidagent-terminal-prefill";
+
+interface ExpandedImageState {
+  src: string;
+  alt: string;
+  label?: string;
+}
 
 function roleLabel(role: ChatMessage["role"]): string {
   if (role === "tool") {
@@ -99,22 +106,6 @@ function formatHostRatio(value: number | null | undefined): string {
     return "unknown";
   }
   return `${Math.round(value * 100)}%`;
-}
-
-function createFreshSessionSummary(sessionId?: string): SessionSummary {
-  const createdAt = new Date().toISOString();
-  return {
-    id: sessionId ?? `web:fresh:${Date.now().toString(36)}`,
-    title: "Fresh Operator Chat",
-    scope: "web",
-    updatedAt: createdAt,
-    unreadCount: 0,
-    lastMessagePreview: "Fresh chat ready. Type when you are ready to retry.",
-  };
-}
-
-function isFreshSessionId(sessionId: string | null | undefined): boolean {
-  return typeof sessionId === "string" && sessionId.startsWith("web:fresh:");
 }
 
 function renderLogTail(value: string, maxChars = 8_000): string {
@@ -228,28 +219,33 @@ function MarkdownCodeBlock({
         <code className={className}>{text}</code>
       </pre>
       {runnableCommand && onRunCommand && onOpenInTerminal ? (
-        <div className="message-action-row">
-          <button
-            type="button"
-            className="secondary"
-            disabled={!commandActionsEnabled}
-            title={
-              commandActionsEnabled
-                ? undefined
-                : (commandActionDisabledReason ?? undefined)
-            }
-            onClick={() => onRunCommand(runnableCommand)}
-          >
-            Run in Chat
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => onOpenInTerminal(runnableCommand)}
-          >
-            Open in Terminal
-          </button>
-        </div>
+        <>
+          <div className="message-action-row">
+            <button
+              type="button"
+              className="secondary"
+              disabled={!commandActionsEnabled}
+              title={
+                commandActionsEnabled
+                  ? undefined
+                  : (commandActionDisabledReason ?? undefined)
+              }
+              onClick={() => onRunCommand(runnableCommand)}
+            >
+              Run in Chat
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => onOpenInTerminal(runnableCommand)}
+            >
+              Open in Terminal
+            </button>
+          </div>
+          {!commandActionsEnabled && commandActionDisabledReason ? (
+            <p className="message-action-note">{commandActionDisabledReason}</p>
+          ) : null}
+        </>
       ) : null}
     </div>
   );
@@ -259,12 +255,14 @@ function ChatMarkdown({
   text,
   onRunCommand,
   onOpenInTerminal,
+  onOpenImage,
   commandActionsEnabled = true,
   commandActionDisabledReason,
 }: {
   text: string;
   onRunCommand?: ((command: string) => void) | null | undefined;
   onOpenInTerminal?: ((command: string) => void) | null | undefined;
+  onOpenImage?: ((image: ExpandedImageState) => void) | null | undefined;
   commandActionsEnabled?: boolean;
   commandActionDisabledReason?: string | null | undefined;
 }) {
@@ -295,6 +293,29 @@ function ChatMarkdown({
         pre({ children }) {
           return <>{children}</>;
         },
+        img(props) {
+          const src = props.src ?? "";
+          const alt = props.alt ?? "Chat image";
+          if (!src) {
+            return null;
+          }
+          return (
+            <button
+              type="button"
+              className="message-inline-image"
+              onClick={() =>
+                onOpenImage?.({
+                  src,
+                  alt,
+                  label: alt,
+                })
+              }
+            >
+              <img alt={alt} loading="lazy" src={src} />
+              <span>Expand image</span>
+            </button>
+          );
+        },
       }}
     >
       {text}
@@ -302,22 +323,30 @@ function ChatMarkdown({
   );
 }
 
-function StreamingMarkdown({ text }: { text: string }) {
+function StreamingMarkdown({
+  text,
+  onOpenImage,
+}: {
+  text: string;
+  onOpenImage?: ((image: ExpandedImageState) => void) | null | undefined;
+}) {
   if (!text.includes("\n") && !/[`*_#[\]-]/.test(text)) {
     return <p>{text}</p>;
   }
 
   return (
     <div className="message-markdown">
-      <ChatMarkdown text={text} />
+      <ChatMarkdown onOpenImage={onOpenImage} text={text} />
     </div>
   );
 }
 
 function AttachmentPart({
   attachments,
+  onOpenImage,
 }: {
   attachments: ChatAttachment[];
+  onOpenImage?: ((image: ExpandedImageState) => void) | null | undefined;
 }) {
   const imageAttachments = attachments.filter(
     (attachment) => attachment.kind === "image",
@@ -331,16 +360,21 @@ function AttachmentPart({
       {imageAttachments.length > 0 ? (
         <div className="attachment-image-grid">
           {imageAttachments.map((attachment) => (
-            <a
+            <button
               key={attachment.id}
+              type="button"
               className="attachment-image-card"
-              href={attachment.url}
-              rel="noreferrer"
-              target="_blank"
+              onClick={() =>
+                onOpenImage?.({
+                  src: attachment.url,
+                  alt: attachment.name,
+                  label: attachment.name,
+                })
+              }
             >
               <img alt={attachment.name} loading="lazy" src={attachment.url} />
               <span>{attachment.name}</span>
-            </a>
+            </button>
           ))}
         </div>
       ) : null}
@@ -405,6 +439,7 @@ const MessagePartView = memo(function MessagePartView({
   onResolveApproval,
   onRunCommand,
   onOpenInTerminal,
+  onOpenImage,
   commandActionsEnabled,
   commandActionDisabledReason,
 }: {
@@ -413,6 +448,7 @@ const MessagePartView = memo(function MessagePartView({
   onResolveApproval: (approvalId: string, resolution: "approved" | "denied") => void;
   onRunCommand: (command: string) => void;
   onOpenInTerminal: (command: string) => void;
+  onOpenImage: (image: ExpandedImageState) => void;
   commandActionsEnabled: boolean;
   commandActionDisabledReason?: string | null | undefined;
 }) {
@@ -422,6 +458,7 @@ const MessagePartView = memo(function MessagePartView({
         <ChatMarkdown
           commandActionDisabledReason={commandActionDisabledReason}
           commandActionsEnabled={commandActionsEnabled}
+          onOpenImage={onOpenImage}
           onOpenInTerminal={onOpenInTerminal}
           onRunCommand={onRunCommand}
           text={part.text}
@@ -431,7 +468,12 @@ const MessagePartView = memo(function MessagePartView({
   }
 
   if (part.type === "attachments") {
-    return <AttachmentPart attachments={part.attachments} />;
+    return (
+      <AttachmentPart
+        attachments={part.attachments}
+        onOpenImage={onOpenImage}
+      />
+    );
   }
 
   if (part.type === "code_block") {
@@ -539,7 +581,7 @@ function MessageMemoryActions({
 }) {
   return (
     <details className="message-utility-tray">
-      <summary>Save</summary>
+      <summary title="Create a memory draft from this message">Save memory</summary>
       <div className="message-action-row compact">
         <button type="button" className="secondary" onClick={onAddMemory}>
           Memory
@@ -606,21 +648,28 @@ export function ChatScreen() {
   const [commandRelayError, setCommandRelayError] = useState<string | null>(
     null,
   );
+  const [expandedImage, setExpandedImage] = useState<ExpandedImageState | null>(
+    null,
+  );
   const relayedCommandJobsRef = useRef<Set<string>>(new Set());
 
   const dashboardSessions = dashboard?.sessions ?? [];
+  const archivedSessionsQuery = useQuery({
+    queryKey: ["sessions", "archived"],
+    queryFn: () => api<SessionSummary[]>("/api/sessions/archived"),
+    enabled: Boolean(authQuery.data?.user),
+    staleTime: 15_000,
+  });
   const approvals = dashboard?.approvals ?? [];
   const providers = dashboard?.providers ?? [];
   const runtimes = dashboard?.runtimes ?? [];
   const jobs = dashboard?.jobs ?? [];
   const sessions = dashboardSessions;
-  const selectedDashboardSession =
-    sessions.find((session) => session.id === selectedSessionId) ?? null;
+  const archivedSessions = archivedSessionsQuery.data ?? [];
   const activeSession =
-    selectedDashboardSession ??
-    (isFreshSessionId(selectedSessionId)
-      ? createFreshSessionSummary(selectedSessionId)
-      : sessions[0]);
+    sessions.find((session) => session.id === selectedSessionId) ??
+    sessions[0] ??
+    null;
   const selectedSessionKey = activeSession?.id ?? selectedSessionId;
   const activeRun = selectedSessionKey ? runStates[selectedSessionKey] : null;
   const streaming = selectedSessionKey
@@ -653,18 +702,7 @@ export function ChatScreen() {
     (draft) => draft.status === "pending",
   ).length;
   const commandJob = jobs.find((job) => job.id === commandJobId) ?? null;
-  const isLocalSession =
-    isFreshSessionId(selectedSessionKey) && !selectedDashboardSession;
-  const sessionOptions = useMemo(() => {
-    const next = [...sessions];
-    if (
-      activeSession &&
-      !next.some((session) => session.id === activeSession.id)
-    ) {
-      next.unshift(activeSession);
-    }
-    return next;
-  }, [activeSession, sessions]);
+  const sessionOptions = useMemo(() => [...sessions], [sessions]);
   const showSessionSwitcher = sessionOptions.length > 1;
   const showTranscriptAlerts = maintenanceActive;
   const approvalsById = useMemo(
@@ -679,6 +717,30 @@ export function ChatScreen() {
     [hostPressure?.contributors],
   );
 
+  function updateDashboardSessions(
+    updater: (sessions: SessionSummary[]) => SessionSummary[],
+  ) {
+    queryClient.setQueryData<DashboardState | undefined>(
+      ["dashboard"],
+      (current) =>
+        current
+          ? {
+              ...current,
+              sessions: updater(current.sessions),
+            }
+          : current,
+    );
+  }
+
+  function updateArchivedSessions(
+    updater: (sessions: SessionSummary[]) => SessionSummary[],
+  ) {
+    queryClient.setQueryData<SessionSummary[]>(
+      ["sessions", "archived"],
+      (current) => updater(current ?? []),
+    );
+  }
+
   const historyQuery = useQuery({
     queryKey: ["sessions", selectedSessionKey, "messages"],
     queryFn: () =>
@@ -688,6 +750,13 @@ export function ChatScreen() {
     enabled: Boolean(authQuery.data?.user && selectedSessionKey),
     staleTime: 15_000,
   });
+  const cachedMessages = selectedSessionKey
+    ? (queryClient.getQueryData<ChatMessage[]>([
+        "sessions",
+        selectedSessionKey,
+        "messages",
+      ]) ?? [])
+    : [];
 
   const commandJobOutputQuery = useQuery({
     queryKey: ["jobs", commandJobId, "output"],
@@ -705,7 +774,10 @@ export function ChatScreen() {
     staleTime: 1_000,
   });
 
-  const messages = useMemo(() => historyQuery.data ?? [], [historyQuery.data]);
+  const messages = useMemo(
+    () => historyQuery.data ?? cachedMessages,
+    [cachedMessages, historyQuery.data],
+  );
   const liveMetricMap = useMemo(
     () => new Map(clientPerformanceSnapshot.metrics.map((metric) => [metric.name, metric])),
     [clientPerformanceSnapshot.metrics],
@@ -987,6 +1059,29 @@ export function ChatScreen() {
     void navigate({ to: "/terminal" });
   }
 
+  async function handleSelectSession(sessionId: string) {
+    if (!sessionId || sessionId === selectedSessionKey) {
+      return;
+    }
+    if (
+      !queryClient.getQueryData<ChatMessage[]>([
+        "sessions",
+        sessionId,
+        "messages",
+      ])
+    ) {
+      await queryClient.prefetchQuery({
+        queryKey: ["sessions", sessionId, "messages"],
+        queryFn: () =>
+          api<ChatMessage[]>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
+          ),
+        staleTime: 15_000,
+      });
+    }
+    setSelectedSessionId(sessionId);
+  }
+
   async function handleRecoverHostPressure(params?: {
     abortSessionRun?: boolean;
     cancelActiveJobs?: boolean;
@@ -1014,16 +1109,128 @@ export function ChatScreen() {
     return response;
   }
 
-  function handleStartFreshSession() {
-    const freshSession = createFreshSessionSummary();
-    setSelectedSessionId(freshSession.id);
-    setChatInput("");
-    setPendingAttachments([]);
-    setCommandJobId(null);
+  async function handleStartFreshSession() {
+    const freshSession = await postJson<SessionSummary>("/api/sessions", {});
+    updateDashboardSessions((currentSessions) => {
+      const next = [
+        freshSession,
+        ...currentSessions.filter((session) => session.id !== freshSession.id),
+      ];
+      return next;
+    });
     queryClient.setQueryData<ChatMessage[]>(
       ["sessions", freshSession.id, "messages"],
       [],
     );
+    setSelectedSessionId(freshSession.id);
+    setChatInput("");
+    setPendingAttachments([]);
+    setCommandJobId(null);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+      queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
+      queryClient.prefetchQuery({
+        queryKey: ["sessions", freshSession.id, "messages"],
+        queryFn: () =>
+          api<ChatMessage[]>(
+            `/api/sessions/${encodeURIComponent(freshSession.id)}/messages`,
+          ),
+        staleTime: 15_000,
+      }),
+    ]);
+  }
+
+  async function handleCloseCurrentSession() {
+    if (!selectedSessionKey) {
+      return;
+    }
+    const closingSessionId = selectedSessionKey;
+    const siblingSession =
+      sessionOptions.find((session) => session.id !== closingSessionId) ?? null;
+    let replacementSession = siblingSession;
+
+    if (!replacementSession) {
+      replacementSession = await postJson<SessionSummary>("/api/sessions", {});
+      queryClient.setQueryData<ChatMessage[]>(
+        ["sessions", replacementSession.id, "messages"],
+        [],
+      );
+      updateDashboardSessions((currentSessions) => [
+        replacementSession!,
+        ...currentSessions.filter(
+          (session) =>
+            session.id !== closingSessionId &&
+            session.id !== replacementSession!.id,
+        ),
+      ]);
+    } else {
+      updateDashboardSessions((currentSessions) =>
+        currentSessions.filter((session) => session.id !== closingSessionId),
+      );
+    }
+
+    setSelectedSessionId(replacementSession.id);
+    setChatInput("");
+    setPendingAttachments([]);
+    setCommandJobId(null);
+    setCommandRelaySessionId(null);
+    setCommandRelayStatus("idle");
+    setCommandRelayError(null);
+
+    const archivedSession = await postJson<SessionSummary>(
+      `/api/sessions/${encodeURIComponent(closingSessionId)}/archive`,
+      {},
+    );
+    updateDashboardSessions((currentSessions) =>
+      currentSessions.filter((session) => session.id !== closingSessionId),
+    );
+    updateArchivedSessions((currentSessions) => [
+      archivedSession,
+      ...currentSessions.filter((session) => session.id !== closingSessionId),
+    ]);
+    queryClient.removeQueries({
+      queryKey: ["sessions", closingSessionId, "messages"],
+      exact: true,
+    });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+      queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
+      queryClient.prefetchQuery({
+        queryKey: ["sessions", replacementSession.id, "messages"],
+        queryFn: () =>
+          api<ChatMessage[]>(
+            `/api/sessions/${encodeURIComponent(replacementSession.id)}/messages`,
+          ),
+        staleTime: 15_000,
+      }),
+    ]);
+  }
+
+  async function handleRestoreSession(sessionId: string) {
+    const restored = await postJson<SessionSummary>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/restore`,
+      {},
+    );
+    updateDashboardSessions((currentSessions) => [
+      restored,
+      ...currentSessions.filter((session) => session.id !== restored.id),
+    ]);
+    updateArchivedSessions((currentSessions) =>
+      currentSessions.filter((session) => session.id !== restored.id),
+    );
+    setSelectedSessionId(restored.id);
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+      queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
+      queryClient.prefetchQuery({
+        queryKey: ["sessions", restored.id, "messages"],
+        queryFn: () =>
+          api<ChatMessage[]>(
+            `/api/sessions/${encodeURIComponent(restored.id)}/messages`,
+          ),
+        staleTime: 15_000,
+      }),
+    ]);
   }
 
   async function handleSendChat() {
@@ -1127,7 +1334,8 @@ export function ChatScreen() {
   }
 
   return (
-    <section className="operator-chat-shell">
+    <>
+      <section className="operator-chat-shell">
       <article className="operator-chat-overview panel-card compact">
         <div className="operator-chat-overview-copy">
           <div className="journey-kicker">Live operator session</div>
@@ -1234,9 +1442,7 @@ export function ChatScreen() {
               messages.length === 0 &&
               !streaming ? (
                 <article className="panel-card compact">
-                  {isLocalSession
-                    ? "Fresh session ready. Type a prompt, attach files, or wait for host pressure cleanup to finish."
-                    : "This session is empty. Start with a prompt or attach files."}
+                  This chat is empty. Start with a prompt, attach files, or restore an archived chat from the rail.
                 </article>
               ) : null}
               {messages.map((message) => (
@@ -1272,7 +1478,7 @@ export function ChatScreen() {
                             (approvals.length === 1 ? approvals[0]! : null))
                           : null;
 
-                      return (
+                  return (
                         <MessagePartView
                           key={`${message.id}-${part.type}-${index}`}
                           part={part}
@@ -1291,6 +1497,9 @@ export function ChatScreen() {
                           }}
                           onOpenInTerminal={(command) => {
                             handleOpenInTerminal(command);
+                          }}
+                          onOpenImage={(image) => {
+                            setExpandedImage(image);
                           }}
                           onResolveApproval={(approvalId, resolution) => {
                             void runAction(async () => {
@@ -1340,6 +1549,9 @@ export function ChatScreen() {
                   </div>
                   <div className="message-markdown">
                     <StreamingMarkdown
+                      onOpenImage={(image) => {
+                        setExpandedImage(image);
+                      }}
                       text={
                         streaming.text ||
                         "Working through the live OpenClaw run..."
@@ -1372,7 +1584,9 @@ export function ChatScreen() {
                   <span>Active</span>
                   <select
                     value={selectedSessionKey ?? ""}
-                    onChange={(event) => setSelectedSessionId(event.target.value)}
+                    onChange={(event) => {
+                      void handleSelectSession(event.target.value);
+                    }}
                   >
                     {sessionOptions.map((session) => (
                       <option key={session.id} value={session.id}>
@@ -1391,11 +1605,63 @@ export function ChatScreen() {
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => handleStartFreshSession()}
+                  onClick={() =>
+                    void runAction(async () => {
+                      await handleStartFreshSession();
+                    }, "New chat ready.")
+                  }
                 >
-                  Fresh chat
+                  New chat
+                </button>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() =>
+                    void runAction(async () => {
+                      await handleCloseCurrentSession();
+                    }, "Chat closed.")
+                  }
+                >
+                  Close chat
                 </button>
               </div>
+            </section>
+
+            <section className="operator-side-module">
+              <div className="operator-side-module-head">
+                <strong>Archived chats</strong>
+                <span>{archivedSessions.length}</span>
+              </div>
+              {archivedSessions.length > 0 ? (
+                <div className="operator-session-archive-list">
+                  {archivedSessions.slice(0, 6).map((session) => (
+                    <div
+                      key={session.id}
+                      className="operator-session-archive-card"
+                    >
+                      <div>
+                        <strong>{session.title}</strong>
+                        <span>{session.lastMessagePreview || "No preview yet"}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="secondary"
+                        onClick={() =>
+                          void runAction(async () => {
+                            await handleRestoreSession(session.id);
+                          }, "Archived chat restored.")
+                        }
+                      >
+                        Restore
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="operator-side-copy">
+                  Closed chats stay here until you restore them.
+                </p>
+              )}
             </section>
 
             <section className="operator-side-module">
@@ -1721,6 +1987,36 @@ export function ChatScreen() {
           </div>
         </div>
       </form>
-    </section>
+      </section>
+      {expandedImage ? (
+        <div
+          className="image-lightbox"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setExpandedImage(null)}
+        >
+          <div
+            className="image-lightbox-card"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="image-lightbox-head">
+              <strong>{expandedImage.label ?? expandedImage.alt}</strong>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setExpandedImage(null)}
+              >
+                Close
+              </button>
+            </div>
+            <img
+              alt={expandedImage.alt}
+              className="image-lightbox-image"
+              src={expandedImage.src}
+            />
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }

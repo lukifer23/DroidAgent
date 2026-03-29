@@ -12,7 +12,9 @@ import {
   HostPressureRecoveryRequestSchema,
   HostPressureRecoveryResultSchema,
   MaintenanceRunRequestSchema,
+  MemoryDraftApplyRequestSchema,
   MemoryDraftCreateRequestSchema,
+  MemoryDraftDismissRequestSchema,
   MemoryDraftUpdateRequestSchema,
 } from "@droidagent/shared";
 
@@ -39,6 +41,7 @@ import {
 import {
   MemoryDraftNotFoundError,
   MemoryDraftStateError,
+  MemoryDraftStaleError,
   memoryDraftService,
 } from "./services/memory-draft-service.js";
 import { openclawService } from "./services/openclaw-service.js";
@@ -50,6 +53,7 @@ import {
   hostPressureService,
 } from "./services/host-pressure-service.js";
 import { quickstartService } from "./services/quickstart-service.js";
+import { sessionLifecycleService } from "./services/session-lifecycle-service.js";
 import { signalService } from "./services/signal-service.js";
 import { startupService } from "./services/startup-service.js";
 import { terminalService } from "./services/terminal-service.js";
@@ -73,8 +77,26 @@ type AppVariables = {
 const app = new Hono<{ Variables: AppVariables }>();
 app.use("*", logger());
 app.use("/api/*", cors());
+
+function isExpectedAppError(error: unknown): boolean {
+  return (
+    error instanceof FileConflictError ||
+    error instanceof AttachmentValidationError ||
+    error instanceof AttachmentNotFoundError ||
+    error instanceof MaintenanceBlockedError ||
+    error instanceof HostPressureBlockedError ||
+    error instanceof MaintenanceConflictError ||
+    error instanceof MaintenanceLocalhostRequiredError ||
+    error instanceof MemoryDraftNotFoundError ||
+    error instanceof MemoryDraftStateError ||
+    error instanceof MemoryDraftStaleError
+  );
+}
+
 app.onError((error, c) => {
-  console.error(error);
+  if (!isExpectedAppError(error)) {
+    console.error(error);
+  }
   if (error instanceof FileConflictError) {
     return c.json(
       {
@@ -98,7 +120,8 @@ app.onError((error, c) => {
   }
   if (
     error instanceof MaintenanceConflictError ||
-    error instanceof MemoryDraftStateError
+    error instanceof MemoryDraftStateError ||
+    error instanceof MemoryDraftStaleError
   ) {
     return c.json({ error: error.message }, 409);
   }
@@ -217,55 +240,76 @@ function withMeasuredStreamRelay(
     }): void | Promise<void>;
   },
 ) {
-  const enqueueMetric = performanceService.start(
+  const submitToAcceptedMetric = performanceService.start(
     "server",
-    "chat.send.enqueue",
+    "chat.send.submitToAccepted",
     {
       transport,
       sessionId,
     },
   );
-  const firstDeltaMetric = performanceService.start(
-    "server",
-    "chat.stream.firstDeltaRelay",
-    {
-      transport,
-      sessionId,
-    },
-  );
-  const streamMetric = performanceService.start(
-    "server",
-    "chat.stream.completeRelay",
-    {
-      transport,
-      sessionId,
-    },
-  );
+  let acceptedToFirstDeltaMetric:
+    | ReturnType<typeof performanceService.start>
+    | null = null;
+  let acceptedToCompleteMetric:
+    | ReturnType<typeof performanceService.start>
+    | null = null;
   let firstDeltaRecorded = false;
   let finished = false;
 
   return {
     markAccepted() {
-      enqueueMetric.finish();
+      submitToAcceptedMetric.finish({
+        outcome: "ok",
+      });
+      acceptedToFirstDeltaMetric = performanceService.start(
+        "server",
+        "chat.stream.acceptedToFirstDelta",
+        {
+          transport,
+          sessionId,
+        },
+      );
+      acceptedToCompleteMetric = performanceService.start(
+        "server",
+        "chat.stream.acceptedToCompleteRelay",
+        {
+          transport,
+          sessionId,
+        },
+      );
     },
     relay: {
       onDelta: async (delta: string) => {
+        const isFirstDelta = !firstDeltaRecorded;
         if (!firstDeltaRecorded) {
           firstDeltaRecorded = true;
-          firstDeltaMetric.finish();
+          acceptedToFirstDeltaMetric?.finish({
+            outcome: "ok",
+          });
         }
+        const forwardMetric = isFirstDelta
+          ? performanceService.start("server", "chat.stream.firstDeltaForward", {
+              transport,
+              sessionId,
+            })
+          : null;
         await relay.onDelta(delta);
+        forwardMetric?.finish({
+          outcome: "ok",
+          chars: delta.length,
+        });
       },
       onDone: async () => {
         if (!firstDeltaRecorded) {
           firstDeltaRecorded = true;
-          firstDeltaMetric.finish({
+          acceptedToFirstDeltaMetric?.finish({
             outcome: "no-delta",
           });
         }
         if (!finished) {
           finished = true;
-          streamMetric.finish({
+          acceptedToCompleteMetric?.finish({
             outcome: "done",
           });
         }
@@ -274,13 +318,13 @@ function withMeasuredStreamRelay(
       onError: async (message: string) => {
         if (!firstDeltaRecorded) {
           firstDeltaRecorded = true;
-          firstDeltaMetric.finish({
-            outcome: "no-delta",
+          acceptedToFirstDeltaMetric?.finish({
+            outcome: "error",
           });
         }
         if (!finished) {
           finished = true;
-          streamMetric.finish({
+          acceptedToCompleteMetric?.finish({
             outcome: "error",
           });
         }
@@ -619,7 +663,7 @@ app.delete("/api/terminal/session/:sessionId", async (c) => {
 app.get("/api/memory/status", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  return c.json(await openclawService.memoryStatus());
+  return c.json(await openclawService.prepareWorkspaceContext());
 });
 
 app.get("/api/memory/drafts", async (c) => {
@@ -655,7 +699,11 @@ app.post("/api/memory/drafts/:draftId/apply", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  const result = await memoryDraftService.applyDraft(c.req.param("draftId"));
+  const body = MemoryDraftApplyRequestSchema.parse(await c.req.json());
+  const result = await memoryDraftService.applyDraft(
+    c.req.param("draftId"),
+    body,
+  );
   await Promise.all([
     websocketHub.publishMemoryDraftsUpdated(),
     websocketHub.publishMemoryUpdated(),
@@ -668,7 +716,8 @@ app.post("/api/memory/drafts/:draftId/dismiss", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  const draft = await memoryDraftService.dismissDraft(c.req.param("draftId"));
+  const body = MemoryDraftDismissRequestSchema.parse(await c.req.json());
+  const draft = await memoryDraftService.dismissDraft(c.req.param("draftId"), body);
   await websocketHub.publishMemoryDraftsUpdated();
   return c.json(draft);
 });
@@ -1327,13 +1376,58 @@ app.post("/api/service/launch-agent/uninstall", async (c) => {
 app.get("/api/sessions", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  return c.json(await harnessService.listSessions());
+  return c.json(await sessionLifecycleService.listActiveSessions());
+});
+
+app.get("/api/sessions/archived", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await sessionLifecycleService.listArchivedSessions());
+});
+
+app.post("/api/sessions", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const session = await sessionLifecycleService.createSession();
+  await websocketHub.publishSessionsUpdated();
+  return c.json(session, 201);
+});
+
+app.post("/api/sessions/:sessionId/archive", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const session = await sessionLifecycleService.archiveSession(
+    c.req.param("sessionId"),
+  );
+  await websocketHub.publishSessionsUpdated();
+  return c.json(session);
+});
+
+app.post("/api/sessions/:sessionId/restore", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const session = await sessionLifecycleService.restoreSession(
+    c.req.param("sessionId"),
+  );
+  await websocketHub.publishSessionsUpdated();
+  return c.json(session);
 });
 
 app.get("/api/sessions/:sessionId/messages", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  return c.json(await harnessService.loadHistory(c.req.param("sessionId")));
+  const sessionId = c.req.param("sessionId");
+  const messages = await harnessService.loadHistory(sessionId);
+  await sessionLifecycleService.observeSession(sessionId, {
+    messages,
+  });
+  return c.json(messages);
 });
 
 app.post("/api/chat/uploads", async (c) => {
@@ -1390,6 +1484,9 @@ app.post("/api/sessions/:sessionId/messages", async (c) => {
   await hostPressureService.assertAllowsAgentRuns("chat");
   const body = ChatSendRequestSchema.parse(await c.req.json());
   const sessionId = c.req.param("sessionId");
+  await sessionLifecycleService.observeSession(sessionId, {
+    restore: true,
+  });
   let runId = "";
   const measuredRelay = withMeasuredStreamRelay("http", sessionId, {
     onDelta: async (delta) => {
@@ -1625,6 +1722,7 @@ if (TEST_MODE && E2E_RESET_TOKEN && E2E_STATE_PATH && E2E_ROOT_DIR) {
       "openclawGatewayToken",
       fixture.seed.openclawGatewayToken,
     );
+    await appStateService.setJsonSetting("sessionRegistry", []);
 
     await Promise.all([
       clearDirectoryContents(paths.jobsLogsDir),

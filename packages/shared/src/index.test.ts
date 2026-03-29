@@ -4,6 +4,8 @@ import {
   DashboardStateSchema,
   FileConflictResponseSchema,
   FileContentSchema,
+  MemoryDraftApplyResultSchema,
+  MemoryDraftUpdateRequestSchema,
   PerformanceSnapshotSchema,
   QuickstartResultSchema,
   ServerEventSchema,
@@ -497,6 +499,9 @@ describe("DashboardStateSchema", () => {
             name: "http.get./api/access",
             source: "server",
             count: 2,
+            okCount: 1,
+            warnCount: 0,
+            errorCount: 1,
             lastDurationMs: 12,
             lastEndedAt: new Date().toISOString(),
             sampleAgeMs: 32,
@@ -530,6 +535,43 @@ describe("DashboardStateSchema", () => {
     });
 
     expect(event.type).toBe("performance.updated");
+  });
+
+  it("accepts stale-safe memory draft mutation payloads", () => {
+    const update = MemoryDraftUpdateRequestSchema.parse({
+      expectedUpdatedAt: new Date().toISOString(),
+      content: "Updated memory draft",
+    });
+    const apply = MemoryDraftApplyResultSchema.parse({
+      draft: {
+        id: "draft-1",
+        target: "memory",
+        status: "applied",
+        title: "Local-first preference",
+        content: "Prefer local-first tooling.",
+        sourceKind: "manual",
+        sourceLabel: null,
+        sourceRef: null,
+        sessionId: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        appliedAt: new Date().toISOString(),
+        dismissedAt: null,
+        failedAt: null,
+        lastError: null,
+        appliedPath: "/tmp/droidagent/MEMORY.md",
+      },
+      outcome: "alreadyApplied",
+      memory: {
+        effectiveWorkspaceRoot: "/tmp/droidagent",
+        memoryFilePath: "/tmp/droidagent/MEMORY.md",
+        todayNotePath: "/tmp/droidagent/memory/2026-03-28.md",
+      },
+      reindexMode: null,
+    });
+
+    expect(update.expectedUpdatedAt.length).toBeGreaterThan(0);
+    expect(apply.outcome).toBe("alreadyApplied");
   });
 
   it("accepts chat run events", () => {

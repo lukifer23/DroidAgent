@@ -35,7 +35,7 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   await page.getByRole("link", { name: "Chat" }).click();
   await expect(
     page.getByPlaceholder(
-      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command...",
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
     ),
   ).toBeVisible();
 
@@ -43,7 +43,7 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   const sendButton = page.getByRole("button", { name: "Send" });
   await page
     .getByPlaceholder(
-      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command...",
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
     )
     .fill(prompt);
   await expect(sendButton).toBeEnabled();
@@ -78,6 +78,34 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
     name: "reconnect_resync_ms",
     durationMs: Number((performance.now() - reconnectStart).toFixed(2))
   });
+
+  const serverSnapshot = await page.evaluate(async () => {
+    const response = await fetch("/api/diagnostics/performance", {
+      credentials: "include",
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  });
+  const serverMetricNames = [
+    ["chat.send.submitToAccepted", "server_submit_to_accepted_ms"],
+    ["chat.stream.acceptedToFirstDelta", "server_accepted_to_first_delta_ms"],
+    ["chat.stream.firstDeltaForward", "server_first_delta_forward_ms"],
+    ["chat.stream.acceptedToCompleteRelay", "server_accepted_to_done_ms"],
+  ] as const;
+  for (const [metricName, artifactName] of serverMetricNames) {
+    const metric = serverSnapshot?.metrics?.find(
+      (entry: { name?: string; summary?: { lastDurationMs?: number | null } }) =>
+        entry.name === metricName,
+    );
+    if (typeof metric?.summary?.lastDurationMs === "number") {
+      metrics.push({
+        name: artifactName,
+        durationMs: metric.summary.lastDurationMs,
+      });
+    }
+  }
 
   await fs.mkdir(artifactDir, { recursive: true });
   const outputPath = path.join(artifactDir, `e2e-${browserName}-${projectName}.json`);

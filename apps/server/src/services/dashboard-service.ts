@@ -14,6 +14,7 @@ import { maintenanceService } from "./maintenance-service.js";
 import { memoryDraftService } from "./memory-draft-service.js";
 import { openclawService } from "./openclaw-service.js";
 import { runtimeService } from "./runtime-service.js";
+import { sessionLifecycleService } from "./session-lifecycle-service.js";
 import { signalService } from "./signal-service.js";
 import { startupService } from "./startup-service.js";
 
@@ -63,7 +64,7 @@ export class DashboardService {
           openclawService.contextManagementStatus(),
           maintenanceService.getStatus(),
           launchAgentService.status(),
-          harnessService.listSessions(),
+          sessionLifecycleService.listActiveSessions(),
           jobService.listJobs(),
           harnessService.listApprovals()
         ]);

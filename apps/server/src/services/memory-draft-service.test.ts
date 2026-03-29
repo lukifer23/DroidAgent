@@ -113,6 +113,7 @@ import {
   MemoryDraftNotFoundError,
   MemoryDraftService,
   MemoryDraftStateError,
+  MemoryDraftStaleError,
 } from "./memory-draft-service.js";
 
 describe("MemoryDraftService", () => {
@@ -160,6 +161,7 @@ describe("MemoryDraftService", () => {
     });
 
     const updated = await service.updateDraft(created.id, {
+      expectedUpdatedAt: created.updatedAt,
       target: "preferences",
       title: "Updated",
       content: "Prefer concise replies",
@@ -190,12 +192,15 @@ describe("MemoryDraftService", () => {
       appliedPath: null,
     });
 
-    const result = await service.applyDraft("draft-1");
+    const result = await service.applyDraft("draft-1", {
+      expectedUpdatedAt: "2026-03-29T12:00:00.000Z",
+    });
 
     const written = await fs.readFile(memoryFilePath, "utf8");
     expect(written).toContain("## Stable fact");
     expect(written).toContain("The operator prefers local-first tools.");
     expect(result.draft.status).toBe("applied");
+    expect(result.outcome).toBe("applied");
     expect(result.draft.appliedPath).toBe(memoryFilePath);
     expect(openclawMocks.reindexMemory).toHaveBeenCalledTimes(1);
     expect(openclawMocks.reindexMemory).toHaveBeenCalledWith({ force: false });
@@ -234,7 +239,9 @@ describe("MemoryDraftService", () => {
         todayNotePath,
       });
 
-    const result = await service.applyDraft("draft-2");
+    const result = await service.applyDraft("draft-2", {
+      expectedUpdatedAt: "2026-03-29T13:00:00.000Z",
+    });
 
     const written = await fs.readFile(todayNotePath, "utf8");
     expect(written).toContain("Tracked in the daily note.");
@@ -248,7 +255,7 @@ describe("MemoryDraftService", () => {
     expect(result.reindexMode).toBe("force");
   });
 
-  it("rejects editing or applying a non-pending draft", async () => {
+  it("returns idempotent results for repeated apply and dismiss actions", async () => {
     draftRecords.push({
       id: "draft-3",
       target: "preferences",
@@ -268,12 +275,119 @@ describe("MemoryDraftService", () => {
       appliedPath: path.join(tempDir, "PREFERENCES.md"),
     });
 
+    const applyResult = await service.applyDraft("draft-3", {
+      expectedUpdatedAt: "2026-03-29T14:00:00.000Z",
+    });
+
+    expect(applyResult.outcome).toBe("alreadyApplied");
+    expect(applyResult.reindexMode).toBeNull();
+
+    draftRecords.push({
+      id: "draft-4",
+      target: "memory",
+      status: "dismissed",
+      title: "Dismissed",
+      content: "Already dropped.",
+      sourceKind: "manual",
+      sourceLabel: null,
+      sourceRef: null,
+      sessionId: null,
+      createdAt: "2026-03-29T15:00:00.000Z",
+      updatedAt: "2026-03-29T15:05:00.000Z",
+      appliedAt: null,
+      dismissedAt: "2026-03-29T15:05:00.000Z",
+      failedAt: null,
+      lastError: null,
+      appliedPath: null,
+    });
+
+    const dismissResult = await service.dismissDraft("draft-4", {
+      expectedUpdatedAt: "2026-03-29T15:00:00.000Z",
+    });
+
+    expect(dismissResult.outcome).toBe("alreadyDismissed");
+  });
+
+  it("rejects stale draft edits and incompatible final states", async () => {
+    draftRecords.push({
+      id: "draft-5",
+      target: "preferences",
+      status: "pending",
+      title: "Pending",
+      content: "Current content",
+      sourceKind: "manual",
+      sourceLabel: null,
+      sourceRef: null,
+      sessionId: null,
+      createdAt: "2026-03-29T14:00:00.000Z",
+      updatedAt: "2026-03-29T14:05:00.000Z",
+      appliedAt: null,
+      dismissedAt: null,
+      failedAt: null,
+      lastError: null,
+      appliedPath: null,
+    });
+
     await expect(
-      service.updateDraft("draft-3", { content: "Changed" }),
+      service.updateDraft("draft-5", {
+        expectedUpdatedAt: "2026-03-29T14:00:00.000Z",
+        content: "Changed",
+      }),
+    ).rejects.toBeInstanceOf(MemoryDraftStaleError);
+
+    draftRecords.push({
+      id: "draft-6",
+      target: "preferences",
+      status: "applied",
+      title: "Applied",
+      content: "Already durable.",
+      sourceKind: "manual",
+      sourceLabel: null,
+      sourceRef: null,
+      sessionId: null,
+      createdAt: "2026-03-29T16:00:00.000Z",
+      updatedAt: "2026-03-29T16:05:00.000Z",
+      appliedAt: "2026-03-29T16:05:00.000Z",
+      dismissedAt: null,
+      failedAt: null,
+      lastError: null,
+      appliedPath: path.join(tempDir, "PREFERENCES.md"),
+    });
+    draftRecords.push({
+      id: "draft-7",
+      target: "memory",
+      status: "dismissed",
+      title: "Dismissed",
+      content: "Already dropped.",
+      sourceKind: "manual",
+      sourceLabel: null,
+      sourceRef: null,
+      sessionId: null,
+      createdAt: "2026-03-29T17:00:00.000Z",
+      updatedAt: "2026-03-29T17:05:00.000Z",
+      appliedAt: null,
+      dismissedAt: "2026-03-29T17:05:00.000Z",
+      failedAt: null,
+      lastError: null,
+      appliedPath: null,
+    });
+
+    await expect(
+      service.dismissDraft("draft-6", {
+        expectedUpdatedAt: "2026-03-29T16:05:00.000Z",
+      }),
     ).rejects.toBeInstanceOf(MemoryDraftStateError);
-    await expect(service.applyDraft("draft-3")).rejects.toBeInstanceOf(
-      MemoryDraftStateError,
-    );
+    await expect(
+      service.updateDraft("draft-6", {
+        expectedUpdatedAt: "2026-03-29T16:05:00.000Z",
+        content: "Changed",
+      }),
+    ).rejects.toBeInstanceOf(MemoryDraftStateError);
+    await expect(
+      service.applyDraft("draft-7", {
+        expectedUpdatedAt: "2026-03-29T17:05:00.000Z",
+      }),
+    ).rejects.toBeInstanceOf(MemoryDraftStateError);
   });
 
   it("raises a typed not-found error for unknown drafts", async () => {

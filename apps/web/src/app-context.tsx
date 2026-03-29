@@ -48,7 +48,6 @@ interface DroidAgentAppContextValue {
 }
 
 const DroidAgentAppContext = createContext<DroidAgentAppContextValue | null>(null);
-const TRANSIENT_WEB_SESSION_PREFIX = "web:fresh:";
 
 export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
@@ -342,9 +341,6 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     if (dashboardSessions.length === 0) {
       return;
     }
-    if (selectedSessionId.startsWith(TRANSIENT_WEB_SESSION_PREFIX)) {
-      return;
-    }
     if (dashboardSessions.some((session) => session.id === selectedSessionId)) {
       return;
     }
@@ -358,17 +354,17 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (
-      selectedSessionId.startsWith(TRANSIENT_WEB_SESSION_PREFIX) &&
-      !dashboardSessions.some((session) => session.id === selectedSessionId)
-    ) {
-      return;
-    }
-
     const targetSessionId = dashboardSessions.some((session) => session.id === selectedSessionId)
       ? selectedSessionId
       : dashboardSessions[0]?.id;
-    if (targetSessionId) {
+    if (
+      targetSessionId &&
+      !queryClient.getQueryData<ChatMessage[]>([
+        "sessions",
+        targetSessionId,
+        "messages",
+      ])
+    ) {
       void queryClient.prefetchQuery({
         queryKey: ["sessions", targetSessionId, "messages"],
         queryFn: () => api<ChatMessage[]>(`/api/sessions/${encodeURIComponent(targetSessionId)}/messages`)

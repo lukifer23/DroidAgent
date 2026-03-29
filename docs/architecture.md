@@ -71,8 +71,10 @@
 ## Durable memory model
 
 - Durable memory remains file-backed in the workspace: `MEMORY.md`, `PREFERENCES.md`, and `memory/YYYY-MM-DD.md`.
+- Recall order is biased for smaller local models: `PREFERENCES.md` first, then `MEMORY.md`, then dated notes under `memory/`, then session memory.
 - Chat messages and file selections create `pending` memory drafts first; the operator can edit target/title/content before applying them.
 - Applying a draft appends to the selected file atomically, invalidates memory status, and runs incremental reindex with force fallback if needed.
+- First-class memory file access repairs the workspace scaffold lazily so missing `MEMORY.md` or `PREFERENCES.md` does not surface raw `ENOENT` failures in normal operator flows.
 
 ## File and job model
 
@@ -85,7 +87,7 @@
 ## Diagnostics and performance
 
 - the server records rolling in-memory timing samples for HTTP requests, dashboard snapshots, chat relay timing, file operations, and job execution
-- memory draft apply timing is recorded server-side; timing summaries now also surface last-sample age and sample count
+- memory draft apply timing and memory reindex timing are recorded server-side; timing summaries now also surface last-sample age plus `ok`/`warn`/`error` sample counts
 - the client records route, chat, reconnect, file, and job timings locally
 - the Settings route surfaces a compact diagnostics card
 - the benchmark scripts write JSON artifacts under `artifacts/perf/`

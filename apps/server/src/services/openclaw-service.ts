@@ -59,6 +59,7 @@ import type {
   StreamRelayCallbacks,
 } from "./harness-service.js";
 import { keychainService } from "./keychain-service.js";
+import { performanceService } from "./performance-service.js";
 
 const GATEWAY_READY_RETRIES = 5;
 const GATEWAY_READY_DELAY_MS = 800;
@@ -140,6 +141,16 @@ const SKILLS_README_TEMPLATE = `# Workspace Skills
 - Put reusable operator skills and repo-specific runbooks here.
 - Keep files short, concrete, and safe for automatic bootstrap context.
 `;
+const MEMORY_RECALL_EXTRA_PATHS = [
+  "PREFERENCES.md",
+  "MEMORY.md",
+  "memory/**/*.md",
+  "skills/**/*.md",
+] as const;
+const MEMORY_FLUSH_SYSTEM_PROMPT =
+  "Session nearing compaction. Store durable memories now in a short structured note.";
+const MEMORY_FLUSH_PROMPT =
+  "Append durable notes to memory/YYYY-MM-DD.md with sections Summary, Decisions, Next Steps, and Durable Memory Candidates. Reply with NO_REPLY if nothing durable should be stored.";
 const MEMORY_TEMPLATE = `# Durable Memory
 
 Use this file for stable facts DroidAgent and OpenClaw should retain across sessions.
@@ -1502,7 +1513,7 @@ export class OpenClawService {
       experimental: {
         sessionMemory: true,
       },
-      extraPaths: ["MEMORY.md", "PREFERENCES.md", "skills/**/*.md"],
+      extraPaths: [...MEMORY_RECALL_EXTRA_PATHS],
       sources: ["memory", "sessions"],
       sync: {
         sessions: {
@@ -1827,10 +1838,8 @@ export class OpenClawService {
           memoryFlush: {
             enabled: true,
             softThresholdTokens: status.softThresholdTokens,
-            systemPrompt:
-              "Session nearing compaction. Store durable memories now.",
-            prompt:
-              "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
+            systemPrompt: MEMORY_FLUSH_SYSTEM_PROMPT,
+            prompt: MEMORY_FLUSH_PROMPT,
           },
         }
       : {
@@ -1842,10 +1851,8 @@ export class OpenClawService {
           memoryFlush: {
             enabled: false,
             softThresholdTokens: status.softThresholdTokens,
-            systemPrompt:
-              "Session nearing compaction. Store durable memories now.",
-            prompt:
-              "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store.",
+            systemPrompt: MEMORY_FLUSH_SYSTEM_PROMPT,
+            prompt: MEMORY_FLUSH_PROMPT,
           },
         };
 
@@ -2278,17 +2285,37 @@ export class OpenClawService {
     const workspaceRoot = this.resolveWorkspaceRoot(runtimeSettings);
     await this.ensureWorkspaceScaffold(workspaceRoot);
     await this.ensureConfigured();
+    const metric = performanceService.start("server", "memory.reindex", {
+      force: params.force === true,
+    });
     const args = ["memory", "index"];
     if (params.force) {
       args.push("--force");
     }
-    await this.execOpenClaw(args, true);
-    this.invalidateMemoryStatusCache();
-    return await this.currentMemoryStatus();
+    try {
+      await this.execOpenClaw(args, true);
+      this.invalidateMemoryStatusCache();
+      const status = await this.currentMemoryStatus();
+      metric.finish({
+        outcome: "ok",
+        indexedFiles: status.indexedFiles,
+        indexedChunks: status.indexedChunks,
+        dirty: status.dirty,
+      });
+      return status;
+    } catch (error) {
+      metric.finish({
+        outcome: "error",
+      });
+      throw error;
+    }
   }
 
   async memoryStatus(): Promise<MemoryStatus> {
     return await this.memoryStatusCache.get(async () => {
+      const runtimeSettings = await appStateService.getRuntimeSettings();
+      const workspaceRoot = this.resolveWorkspaceRoot(runtimeSettings);
+      await this.ensureWorkspaceScaffold(workspaceRoot);
       return await this.currentMemoryStatus();
     });
   }
