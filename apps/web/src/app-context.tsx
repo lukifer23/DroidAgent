@@ -106,6 +106,20 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!notice) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setNotice(null);
+    }, 2800);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [notice]);
+
+  useEffect(() => {
     if (typeof window === "undefined") {
       return;
     }

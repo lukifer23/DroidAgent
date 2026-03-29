@@ -4,7 +4,12 @@ import path from "node:path";
 import { LaunchAgentStatusSchema, type LaunchAgentStatus } from "@droidagent/shared";
 
 import { LAUNCH_AGENT_LABEL, SERVER_PORT, baseEnv, paths } from "../env.js";
-import { CommandError, runCommand } from "../lib/process.js";
+import {
+  CommandError,
+  findProcesses,
+  runCommand,
+  terminateProcesses,
+} from "../lib/process.js";
 import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 
@@ -41,6 +46,26 @@ export class LaunchAgentService {
 
   private serverEntrypoint(): string {
     return path.join(paths.workspaceRoot, "apps", "server", "dist", "index.js");
+  }
+
+  private async cleanupManagedServerProcesses(): Promise<void> {
+    const entrypoint = this.serverEntrypoint();
+    const processes = await findProcesses(
+      (processInfo) =>
+        processInfo.pid !== process.pid &&
+        processInfo.command.includes(entrypoint),
+    );
+
+    if (processes.length === 0) {
+      return;
+    }
+
+    await terminateProcesses(
+      processes.map((processInfo) => processInfo.pid),
+      {
+        timeoutMs: 2_000,
+      },
+    );
   }
 
   private buildPlist(): string {
@@ -172,6 +197,8 @@ ${envPlist}
     if (!fs.existsSync(paths.launchAgentPath)) {
       await this.install();
     }
+
+    await this.cleanupManagedServerProcesses();
 
     const current = await this.status();
     if (current.loaded) {

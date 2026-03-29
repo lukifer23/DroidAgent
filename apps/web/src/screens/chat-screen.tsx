@@ -1,4 +1,5 @@
 import {
+  type ClipboardEvent,
   useEffect,
   useMemo,
   useRef,
@@ -53,7 +54,7 @@ function formatMessageTime(value: string): string {
 function formatLatency(summary: LatencySummary | undefined): string {
   const value = summary?.lastDurationMs ?? summary?.p95DurationMs ?? null;
   if (!value || !Number.isFinite(value)) {
-    return "No samples";
+    return "Awaiting run";
   }
 
   if (value >= 1000) {
@@ -339,14 +340,13 @@ function PendingAttachmentList({
 export function ChatScreen() {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const threadEndRef = useRef<HTMLDivElement | null>(null);
+  const threadRef = useRef<HTMLDivElement | null>(null);
   const {
     selectedSessionId,
     setSelectedSessionId,
     sendRealtimeCommand,
     trackChatSubmit,
     runAction,
-    setNotice,
     wsStatus,
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
@@ -379,6 +379,7 @@ export function ChatScreen() {
     openclawRuntime?.state === "running" &&
     Boolean(activeProvider?.enabled) &&
     Boolean(harness?.configured);
+  const approvalCount = dashboard?.approvals.length ?? 0;
 
   const historyQuery = useQuery({
     queryKey: ["sessions", selectedSessionKey, "messages"],
@@ -433,10 +434,18 @@ export function ChatScreen() {
   ];
 
   useEffect(() => {
-    threadEndRef.current?.scrollIntoView({
-      behavior: "smooth",
-      block: "end",
-    });
+    const container = threadRef.current;
+    if (!container) {
+      return;
+    }
+
+    const bottomGap =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (bottomGap > 120) {
+      return;
+    }
+
+    container.scrollTop = container.scrollHeight;
   }, [messages.length, selectedSessionKey, streaming?.text, activeRun?.updatedAt]);
 
   async function uploadFiles(files: File[]) {
@@ -464,11 +473,6 @@ export function ChatScreen() {
         }
         return next;
       });
-      setNotice(
-        `${response.attachments.length} attachment${
-          response.attachments.length === 1 ? "" : "s"
-        } ready.`,
-      );
     } finally {
       setUploadingAttachments(false);
       if (fileInputRef.current) {
@@ -597,20 +601,54 @@ export function ChatScreen() {
     });
   }
 
+  function handleComposerPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData.files ?? []);
+    if (files.length === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    void runAction(async () => {
+      await uploadFiles(files);
+    });
+  }
+
   return (
     <section className="operator-chat-shell">
       <article className="operator-chat-header panel-card compact">
         <div className="operator-chat-copy">
-          <div className="journey-kicker">Live OpenClaw session</div>
+          <div className="journey-kicker">Live operator session</div>
           <h2>{activeSession?.title ?? "Operator Chat"}</h2>
           <p>
-            Real agent session on your Mac. Files, exec approvals, multimodal
-            attachments, semantic memory, and tool calls all route through the
-            live harness.
+            Real OpenClaw session on your Mac with local tools, workspace
+            access, approvals, semantic memory, and multimodal attachments.
           </p>
+
+          <div className="operator-fact-row">
+            {headerFacts.map((fact) => (
+              <span key={fact} className="operator-fact-chip">
+                {fact}
+              </span>
+            ))}
+          </div>
         </div>
 
         <div className="operator-chat-meta">
+          <div
+            className={`operator-run-strip${activeRun?.stage ? ` ${activeRun.stage}` : ""}`}
+          >
+            <strong>
+              {activeRun?.label ??
+                (agentReady ? "Ready for a live run" : "OpenClaw is not ready")}
+            </strong>
+            <span>
+              {activeRun?.detail ??
+                (agentReady
+                  ? "Messages, tools, and attachments route through the live harness."
+                  : "Finish local runtime and gateway startup before sending a request.")}
+            </span>
+          </div>
+
           <div className="status-chip-row">
             <span className={`status-chip${agentReady ? " ready" : ""}`}>
               {agentReady ? "Agent live" : "Agent unavailable"}
@@ -623,14 +661,11 @@ export function ChatScreen() {
             >
               {dashboard?.memory.semanticReady ? "Memory indexed" : "Memory pending"}
             </span>
-          </div>
-
-          <div className="operator-fact-row">
-            {headerFacts.map((fact) => (
-              <span key={fact} className="operator-fact-chip">
-                {fact}
-              </span>
-            ))}
+            <span className={`status-chip${approvalCount > 0 ? "" : " ready"}`}>
+              {approvalCount > 0
+                ? `${approvalCount} approval${approvalCount === 1 ? "" : "s"}`
+                : `${harness?.availableTools.length ?? 0} tools ready`}
+            </span>
           </div>
 
           <div className="metric-strip operator-metrics">
@@ -661,7 +696,7 @@ export function ChatScreen() {
       ) : null}
 
       <details className="chat-tools-panel operator-tools-panel">
-        <summary>Tools and permissions</summary>
+        <summary>Capabilities and permissions</summary>
         <div className="tool-pill-grid">
           {harness?.availableTools.map((tool) => (
             <span key={tool} className="tool-pill">
@@ -683,7 +718,7 @@ export function ChatScreen() {
       </details>
 
       <article className="chat-thread-panel panel-card compact">
-        <div className="chat-message-list operator-thread">
+        <div ref={threadRef} className="chat-message-list operator-thread">
           {messages.map((message) => (
             <article
               key={message.id}
@@ -694,7 +729,7 @@ export function ChatScreen() {
                   <header>{roleLabel(message.role)}</header>
                   <span>{formatMessageTime(message.createdAt)}</span>
                 </div>
-                <CopyButton text={message.text} />
+                {message.text ? <CopyButton text={message.text} /> : null}
               </div>
 
               <div className="message-part-stack">
@@ -744,7 +779,12 @@ export function ChatScreen() {
                 </div>
               </div>
               <div className="message-markdown">
-                <ChatMarkdown text={streaming.text || "Working..."} />
+                <ChatMarkdown
+                  text={
+                    streaming.text ||
+                    "Working through the live OpenClaw run..."
+                  }
+                />
               </div>
             </article>
           ) : null}
@@ -777,8 +817,6 @@ export function ChatScreen() {
               ) : null}
             </article>
           ) : null}
-
-          <div ref={threadEndRef} />
         </div>
       </article>
 
@@ -796,7 +834,8 @@ export function ChatScreen() {
           <textarea
             value={chatInput}
             onChange={(event) => setChatInput(event.target.value)}
-            placeholder="Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command..."
+            onPaste={handleComposerPaste}
+            placeholder="Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command..."
             disabled={!agentReady || uploadingAttachments}
           />
 
@@ -805,7 +844,7 @@ export function ChatScreen() {
               {activeRun?.active
                 ? `${activeRun.label}${activeRun.detail ? ` • ${activeRun.detail}` : ""}`
                 : agentReady
-                  ? `Live OpenClaw session ready. ${harness?.availableTools.length ?? 0} tools available.`
+                  ? `Live OpenClaw session ready. ${harness?.availableTools.length ?? 0} tools available. Paste images or files directly into the composer, or attach them below.`
                   : "The live OpenClaw path is not ready yet."}
             </small>
 

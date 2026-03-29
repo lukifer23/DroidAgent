@@ -231,17 +231,16 @@ export function SetupScreen() {
       <article className="panel-card setup-wizard-hero">
         <div className="setup-wizard-copy">
           <div className="eyebrow">Quickstart</div>
-          <h2>Get this Mac and your phone ready.</h2>
+          <h2>Prepare this Mac, then add your phone.</h2>
           <p>
-            One pass should handle the normal path: workspace, Ollama, OpenClaw,
-            65k local context, semantic memory, then the private Tailscale URL.
+            DroidAgent should handle the normal path in one pass: workspace,
+            Ollama, OpenClaw, 65k context, semantic memory, then the private
+            Tailscale URL.
           </p>
         </div>
 
         <div className="setup-wizard-actions">
-          <strong>
-            {readyCount}/{steps.length} setup steps ready
-          </strong>
+          <strong>{readyCount}/{steps.length} steps ready</strong>
           <div className="button-row compact-actions">
             <button
               type="button"
@@ -346,10 +345,10 @@ export function SetupScreen() {
 
         <article className="panel-card compact">
           <div className="panel-heading">
-            <h3>What DroidAgent handled</h3>
+            <h3>Host prep</h3>
             <p>
-              The quickstart should stay automatic. Advanced inputs remain here,
-              but they are not the primary path.
+              Quickstart should stay automatic. Only use advanced controls if
+              the normal path needs adjustment.
             </p>
           </div>
 
@@ -363,22 +362,25 @@ export function SetupScreen() {
             </div>
           ) : null}
 
-          <div className="field-stack">
-            <label>
-              Workspace root
-              <input
-                value={workspaceInput}
-                onChange={(event) => setWorkspaceInput(event.target.value)}
-              />
-            </label>
-            <label>
-              Default model
-              <input
-                value={setupModel}
-                onChange={(event) => setSetupModel(event.target.value)}
-              />
-            </label>
-          </div>
+          <details className="details-card">
+            <summary>Advanced host options</summary>
+            <div className="field-stack">
+              <label>
+                Workspace root
+                <input
+                  value={workspaceInput}
+                  onChange={(event) => setWorkspaceInput(event.target.value)}
+                />
+              </label>
+              <label>
+                Default model
+                <input
+                  value={setupModel}
+                  onChange={(event) => setSetupModel(event.target.value)}
+                />
+              </label>
+            </div>
+          </details>
 
           {diagnosticsQuery.data?.length ? (
             <div className="journey-checklist">

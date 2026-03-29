@@ -115,6 +115,10 @@ if [[ ! -f apps/server/dist/index.js ]]; then
   die "Server build artifact missing." "Run: pnpm build"
 fi
 
+if ! server_ready; then
+  node ./scripts/stop.mjs --quiet --core-only >/dev/null 2>&1 || true
+fi
+
 if server_ready; then
   log_ok "DroidAgent is already running at ${SERVER_URL}"
 elif [[ -f "$LAUNCH_AGENT_PLIST" ]] && command -v launchctl >/dev/null 2>&1; then
@@ -137,5 +141,5 @@ echo "${GREEN}DroidAgent is running.${NC} Open ${SERVER_URL} in your browser."
 echo ""
 open "${SERVER_URL}" 2>/dev/null || echo "Open manually: ${SERVER_URL}"
 echo "Next step: complete passkey sign-in, then run the Setup quickstart to prepare the workspace, Ollama, OpenClaw, memory, and the Tailscale phone URL."
-echo "Diagnostics: pnpm doctor"
+echo "Diagnostics: pnpm run doctor"
 echo ""

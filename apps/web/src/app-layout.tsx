@@ -8,7 +8,6 @@ import {
   Settings2,
   ShieldCheck,
   Smartphone,
-  Sparkles,
   X,
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
@@ -22,7 +21,7 @@ import { AuthScreen } from "./screens/auth-screen";
 import { postJson } from "./lib/api";
 
 const navItems = [
-  { to: "/setup", label: "Setup", icon: Sparkles, readyOnly: false },
+  { to: "/setup", label: "Setup", icon: ShieldCheck, readyOnly: false },
   { to: "/chat", label: "Chat", icon: MessagesSquare, readyOnly: true },
   { to: "/files", label: "Files", icon: FolderTree, readyOnly: true },
   { to: "/jobs", label: "Jobs", icon: Hammer, readyOnly: true },
@@ -67,6 +66,7 @@ export function AppLayout() {
   const navItemsForState = navItems.filter(
     (item) => !operatorReady || item.readyOnly,
   );
+  const showStatusRow = !isChatRoute;
 
   useEffect(() => {
     finishRouteTransition(location.pathname);
@@ -85,8 +85,8 @@ export function AppLayout() {
   }
 
   const topbarMeta = [
-    access?.canonicalOrigin?.origin ? "Tailscale live" : "Local-first",
-    activeProvider?.model ?? dashboard?.setup.selectedModel ?? "No model",
+    access?.canonicalOrigin?.origin ? "Tailscale live" : "Local only",
+    activeProvider?.model ?? dashboard?.setup.selectedModel ?? "model pending",
     activeProvider?.contextWindow
       ? formatTokenBudget(activeProvider.contextWindow)
       : null,
@@ -157,7 +157,7 @@ export function AppLayout() {
         <div className="topbar">
           <div className="topbar-copy">
             <div className="eyebrow">DroidAgent</div>
-            <h1>{isSetupRoute ? "Setup" : isChatRoute ? "Operator Chat" : "Operator Console"}</h1>
+            <h1>{isSetupRoute ? "Setup" : isChatRoute ? "Live Chat" : "Operator Console"}</h1>
             <small className="topbar-meta">{topbarMeta}</small>
           </div>
 
@@ -167,7 +167,7 @@ export function AppLayout() {
               className="secondary"
               onClick={() => setHostDrawerOpen(true)}
             >
-              Host status
+              Host
             </button>
             <button
               className="ghost-button"
@@ -181,30 +181,32 @@ export function AppLayout() {
           </div>
         </div>
 
-        <div className="topbar-status-row">
-          <span className={`status-chip${operatorReady ? " ready" : ""}`}>
-            <ShieldCheck size={14} />
-            {operatorReady ? "Operator ready" : "Setup required"}
-          </span>
-          <span
-            className={`status-chip${access?.canonicalOrigin?.origin ? " ready" : ""}`}
-          >
-            <Smartphone size={14} />
-            {access?.canonicalOrigin?.origin ? "Phone live" : "Phone pending"}
-          </span>
-          <span className={`status-chip${runtimeCount > 0 ? " ready" : ""}`}>
-            <Bot size={14} />
-            {runtimeCount > 0 ? "Runtime live" : "Runtime pending"}
-          </span>
-          <span
-            className={`status-chip${pendingApprovals > 0 ? "" : " ready"}`}
-          >
-            <Activity size={14} />
-            {pendingApprovals > 0
-              ? `${pendingApprovals} approval${pendingApprovals === 1 ? "" : "s"}`
-              : "No approvals waiting"}
-          </span>
-        </div>
+        {showStatusRow ? (
+          <div className="topbar-status-row">
+            <span className={`status-chip${operatorReady ? " ready" : ""}`}>
+              <ShieldCheck size={14} />
+              {operatorReady ? "Ready" : "Setup required"}
+            </span>
+            <span
+              className={`status-chip${access?.canonicalOrigin?.origin ? " ready" : ""}`}
+            >
+              <Smartphone size={14} />
+              {access?.canonicalOrigin?.origin ? "Phone live" : "Phone pending"}
+            </span>
+            <span className={`status-chip${runtimeCount > 0 ? " ready" : ""}`}>
+              <Bot size={14} />
+              {runtimeCount > 0 ? "Runtime live" : "Runtime pending"}
+            </span>
+            <span
+              className={`status-chip${pendingApprovals > 0 ? "" : " ready"}`}
+            >
+              <Activity size={14} />
+              {pendingApprovals > 0
+                ? `${pendingApprovals} approval${pendingApprovals === 1 ? "" : "s"}`
+                : "No approvals"}
+            </span>
+          </div>
+        ) : null}
       </header>
 
       {!isOnline ? (

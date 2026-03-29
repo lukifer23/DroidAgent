@@ -4,7 +4,7 @@
 
 ```bash
 pnpm dev
-pnpm doctor
+pnpm run doctor
 ```
 
 ## Production-style local build
@@ -13,9 +13,13 @@ pnpm doctor
 pnpm install
 pnpm build
 node apps/server/dist/index.js
+pnpm stop
+pnpm restart
 ```
 
 `pnpm bootstrap` is the simpler host path now. It reuses a healthy local server when one already exists, prefers the LaunchAgent-managed host when installed, and only falls back to a background direct server start when the LaunchAgent has not been installed yet.
+
+Use `pnpm stop` when you need a clean local reset. It stops managed DroidAgent host processes and reaps orphaned repo-local OpenClaw workers instead of leaving stale background sessions around. `pnpm restart` runs that cleanup and then bootstraps the host again.
 
 ## Logs
 

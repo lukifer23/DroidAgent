@@ -20,6 +20,11 @@ export interface CommandResult {
   exitCode: number;
 }
 
+export interface ProcessInfo {
+  pid: number;
+  command: string;
+}
+
 export async function runCommand(
   command: string,
   args: string[],
@@ -73,4 +78,90 @@ export async function runCommand(
   }
 
   return { stdout, stderr, exitCode };
+}
+
+export async function listProcesses(): Promise<ProcessInfo[]> {
+  const result = await runCommand(
+    "ps",
+    ["-ax", "-o", "pid=", "-o", "command="],
+    {
+      timeoutMs: 5_000,
+    },
+  );
+
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(.+)$/);
+      if (!match) {
+        return null;
+      }
+      const command = match[2];
+      if (!command) {
+        return null;
+      }
+      return {
+        pid: Number(match[1]),
+        command: command.trim(),
+      } satisfies ProcessInfo;
+    })
+    .filter((entry): entry is ProcessInfo => Boolean(entry));
+}
+
+export async function findProcesses(
+  predicate: (processInfo: ProcessInfo) => boolean,
+): Promise<ProcessInfo[]> {
+  const processes = await listProcesses();
+  return processes.filter(predicate);
+}
+
+export async function terminateProcesses(
+  pids: number[],
+  options: {
+    timeoutMs?: number;
+    forceAfterTimeout?: boolean;
+  } = {},
+): Promise<void> {
+  const uniquePids = [...new Set(pids.filter((pid) => Number.isInteger(pid) && pid > 0))];
+  if (uniquePids.length === 0) {
+    return;
+  }
+
+  const timeoutMs = options.timeoutMs ?? 1_500;
+  const forceAfterTimeout = options.forceAfterTimeout ?? true;
+
+  for (const pid of uniquePids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // Process already exited or is otherwise unavailable.
+    }
+  }
+
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const remaining = (
+      await findProcesses((processInfo) => uniquePids.includes(processInfo.pid))
+    ).map((processInfo) => processInfo.pid);
+
+    if (remaining.length === 0) {
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+
+  if (!forceAfterTimeout) {
+    return;
+  }
+
+  for (const pid of uniquePids) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Process already exited or is otherwise unavailable.
+    }
+  }
 }

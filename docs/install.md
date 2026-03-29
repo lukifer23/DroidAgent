@@ -13,7 +13,7 @@
 
 ```bash
 pnpm bootstrap
-pnpm doctor
+pnpm run doctor
 ```
 
 The bootstrap script:
@@ -31,7 +31,7 @@ The bootstrap script:
 
 Bootstrap is idempotent and safe to re-run.
 
-Run `pnpm doctor` after bootstrap when you want a non-mutating environment check.
+Run `pnpm run doctor` after bootstrap when you want a non-mutating environment check.
 
 ## First-run flow
 

@@ -18,7 +18,9 @@ DroidAgent is a macOS-first, single-owner control plane for OpenClaw with a mobi
 
 ```bash
 pnpm bootstrap
-pnpm doctor
+pnpm stop
+pnpm restart
+pnpm run doctor
 pnpm verify
 pnpm verify:full
 pnpm perf:server
@@ -33,6 +35,8 @@ pnpm bootstrap
 ```
 
 `pnpm bootstrap` now reuses an already healthy local server, restarts the LaunchAgent-backed host when it is installed, and only falls back to a background direct server start when no LaunchAgent is present yet.
+
+`pnpm stop` stops managed DroidAgent host processes and cleans up orphaned repo-local OpenClaw workers. `pnpm restart` runs that cleanup first, then starts the host again through the normal bootstrap path.
 
 Manual local start:
 

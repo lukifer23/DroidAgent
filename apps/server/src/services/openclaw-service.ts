@@ -41,7 +41,12 @@ import {
   paths,
   resolveOpenClawBin,
 } from "../env.js";
-import { CommandError, runCommand } from "../lib/process.js";
+import {
+  CommandError,
+  findProcesses,
+  runCommand,
+  terminateProcesses,
+} from "../lib/process.js";
 import { TtlCache } from "../lib/ttl-cache.js";
 import {
   DEFAULT_OLLAMA_VISION_MODEL,
@@ -214,14 +219,32 @@ const WORKSPACE_BOOTSTRAP_FILES = [
   ["skills/README.md", SKILLS_README_TEMPLATE],
 ] as const;
 const OPERATOR_EXEC_ALLOWLIST_PATTERNS = [
+  "df*",
   "/bin/df*",
   "/usr/bin/df*",
+  "du*",
   "/usr/bin/du*",
+  "stat*",
   "/usr/bin/stat*",
+  "uname*",
   "/usr/bin/uname*",
+  "diskutil*",
   "/usr/sbin/diskutil*",
+  "system_profiler*",
   "/usr/sbin/system_profiler*",
+  "sysctl*",
   "/usr/sbin/sysctl*",
+  "ls*",
+  "/bin/ls*",
+  "/usr/bin/ls*",
+  "pwd*",
+  "/bin/pwd*",
+  "/usr/bin/pwd*",
+  "whoami*",
+  "/usr/bin/whoami*",
+  "mount*",
+  "/sbin/mount*",
+  "/usr/sbin/mount*",
 ] as const;
 
 interface GatewayAttachmentRecord {
@@ -1165,6 +1188,61 @@ export class OpenClawService {
     }
   }
 
+  private isManagedOpenClawCommand(command: string): boolean {
+    const normalized = command.trim();
+    if (!normalized || !/openclaw/i.test(normalized)) {
+      return false;
+    }
+
+    const markers = [
+      OPENCLAW_PROFILE,
+      paths.openClawStateDir,
+      paths.openClawConfigPath,
+      paths.workspaceRoot,
+      "ai.openclaw.droidagent",
+      `--profile ${OPENCLAW_PROFILE}`,
+    ].filter((value): value is string => Boolean(value));
+
+    return markers.some((marker) => normalized.includes(marker));
+  }
+
+  private async cleanupManagedOpenClawProcesses(
+    params: {
+      excludePids?: number[];
+      includeTrackedGateway?: boolean;
+    } = {},
+  ): Promise<void> {
+    const exclude = new Set(
+      (params.excludePids ?? [])
+        .filter((pid) => Number.isInteger(pid) && pid > 0),
+    );
+    if (
+      params.includeTrackedGateway !== true &&
+      this.gatewayProcess?.pid &&
+      this.gatewayProcess.exitCode === null
+    ) {
+      exclude.add(this.gatewayProcess.pid);
+    }
+
+    const processes = await findProcesses(
+      (processInfo) =>
+        processInfo.pid !== process.pid &&
+        !exclude.has(processInfo.pid) &&
+        this.isManagedOpenClawCommand(processInfo.command),
+    );
+
+    if (processes.length === 0) {
+      return;
+    }
+
+    await terminateProcesses(
+      processes.map((processInfo) => processInfo.pid),
+      {
+        timeoutMs: 2_000,
+      },
+    );
+  }
+
   private buildGatewayPortConflictMessage(owner: {
     pid: number;
     command: string;
@@ -1281,7 +1359,7 @@ export class OpenClawService {
       "openclawExecAllowlistSeedVersion",
       null,
     );
-    if (seededVersion === "v1") {
+    if (seededVersion === "v2") {
       return;
     }
 
@@ -1302,7 +1380,10 @@ export class OpenClawService {
       ]);
     }
 
-    await appStateService.setJsonSetting("openclawExecAllowlistSeedVersion", "v1");
+    await appStateService.setJsonSetting(
+      "openclawExecAllowlistSeedVersion",
+      "v2",
+    );
   }
 
   private async openclawEnv(): Promise<NodeJS.ProcessEnv> {
@@ -2355,6 +2436,7 @@ export class OpenClawService {
 
   async startGateway(): Promise<void> {
     await this.ensureConfigured();
+    let failedPortOwnerPid: number | null = null;
 
     try {
       await this.gatewayHealthProbe();
@@ -2371,11 +2453,16 @@ export class OpenClawService {
       ) {
         throw new Error(failure.message);
       }
+      failedPortOwnerPid = failure.portOwner?.pid ?? null;
     }
 
     if (this.gatewayProcess && this.gatewayProcess.exitCode === null) {
       return;
     }
+
+    await this.cleanupManagedOpenClawProcesses({
+      excludePids: failedPortOwnerPid ? [failedPortOwnerPid] : [],
+    });
 
     const child = spawn(
       this.openclawBin,
@@ -2445,6 +2532,9 @@ export class OpenClawService {
       this.gatewayProcess.kill("SIGTERM");
       this.gatewayProcess = null;
     }
+    await this.cleanupManagedOpenClawProcesses({
+      includeTrackedGateway: true,
+    });
   }
 
   async callGateway<T>(

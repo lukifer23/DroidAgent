@@ -29,7 +29,9 @@ test("loads the signed-in shell and bottom-nav routes", async ({ page }) => {
   await gotoSignedIn(page, "/chat");
 
   await expect(page.locator(".topbar-copy h1")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Host status" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /^Host$/i }),
+  ).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.getByRole("link", { name: "Files" }).click();
   await expect(
@@ -47,7 +49,9 @@ test("loads the simplified setup screen", async ({ page }) => {
   await gotoSignedIn(page, "/setup");
 
   await expect(
-    page.getByRole("heading", { name: /Get this Mac and your phone ready/i }),
+    page.getByRole("heading", {
+      name: /Prepare this Mac, then add your phone/i,
+    }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", {
@@ -66,7 +70,7 @@ test("streams chat replies through the real websocket path", async ({
 
   await page
     .getByPlaceholder(
-      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command...",
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
     )
     .fill(prompt);
   await expect(sendButton).toBeEnabled();
@@ -162,7 +166,7 @@ test("reconnects after a temporary offline period", async ({ page }) => {
   const sendButton = page.getByRole("button", { name: "Send" });
   await page
     .getByPlaceholder(
-      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run an approved command...",
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
     )
     .fill(prompt);
   await expect(sendButton).toBeEnabled();

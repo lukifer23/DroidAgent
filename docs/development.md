@@ -15,14 +15,14 @@ The default local path is `Ollama + qwen3.5:4b + 65k context + embeddinggemma:30
 
 ```bash
 pnpm dev
-pnpm doctor
+pnpm run doctor
 pnpm verify
 pnpm verify:full
 ```
 
 - `pnpm dev`
   - starts the web dev server and the server dev process
-- `pnpm doctor`
+- `pnpm run doctor`
   - checks local binaries, app directories, and server health without mutating repo-tracked files
 - `pnpm verify`
   - lint, typecheck, unit tests, build, docs validation, and `pnpm audit --prod`

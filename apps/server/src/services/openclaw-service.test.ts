@@ -9,6 +9,8 @@ const {
   setJsonSetting,
   getProcessEnv,
   runCommand,
+  findProcesses,
+  terminateProcesses,
 } = vi.hoisted(() => ({
   getRuntimeSettings: vi.fn(),
   updateRuntimeSettings: vi.fn(),
@@ -16,6 +18,8 @@ const {
   setJsonSetting: vi.fn(),
   getProcessEnv: vi.fn(),
   runCommand: vi.fn(),
+  findProcesses: vi.fn(),
+  terminateProcesses: vi.fn(),
 }));
 
 vi.mock("./app-state-service.js", () => ({
@@ -36,6 +40,8 @@ vi.mock("./keychain-service.js", () => ({
 
 vi.mock("../lib/process.js", () => ({
   runCommand,
+  findProcesses,
+  terminateProcesses,
   CommandError: class CommandError extends Error {
     constructor(
       message: string,
@@ -124,6 +130,8 @@ describe("OpenClaw context management policy", () => {
       stderr: "",
       exitCode: 0,
     });
+    findProcesses.mockResolvedValue([]);
+    terminateProcesses.mockResolvedValue(undefined);
   });
 
   it("writes safeguard compaction and cache-ttl pruning for Anthropic-backed models", async () => {
@@ -545,6 +553,38 @@ describe("OpenClaw context management policy", () => {
       "openclawStartedAt",
       expect.anything(),
     );
+    expect(terminateProcesses).not.toHaveBeenCalled();
+  });
+
+  it("cleans up orphaned DroidAgent OpenClaw workers without touching unrelated processes", async () => {
+    findProcesses.mockImplementation(
+      async (
+        predicate: (processInfo: { pid: number; command: string }) => boolean,
+      ) =>
+        [
+          {
+            pid: 12345,
+            command:
+              "/Users/admin/Downloads/VSCode/DroidAgent/apps/server/node_modules/.bin/openclaw --profile droidagent sessions list",
+          },
+          {
+            pid: 555,
+            command: "/usr/local/bin/openclaw --profile personal gateway run",
+          },
+        ].filter(predicate),
+    );
+
+    await (
+      openclawService as unknown as {
+        cleanupManagedOpenClawProcesses: (params?: {
+          excludePids?: number[];
+        }) => Promise<void>;
+      }
+    ).cleanupManagedOpenClawProcesses();
+
+    expect(terminateProcesses).toHaveBeenCalledWith([12345], {
+      timeoutMs: 2_000,
+    });
   });
 
   it("surfaces a port conflict when another OpenClaw service owns the configured gateway port", async () => {
