@@ -1120,7 +1120,7 @@ function buildContextManagementStatus(params: {
   });
 }
 
-function todayMemoryNoteName(): string {
+export function todayMemoryNoteName(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
@@ -2258,11 +2258,29 @@ export class OpenClawService {
   }
 
   async prepareWorkspaceContext(): Promise<MemoryStatus> {
+    await this.prepareWorkspaceScaffold();
+    return await this.currentMemoryStatus();
+  }
+
+  async prepareWorkspaceScaffold(): Promise<{
+    workspaceRoot: string;
+    memoryDirectory: string;
+    memoryFilePath: string;
+    preferencesFilePath: string;
+    todayNotePath: string;
+  }> {
     const runtimeSettings = await appStateService.getRuntimeSettings();
     const workspaceRoot = this.resolveWorkspaceRoot(runtimeSettings);
     await this.ensureWorkspaceScaffold(workspaceRoot);
     this.invalidateMemoryStatusCache();
-    return await this.currentMemoryStatus();
+    const memoryDirectory = path.join(workspaceRoot, "memory");
+    return {
+      workspaceRoot,
+      memoryDirectory,
+      memoryFilePath: path.join(workspaceRoot, "MEMORY.md"),
+      preferencesFilePath: path.join(workspaceRoot, "PREFERENCES.md"),
+      todayNotePath: path.join(memoryDirectory, `${todayMemoryNoteName()}.md`),
+    };
   }
 
   async prepareSemanticMemory(

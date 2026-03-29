@@ -56,8 +56,7 @@ const {
   };
 
   const openclawMocks = {
-    prepareWorkspaceContext: vi.fn(),
-    memoryStatus: vi.fn(),
+    prepareWorkspaceScaffold: vi.fn(),
     ensureTodayMemoryNote: vi.fn(),
     reindexMemory: vi.fn(),
   };
@@ -76,8 +75,7 @@ const {
       db.query.memoryDrafts.findFirst.mockClear();
       db.insert.mockClear();
       db.update.mockClear();
-      openclawMocks.prepareWorkspaceContext.mockReset();
-      openclawMocks.memoryStatus.mockReset();
+      openclawMocks.prepareWorkspaceScaffold.mockReset();
       openclawMocks.ensureTodayMemoryNote.mockReset();
       openclawMocks.reindexMemory.mockReset();
       performanceStart.mockClear();
@@ -131,10 +129,11 @@ describe("MemoryDraftService", () => {
     todayNotePath = path.join(tempDir, "memory", "2026-03-29.md");
     service = new MemoryDraftService();
 
-    openclawMocks.prepareWorkspaceContext.mockResolvedValue(undefined);
-    openclawMocks.memoryStatus.mockResolvedValue({
-      effectiveWorkspaceRoot: tempDir,
+    openclawMocks.prepareWorkspaceScaffold.mockResolvedValue({
+      workspaceRoot: tempDir,
+      memoryDirectory: path.join(tempDir, "memory"),
       memoryFilePath,
+      preferencesFilePath: path.join(tempDir, "PREFERENCES.md"),
       todayNotePath,
     });
     openclawMocks.ensureTodayMemoryNote.mockResolvedValue(todayNotePath);

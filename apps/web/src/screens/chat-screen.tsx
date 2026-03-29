@@ -14,6 +14,7 @@ import type {
   ChatAttachment,
   ChatMessage,
   ChatMessagePart,
+  ChatRunState,
   DashboardState,
   HostPressureContributor,
   HostPressureRecoveryResult,
@@ -27,6 +28,7 @@ import remarkGfm from "remark-gfm";
 
 import { useAuthQuery, useDashboardQuery } from "../app-data";
 import {
+  type ChatSessionFeedback,
   useClientPerformanceSnapshot,
   useDroidAgentApp,
 } from "../app-context";
@@ -72,6 +74,18 @@ function formatLatency(summary: LatencySummary | undefined): string {
   const value = summary?.lastDurationMs ?? summary?.p95DurationMs ?? null;
   if (!value || !Number.isFinite(value)) {
     return "Awaiting run";
+  }
+
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(1)}s`;
+  }
+
+  return `${Math.round(value)} ms`;
+}
+
+function formatDurationMs(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "Waiting...";
   }
 
   if (value >= 1000) {
@@ -152,6 +166,212 @@ function buildCommandRelayPrompt(
 
   return sections.join("\n\n");
 }
+
+function describeChatFeedback(
+  feedback: ChatSessionFeedback | null | undefined,
+): { firstToken: string; reply: string } {
+  if (!feedback) {
+    return {
+      firstToken: "Awaiting run",
+      reply: "Awaiting run",
+    };
+  }
+
+  return {
+    firstToken:
+      feedback.firstTokenMs !== null
+        ? formatDurationMs(feedback.firstTokenMs)
+        : feedback.status === "error"
+          ? "Failed"
+          : "Waiting...",
+    reply:
+      feedback.completedMs !== null
+        ? formatDurationMs(feedback.completedMs)
+        : feedback.status === "error"
+          ? "Failed"
+          : feedback.status === "done"
+            ? "Done"
+            : "In progress",
+  };
+}
+
+function commandRelayTone(
+  commandJob: JobRecord,
+  commandRelayStatus: CommandRelayStatus,
+): "active" | "complete" | "failed" {
+  if (
+    commandJob.status === "failed" ||
+    commandJob.status === "cancelled" ||
+    commandRelayStatus === "failed"
+  ) {
+    return "failed";
+  }
+
+  if (commandRelayStatus === "complete") {
+    return "complete";
+  }
+
+  return "active";
+}
+
+function commandRelaySummary(
+  commandJob: JobRecord,
+  commandRelayStatus: CommandRelayStatus,
+): { title: string; detail: string } {
+  if (commandJob.status === "queued") {
+    return {
+      title: "Workspace command queued",
+      detail:
+        "DroidAgent queued the approved command and will feed the result back into this chat when it finishes.",
+    };
+  }
+
+  if (commandJob.status === "running") {
+    return {
+      title: "Workspace command running",
+      detail:
+        "The approved command is running in the workspace. Live output is shown here and the finished result will be handed back to DroidAgent.",
+    };
+  }
+
+  if (commandRelayStatus === "relaying") {
+    return {
+      title: "Sending command result back into DroidAgent",
+      detail:
+        "The workspace command finished. DroidAgent is posting the real command output back into the same chat so the agent can continue.",
+    };
+  }
+
+  if (commandRelayStatus === "complete") {
+    return {
+      title: "Command result returned to chat",
+      detail:
+        "The finished workspace command was handed back into DroidAgent. The next assistant reply should continue from that real output.",
+    };
+  }
+
+  if (commandJob.status === "cancelled") {
+    return {
+      title: "Workspace command cancelled",
+      detail:
+        "The approved command was cancelled before the result could be handed back into chat.",
+    };
+  }
+
+  return {
+    title: "Workspace command failed",
+    detail:
+      "The approved command failed. Review the output below before deciding whether to retry or continue manually.",
+  };
+}
+
+function CommandRelayCard({
+  commandJob,
+  commandRelayError,
+  commandRelayStatus,
+  onClear,
+  output,
+}: {
+  commandJob: JobRecord;
+  commandRelayError: string | null;
+  commandRelayStatus: CommandRelayStatus;
+  onClear: () => void;
+  output: JobOutputSnapshot | undefined;
+}) {
+  const summary = commandRelaySummary(commandJob, commandRelayStatus);
+  const tone = commandRelayTone(commandJob, commandRelayStatus);
+
+  return (
+    <article className={`run-state-card chat-inline-job-card ${tone}`}>
+      <div className="chat-inline-job-head">
+        <div>
+          <strong>{summary.title}</strong>
+          <p>{commandJob.command}</p>
+        </div>
+        <button type="button" className="secondary" onClick={onClear}>
+          Clear
+        </button>
+      </div>
+      <div className="chat-inline-job-meta">
+        <span>
+          {commandJob.status} • {commandJob.cwd}
+        </span>
+        {commandJob.lastLine ? <span>{commandJob.lastLine}</span> : null}
+      </div>
+      <div className="operator-side-inline-meta">
+        <span>{summary.detail}</span>
+        {commandRelayError ? <span>{commandRelayError}</span> : null}
+      </div>
+      {output?.stdout || output?.stderr ? (
+        <pre className="chat-inline-job-output">
+          {renderLogTail(
+            [
+              output.stdout ? `$ ${commandJob.command}\n${output.stdout}` : `$ ${commandJob.command}`,
+              output.stderr ? `stderr:\n${output.stderr}` : "",
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+          )}
+        </pre>
+      ) : null}
+    </article>
+  );
+}
+
+function PendingAssistantCard({
+  activeRun,
+  approval,
+  chatFeedback,
+  onResolveApproval,
+}: {
+  activeRun: ChatRunState | null;
+  approval: ApprovalRecord | null;
+  chatFeedback: ChatSessionFeedback | null;
+  onResolveApproval: (approvalId: string, resolution: "approved" | "denied") => void;
+}) {
+  const feedback = describeChatFeedback(chatFeedback);
+  const stage = activeRun?.stage ?? "waiting";
+  const label = activeRun?.label ?? "DroidAgent is preparing a reply";
+  const detail =
+    activeRun?.detail ??
+    (chatFeedback?.status === "error"
+      ? chatFeedback.errorMessage ?? "The last request failed before DroidAgent could respond."
+      : "The request was accepted and DroidAgent is still working.");
+
+  return (
+    <article className="message-card assistant pending">
+      <div className="message-meta">
+        <div className="message-meta-copy">
+          <header>DroidAgent</header>
+          <span>{stage}</span>
+        </div>
+      </div>
+
+      <div className="message-part-stack">
+        <div className={`operator-run-strip ${stage}`}>
+          <strong>{label}</strong>
+          <span>
+            {detail}
+          </span>
+          <div className="operator-side-inline-meta">
+            <span>First token: {feedback.firstToken}</span>
+            <span>Reply: {feedback.reply}</span>
+          </div>
+        </div>
+        {activeRun?.stage === "approval_required" ? (
+          <ApprovalCard approval={approval} onResolve={onResolveApproval} />
+        ) : null}
+      </div>
+    </article>
+  );
+}
+
+type CommandRelayStatus =
+  | "idle"
+  | "awaiting_job"
+  | "relaying"
+  | "complete"
+  | "failed";
 
 function shouldShowCopyButton(message: ChatMessage): boolean {
   if (!message.text.trim()) {
@@ -619,10 +839,12 @@ export function ChatScreen() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const {
+    chatFeedbackBySessionId,
     selectedSessionId,
     setSelectedSessionId,
     sendRealtimeCommand,
     trackChatSubmit,
+    trackChatFailure,
     trackJobStart,
     runAction,
     wsStatus,
@@ -643,7 +865,7 @@ export function ChatScreen() {
     string | null
   >(null);
   const [commandRelayStatus, setCommandRelayStatus] = useState<
-    "idle" | "running" | "complete" | "failed"
+    CommandRelayStatus
   >("idle");
   const [commandRelayError, setCommandRelayError] = useState<string | null>(
     null,
@@ -672,6 +894,9 @@ export function ChatScreen() {
     null;
   const selectedSessionKey = activeSession?.id ?? selectedSessionId;
   const activeRun = selectedSessionKey ? runStates[selectedSessionKey] : null;
+  const chatFeedback = selectedSessionKey
+    ? chatFeedbackBySessionId[selectedSessionKey] ?? null
+    : null;
   const streaming = selectedSessionKey
     ? streamingRuns[selectedSessionKey]
     : undefined;
@@ -716,6 +941,12 @@ export function ChatScreen() {
       ),
     [hostPressure?.contributors],
   );
+  const activeRunApproval =
+    activeRun?.stage === "approval_required"
+      ? ((activeRun.approvalId
+          ? approvalsById.get(activeRun.approvalId) ?? null
+          : null) ?? (approvals.length === 1 ? approvals[0]! : null))
+      : null;
 
   function updateDashboardSessions(
     updater: (sessions: SessionSummary[]) => SessionSummary[],
@@ -767,8 +998,7 @@ export function ChatScreen() {
     enabled: Boolean(commandJobId),
     refetchInterval:
       commandJob &&
-      (commandJob.status === "queued" || commandJob.status === "running") &&
-      wsStatus !== "connected"
+      (commandJob.status === "queued" || commandJob.status === "running")
         ? 1_000
         : false,
     staleTime: 1_000,
@@ -782,29 +1012,60 @@ export function ChatScreen() {
     () => new Map(clientPerformanceSnapshot.metrics.map((metric) => [metric.name, metric])),
     [clientPerformanceSnapshot.metrics],
   );
+  const selectedRunFeedback = useMemo(
+    () => describeChatFeedback(chatFeedback),
+    [chatFeedback],
+  );
+  const showPendingAssistantCard = Boolean(
+    !streaming &&
+      (activeRun?.active ||
+        chatFeedback?.status === "waiting_first_token" ||
+        chatFeedback?.status === "error"),
+  );
 
   const liveMetrics = useMemo(
-    () => [
-      {
-        label: "First token",
-        value: formatLatency(
-          liveMetricMap.get("client.chat.submit_to_first_token")?.summary,
-        ),
-      },
-      {
-        label: "Reply done",
-        value: formatLatency(
-          liveMetricMap.get("client.chat.submit_to_done")?.summary,
-        ),
-      },
-      {
-        label: "Reconnect",
-        value: formatLatency(
-          liveMetricMap.get("client.ws.reconnect_to_resync")?.summary,
-        ),
-      },
+    () => {
+      const metrics = [];
+
+      if (activeRun?.active || streaming || chatFeedback) {
+        metrics.push({
+          label: "First token",
+          value: selectedRunFeedback.firstToken,
+        });
+        metrics.push({
+          label: "Reply",
+          value: selectedRunFeedback.reply,
+        });
+      }
+
+      const reconnectValue = formatLatency(
+        liveMetricMap.get("client.ws.reconnect_to_resync")?.summary,
+      );
+      if (reconnectValue !== "Awaiting run") {
+        metrics.push({
+          label: "Reconnect",
+          value: reconnectValue,
+        });
+      }
+
+      if (commandJob) {
+        metrics.push({
+          label: "Command",
+          value: commandJob.status,
+        });
+      }
+
+      return metrics;
+    },
+    [
+      activeRun?.active,
+      chatFeedback,
+      commandJob,
+      liveMetricMap,
+      selectedRunFeedback.firstToken,
+      selectedRunFeedback.reply,
+      streaming,
     ],
-    [liveMetricMap],
   );
   const visibleLiveMetrics = useMemo(
     () => liveMetrics.filter((metric) => metric.value !== "Awaiting run"),
@@ -875,7 +1136,7 @@ export function ChatScreen() {
     if (
       commandJob.status === "queued" ||
       commandJob.status === "running" ||
-      commandRelayStatus === "running" ||
+      commandRelayStatus === "relaying" ||
       commandRelayStatus === "complete" ||
       relayedCommandJobsRef.current.has(commandJobId)
     ) {
@@ -883,11 +1144,12 @@ export function ChatScreen() {
     }
 
     let cancelled = false;
-    setCommandRelayStatus("running");
+    setCommandRelayStatus("relaying");
     setCommandRelayError(null);
 
     void (async () => {
       try {
+        trackChatSubmit(commandRelaySessionId);
         const output = await queryClient.fetchQuery({
           queryKey: ["jobs", commandJobId, "output"],
           queryFn: () =>
@@ -917,6 +1179,12 @@ export function ChatScreen() {
         if (cancelled) {
           return;
         }
+        trackChatFailure(
+          commandRelaySessionId,
+          error instanceof Error
+            ? error.message
+            : "Failed to send command output back into chat.",
+        );
         setCommandRelayStatus("failed");
         setCommandRelayError(
           error instanceof Error
@@ -935,6 +1203,8 @@ export function ChatScreen() {
     commandRelaySessionId,
     commandRelayStatus,
     queryClient,
+    trackChatFailure,
+    trackChatSubmit,
   ]);
 
   async function uploadFiles(files: File[]) {
@@ -1049,7 +1319,7 @@ export function ChatScreen() {
     trackJobStart(response.jobId);
     setCommandJobId(response.jobId);
     setCommandRelaySessionId(selectedSessionKey);
-    setCommandRelayStatus("idle");
+    setCommandRelayStatus("awaiting_job");
     setCommandRelayError(null);
     await queryClient.invalidateQueries({ queryKey: ["jobs"] });
   }
@@ -1304,6 +1574,12 @@ export function ChatScreen() {
         }),
       ]);
     } catch (error) {
+      trackChatFailure(
+        selectedSessionKey,
+        error instanceof Error
+          ? error.message
+          : "Failed to send the message to DroidAgent.",
+      );
       queryClient.setQueryData<ChatMessage[]>(
         ["sessions", selectedSessionKey, "messages"],
         previousMessages,
@@ -1440,7 +1716,10 @@ export function ChatScreen() {
               {!historyQuery.isLoading &&
               !historyQuery.isError &&
               messages.length === 0 &&
-              !streaming ? (
+              !streaming &&
+              !activeRun?.active &&
+              !chatFeedback &&
+              !commandJob ? (
                 <article className="panel-card compact">
                   This chat is empty. Start with a prompt, attach files, or restore an archived chat from the rail.
                 </article>
@@ -1493,7 +1772,7 @@ export function ChatScreen() {
                           onRunCommand={(command) => {
                             void runAction(async () => {
                               await handleRunSuggestedCommand(command);
-                            }, "Command started as a workspace job.");
+                            }, "Command running in chat. DroidAgent will relay the real output back into this session.");
                           }}
                           onOpenInTerminal={(command) => {
                             handleOpenInTerminal(command);
@@ -1538,6 +1817,34 @@ export function ChatScreen() {
                   ) : null}
                 </article>
               ))}
+
+              {showPendingAssistantCard ? (
+                <PendingAssistantCard
+                  activeRun={activeRun ?? null}
+                  approval={activeRunApproval}
+                  chatFeedback={chatFeedback}
+                  onResolveApproval={(approvalId, resolution) => {
+                    void runAction(async () => {
+                      await handleResolveApproval(approvalId, resolution);
+                    });
+                  }}
+                />
+              ) : null}
+
+              {commandJob ? (
+                <CommandRelayCard
+                  commandJob={commandJob}
+                  commandRelayError={commandRelayError}
+                  commandRelayStatus={commandRelayStatus}
+                  onClear={() => {
+                    setCommandJobId(null);
+                    setCommandRelaySessionId(null);
+                    setCommandRelayStatus("idle");
+                    setCommandRelayError(null);
+                  }}
+                  output={commandJobOutputQuery.data}
+                />
+              ) : null}
 
               {streaming ? (
                 <article className="message-card assistant streaming">
@@ -1774,13 +2081,7 @@ export function ChatScreen() {
                   </div>
                   {activeRun.stage === "approval_required" ? (
                     <ApprovalCard
-                      approval={
-                        approvals.find(
-                          (approval) =>
-                            activeRun.approvalId &&
-                            approval.id === activeRun.approvalId,
-                        ) ?? (approvals.length === 1 ? approvals[0]! : null)
-                      }
+                      approval={activeRunApproval}
                       onResolve={(approvalId, resolution) => {
                         void runAction(async () => {
                           await handleResolveApproval(approvalId, resolution);
@@ -1792,88 +2093,6 @@ export function ChatScreen() {
               </section>
             ) : null}
 
-            {commandJob ? (
-              <section className="operator-side-module">
-                <div className="operator-side-module-head">
-                  <strong>Command relay</strong>
-                  <span>{commandJob.status}</span>
-                </div>
-                <article
-                  className={`run-state-card chat-inline-job-card ${
-                    commandJob.status === "failed"
-                      ? "failed"
-                      : commandJob.status === "running" ||
-                          commandJob.status === "queued"
-                        ? "active"
-                        : "complete"
-                  }`}
-                >
-                  <div className="chat-inline-job-head">
-                    <div>
-                      <strong>
-                        {commandJob.status === "queued"
-                          ? "Command queued in chat"
-                          : commandJob.status === "running"
-                            ? "Running command in chat"
-                            : commandJob.status === "succeeded"
-                              ? "Command finished"
-                              : commandJob.status === "cancelled"
-                                ? "Command cancelled"
-                                : "Command failed"}
-                      </strong>
-                      <p>{commandJob.command}</p>
-                    </div>
-                    <button
-                      type="button"
-                      className="secondary"
-                      onClick={() => {
-                        setCommandJobId(null);
-                        setCommandRelaySessionId(null);
-                        setCommandRelayStatus("idle");
-                        setCommandRelayError(null);
-                      }}
-                    >
-                      Clear
-                    </button>
-                  </div>
-                  <div className="chat-inline-job-meta">
-                    <span>
-                      {commandJob.status} • {commandJob.cwd}
-                    </span>
-                    {commandJob.lastLine ? <span>{commandJob.lastLine}</span> : null}
-                  </div>
-                  <div className="operator-side-inline-meta">
-                    <span>
-                      {commandRelayStatus === "running"
-                        ? "Sending result back into chat"
-                        : commandRelayStatus === "complete"
-                          ? "Result relayed into chat"
-                          : commandRelayStatus === "failed"
-                            ? "Relay failed"
-                            : "Awaiting command completion"}
-                    </span>
-                    {commandRelayError ? <span>{commandRelayError}</span> : null}
-                  </div>
-                  {(commandJobOutputQuery.data?.stdout ||
-                    commandJobOutputQuery.data?.stderr) ? (
-                    <pre className="chat-inline-job-output">
-                      {renderLogTail(
-                        [
-                          commandJobOutputQuery.data.stdout
-                            ? `$ ${commandJob.command}\n${commandJobOutputQuery.data.stdout}`
-                            : `$ ${commandJob.command}`,
-                          commandJobOutputQuery.data.stderr
-                            ? `stderr:\n${commandJobOutputQuery.data.stderr}`
-                            : "",
-                        ]
-                          .filter(Boolean)
-                          .join("\n\n"),
-                      )}
-                    </pre>
-                  ) : null}
-                </article>
-              </section>
-            ) : null}
           </div>
         </aside>
       </section>
@@ -1885,7 +2104,9 @@ export function ChatScreen() {
             <h3>Ask DroidAgent</h3>
           </div>
           <small>
-            {activeRun?.active
+            {commandJob
+              ? "Command relay active"
+              : activeRun?.active
               ? "Live run"
               : maintenanceActive
                 ? "Maintenance active"
@@ -1917,7 +2138,11 @@ export function ChatScreen() {
 
           <div className="composer-footer">
             <small className="composer-status">
-              {activeRun?.active
+              {commandJob
+                ? `${commandRelaySummary(commandJob, commandRelayStatus).title} • ${
+                    commandJob.lastLine || commandRelaySummary(commandJob, commandRelayStatus).detail
+                  }`
+                : activeRun?.active
                 ? `${activeRun.label}${activeRun.detail ? ` • ${activeRun.detail}` : ""}`
                 : maintenanceActive
                   ? maintenance?.current?.message ??

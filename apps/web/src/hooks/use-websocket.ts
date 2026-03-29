@@ -157,6 +157,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const reconnectStartedAtRef = useRef<number | null>(null);
   const flushHandleRef = useRef<number | ReturnType<typeof setTimeout> | null>(null);
   const pendingStreamRunsRef = useRef<Record<string, { runId: string; text: string }>>({});
+  const pendingStreamClearTimeoutsRef = useRef<
+    Map<string, ReturnType<typeof setTimeout>>
+  >(new Map());
   const pendingJobOutputRef = useRef<Map<string, { stdout: string; stderr: string; stdoutBytes: number; stderrBytes: number }>>(
     new Map()
   );
@@ -223,6 +226,31 @@ export function useWebSocket(options: UseWebSocketOptions) {
     }
   }, [queryClient]);
 
+  const clearDeferredStreamClear = useCallback((sessionId: string) => {
+    const timeoutId = pendingStreamClearTimeoutsRef.current.get(sessionId);
+    if (!timeoutId) {
+      return;
+    }
+    clearTimeout(timeoutId);
+    pendingStreamClearTimeoutsRef.current.delete(sessionId);
+  }, []);
+
+  const scheduleDeferredStreamClear = useCallback(
+    (sessionId: string, runId: string) => {
+      clearDeferredStreamClear(sessionId);
+      const timeoutId = setTimeout(() => {
+        pendingStreamClearTimeoutsRef.current.delete(sessionId);
+        const activeRun = chatStreamStore.getSnapshot()[sessionId];
+        if (activeRun?.runId !== runId) {
+          return;
+        }
+        chatStreamStore.clear(sessionId);
+      }, 4_000);
+      pendingStreamClearTimeoutsRef.current.set(sessionId, timeoutId);
+    },
+    [clearDeferredStreamClear],
+  );
+
   const scheduleFlush = useCallback(() => {
     if (flushHandleRef.current !== null) {
       return;
@@ -278,10 +306,12 @@ export function useWebSocket(options: UseWebSocketOptions) {
           queryClient.setQueryData(["access"], payload.payload);
         }
         if (payload.type === "chat.history") {
+          clearDeferredStreamClear(payload.payload.sessionId);
           chatStreamStore.clear(payload.payload.sessionId);
           queryClient.setQueryData(["sessions", payload.payload.sessionId, "messages"], payload.payload.messages);
         }
         if (payload.type === "chat.stream.delta") {
+          clearDeferredStreamClear(payload.payload.sessionId);
           const existing = pendingStreamRunsRef.current[payload.payload.sessionId] ?? chatStreamStore.getSnapshot()[payload.payload.sessionId];
           const nextRun = {
             runId: payload.payload.runId,
@@ -302,8 +332,11 @@ export function useWebSocket(options: UseWebSocketOptions) {
           if (flushHandleRef.current !== null) {
             flushPendingRealtimeState();
           }
-          chatStreamStore.clear(payload.payload.sessionId);
           delete pendingStreamRunsRef.current[payload.payload.sessionId];
+          scheduleDeferredStreamClear(
+            payload.payload.sessionId,
+            payload.payload.runId,
+          );
         }
         if (payload.type === "chat.run") {
           chatRunStore.setRun(payload.payload);
@@ -435,7 +468,14 @@ export function useWebSocket(options: UseWebSocketOptions) {
     ws.onerror = () => {
       ws.close();
     };
-  }, [enabled, queryClient, syncDashboardSnapshot]);
+  }, [
+    clearDeferredStreamClear,
+    enabled,
+    flushPendingRealtimeState,
+    queryClient,
+    scheduleDeferredStreamClear,
+    syncDashboardSnapshot,
+  ]);
 
   useEffect(() => {
     connect();
@@ -456,6 +496,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
         }
         flushHandleRef.current = null;
       }
+      for (const timeoutId of pendingStreamClearTimeoutsRef.current.values()) {
+        clearTimeout(timeoutId);
+      }
+      pendingStreamClearTimeoutsRef.current.clear();
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;

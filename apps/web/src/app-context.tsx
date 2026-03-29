@@ -24,6 +24,15 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 }
 
+export interface ChatSessionFeedback {
+  sessionId: string;
+  status: "waiting_first_token" | "streaming" | "done" | "error";
+  firstTokenMs: number | null;
+  completedMs: number | null;
+  errorMessage: string | null;
+  updatedAt: string;
+}
+
 interface DroidAgentAppContextValue {
   notice: string | null;
   setNotice: (value: string | null) => void;
@@ -44,7 +53,9 @@ interface DroidAgentAppContextValue {
   beginRouteTransition: (path: string) => void;
   finishRouteTransition: (path: string) => void;
   trackChatSubmit: (sessionId: string) => void;
+  trackChatFailure: (sessionId: string, message: string) => void;
   trackJobStart: (jobId: string) => void;
+  chatFeedbackBySessionId: Record<string, ChatSessionFeedback>;
 }
 
 const DroidAgentAppContext = createContext<DroidAgentAppContextValue | null>(null);
@@ -67,6 +78,9 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       : "system";
   });
   const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
+  const [chatFeedbackBySessionId, setChatFeedbackBySessionId] = useState<
+    Record<string, ChatSessionFeedback>
+  >({});
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">(() => {
     if (
       typeof window !== "undefined" &&
@@ -82,6 +96,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     Map<
       string,
       {
+        startedAt: number;
         firstToken: ReturnType<typeof clientPerformance.start>;
         firstTokenFinished: boolean;
         completed: ReturnType<typeof clientPerformance.start>;
@@ -89,6 +104,9 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     >
   >(new Map());
   const pendingJobMetricsRef = useRef<Map<string, ReturnType<typeof clientPerformance.start>>>(new Map());
+  const chatFeedbackTimeoutsRef = useRef<
+    Map<string, ReturnType<typeof setTimeout>>
+  >(new Map());
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -160,6 +178,15 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     };
   }, [themePreference]);
 
+  useEffect(() => {
+    return () => {
+      for (const timeoutId of chatFeedbackTimeoutsRef.current.values()) {
+        clearTimeout(timeoutId);
+      }
+      chatFeedbackTimeoutsRef.current.clear();
+    };
+  }, []);
+
   const refreshQueries = useEffectEvent(async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
@@ -206,8 +233,36 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     routeTransitionRef.current = null;
   });
 
+  const clearChatFeedbackTimeout = useEffectEvent((sessionId: string) => {
+    const timeoutId = chatFeedbackTimeoutsRef.current.get(sessionId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      chatFeedbackTimeoutsRef.current.delete(sessionId);
+    }
+  });
+
+  const scheduleChatFeedbackClear = useEffectEvent(
+    (sessionId: string, delayMs = 12_000) => {
+      clearChatFeedbackTimeout(sessionId);
+      const timeoutId = setTimeout(() => {
+        chatFeedbackTimeoutsRef.current.delete(sessionId);
+        setChatFeedbackBySessionId((current) => {
+          if (!(sessionId in current)) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[sessionId];
+          return next;
+        });
+      }, delayMs);
+      chatFeedbackTimeoutsRef.current.set(sessionId, timeoutId);
+    },
+  );
+
   const trackChatSubmit = useEffectEvent((sessionId: string) => {
+    clearChatFeedbackTimeout(sessionId);
     pendingChatMetricsRef.current.set(sessionId, {
+      startedAt: performance.now(),
       firstToken: clientPerformance.start("client.chat.submit_to_first_token", {
         sessionId
       }),
@@ -216,7 +271,49 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
         sessionId
       })
     });
+    setChatFeedbackBySessionId((current) => ({
+      ...current,
+      [sessionId]: {
+        sessionId,
+        status: "waiting_first_token",
+        firstTokenMs: null,
+        completedMs: null,
+        errorMessage: null,
+        updatedAt: new Date().toISOString(),
+      },
+    }));
   });
+
+  const trackChatFailure = useEffectEvent(
+    (sessionId: string, message: string) => {
+      const tracked = pendingChatMetricsRef.current.get(sessionId);
+      if (tracked && !tracked.firstTokenFinished) {
+        tracked.firstToken.finish({
+          outcome: "error",
+        });
+        tracked.firstTokenFinished = true;
+      }
+      tracked?.completed.finish({
+        outcome: "error",
+      });
+      pendingChatMetricsRef.current.delete(sessionId);
+      setChatFeedbackBySessionId((current) => ({
+        ...current,
+        [sessionId]: {
+          sessionId,
+          status: "error",
+          firstTokenMs: current[sessionId]?.firstTokenMs ?? null,
+          completedMs: tracked
+            ? Number((performance.now() - tracked.startedAt).toFixed(2))
+            : current[sessionId]?.completedMs ?? null,
+          errorMessage: message,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+      scheduleChatFeedbackClear(sessionId);
+      setErrorMessage(message);
+    },
+  );
 
   const trackJobStart = useEffectEvent((jobId: string) => {
     pendingJobMetricsRef.current.set(
@@ -230,12 +327,28 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const handleSocketMessage = useEffectEvent((event: ServerEvent) => {
     if (event.type === "chat.stream.delta") {
       const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
+      const firstTokenMs = tracked
+        ? Number((performance.now() - tracked.startedAt).toFixed(2))
+        : null;
       if (tracked && !tracked.firstTokenFinished) {
         tracked.firstToken.finish({
           runId: event.payload.runId
         });
         tracked.firstTokenFinished = true;
       }
+      clearChatFeedbackTimeout(event.payload.sessionId);
+      setChatFeedbackBySessionId((current) => ({
+        ...current,
+        [event.payload.sessionId]: {
+          sessionId: event.payload.sessionId,
+          status: "streaming",
+          firstTokenMs:
+            current[event.payload.sessionId]?.firstTokenMs ?? firstTokenMs,
+          completedMs: null,
+          errorMessage: null,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
       return;
     }
 
@@ -253,6 +366,20 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
         outcome: "done"
       });
       pendingChatMetricsRef.current.delete(event.payload.sessionId);
+      setChatFeedbackBySessionId((current) => ({
+        ...current,
+        [event.payload.sessionId]: {
+          sessionId: event.payload.sessionId,
+          status: "done",
+          firstTokenMs: current[event.payload.sessionId]?.firstTokenMs ?? null,
+          completedMs: tracked
+            ? Number((performance.now() - tracked.startedAt).toFixed(2))
+            : current[event.payload.sessionId]?.completedMs ?? null,
+          errorMessage: null,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+      scheduleChatFeedbackClear(event.payload.sessionId);
       return;
     }
 
@@ -270,6 +397,20 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
         outcome: "error"
       });
       pendingChatMetricsRef.current.delete(event.payload.sessionId);
+      setChatFeedbackBySessionId((current) => ({
+        ...current,
+        [event.payload.sessionId]: {
+          sessionId: event.payload.sessionId,
+          status: "error",
+          firstTokenMs: current[event.payload.sessionId]?.firstTokenMs ?? null,
+          completedMs: tracked
+            ? Number((performance.now() - tracked.startedAt).toFixed(2))
+            : current[event.payload.sessionId]?.completedMs ?? null,
+          errorMessage: event.payload.message,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+      scheduleChatFeedbackClear(event.payload.sessionId);
       setErrorMessage(event.payload.message);
       return;
     }
@@ -402,7 +543,9 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       beginRouteTransition,
       finishRouteTransition,
       trackChatSubmit,
-      trackJobStart
+      trackChatFailure,
+      trackJobStart,
+      chatFeedbackBySessionId,
     }),
     [
       beginRouteTransition,
@@ -419,8 +562,10 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       themePreference,
       resolvedTheme,
       trackChatSubmit,
+      trackChatFailure,
       trackJobStart,
-      wsStatus
+      wsStatus,
+      chatFeedbackBySessionId,
     ]
   );
 

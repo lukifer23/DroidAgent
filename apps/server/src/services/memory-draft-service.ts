@@ -122,7 +122,11 @@ export class MemoryDraftStateError extends Error {}
 export class MemoryDraftStaleError extends Error {}
 
 export class MemoryDraftService {
-  private buildMemoryPaths(status: Awaited<ReturnType<typeof openclawService.memoryStatus>>) {
+  private buildMemoryPaths(status: {
+    effectiveWorkspaceRoot: string;
+    memoryFilePath: string;
+    todayNotePath: string;
+  }) {
     return {
       effectiveWorkspaceRoot: status.effectiveWorkspaceRoot,
       memoryFilePath: status.memoryFilePath,
@@ -277,13 +281,16 @@ export class MemoryDraftService {
   ): Promise<MemoryDraftApplyResult> {
     const parsed = MemoryDraftApplyRequestSchema.parse(input);
     const draft = await this.getDraft(draftId);
-    await openclawService.prepareWorkspaceContext();
-    const currentMemoryStatus = await openclawService.memoryStatus();
+    const scaffold = await openclawService.prepareWorkspaceScaffold();
     if (draft.status === "applied") {
       return MemoryDraftApplyResultSchema.parse({
         draft,
         outcome: "alreadyApplied",
-        memory: this.buildMemoryPaths(currentMemoryStatus),
+        memory: this.buildMemoryPaths({
+          effectiveWorkspaceRoot: scaffold.workspaceRoot,
+          memoryFilePath: scaffold.memoryFilePath,
+          todayNotePath: scaffold.todayNotePath,
+        }),
         reindexMode: null,
       });
     }
@@ -297,10 +304,10 @@ export class MemoryDraftService {
 
     const targetPath =
       draft.target === "preferences"
-        ? path.join(currentMemoryStatus.effectiveWorkspaceRoot, "PREFERENCES.md")
+        ? scaffold.preferencesFilePath
         : draft.target === "todayNote"
           ? await openclawService.ensureTodayMemoryNote()
-          : currentMemoryStatus.memoryFilePath;
+          : scaffold.memoryFilePath;
     const existingContent = await readUtf8OrEmpty(targetPath);
     const nextContent = appendMarkdownBlock(
       existingContent,
@@ -348,7 +355,11 @@ export class MemoryDraftService {
     return MemoryDraftApplyResultSchema.parse({
       draft: appliedDraft,
       outcome: "applied",
-      memory: this.buildMemoryPaths(currentMemoryStatus),
+      memory: this.buildMemoryPaths({
+        effectiveWorkspaceRoot: scaffold.workspaceRoot,
+        memoryFilePath: scaffold.memoryFilePath,
+        todayNotePath: scaffold.todayNotePath,
+      }),
       reindexMode,
     });
   }

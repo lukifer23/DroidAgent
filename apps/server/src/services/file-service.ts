@@ -212,7 +212,7 @@ export class FileService {
     try {
       const normalizedTarget = normalizeClientPath(target);
       if (isFirstClassMemoryPath(normalizedTarget)) {
-        await openclawService.prepareWorkspaceContext();
+        await openclawService.prepareWorkspaceScaffold();
       }
       const { absolutePath, clientPath } = await this.resolveWithinRoot(normalizedTarget);
       const stat = await fs.stat(absolutePath);

@@ -14,13 +14,13 @@ vi.mock("./app-state-service.js", () => ({
   }
 }));
 
-const { prepareWorkspaceContext } = vi.hoisted(() => ({
-  prepareWorkspaceContext: vi.fn(),
+const { prepareWorkspaceScaffold } = vi.hoisted(() => ({
+  prepareWorkspaceScaffold: vi.fn(),
 }));
 
 vi.mock("./openclaw-service.js", () => ({
   openclawService: {
-    prepareWorkspaceContext,
+    prepareWorkspaceScaffold,
   },
 }));
 
@@ -34,8 +34,8 @@ describe("FileService", () => {
     getRuntimeSettings.mockResolvedValue({
       workspaceRoot
     });
-    prepareWorkspaceContext.mockReset();
-    prepareWorkspaceContext.mockResolvedValue(undefined);
+    prepareWorkspaceScaffold.mockReset();
+    prepareWorkspaceScaffold.mockResolvedValue(undefined);
   });
 
   afterEach(async () => {
@@ -67,13 +67,13 @@ describe("FileService", () => {
 
   it("repairs the workspace scaffold before opening first-class memory files", async () => {
     const memoryFilePath = path.join(workspaceRoot, "MEMORY.md");
-    prepareWorkspaceContext.mockImplementation(async () => {
+    prepareWorkspaceScaffold.mockImplementation(async () => {
       await fs.writeFile(memoryFilePath, "# Durable Memory\n", "utf8");
     });
 
     const loaded = await fileService.readFile("MEMORY.md");
 
-    expect(prepareWorkspaceContext).toHaveBeenCalledTimes(1);
+    expect(prepareWorkspaceScaffold).toHaveBeenCalledTimes(1);
     expect(loaded.path).toBe("MEMORY.md");
     expect(loaded.content).toContain("Durable Memory");
   });
