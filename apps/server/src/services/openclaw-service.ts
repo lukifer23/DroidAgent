@@ -729,6 +729,151 @@ function parseApprovalRequestPart(text: string): ChatMessagePart | null {
   };
 }
 
+function resolveStructuredToolName(record: Record<string, unknown>): string | null {
+  for (const key of ["name", "toolName", "tool"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function renderStructuredDetails(value: unknown): string | null {
+  const lines = collectTextParts(value);
+  if (lines.length > 0) {
+    const joined = lines.join("\n\n").trim();
+    if (joined) {
+      return joined;
+    }
+  }
+
+  const rendered = formatStructuredValue(value).trim();
+  return rendered || null;
+}
+
+function structuredPartsFromContent(
+  value: unknown,
+  role: ChatMessage["role"],
+): ChatMessagePart[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return [];
+    }
+
+    if (role === "tool") {
+      return [
+        {
+          type: "tool_result_summary",
+          toolName: null,
+          summary: "Tool returned output",
+          details: trimmed,
+        },
+      ];
+    }
+
+    return parseMessageParts({
+      text: value,
+      attachments: [],
+      role,
+      status: "complete",
+    });
+  }
+
+  if (value === null || value === undefined) {
+    return [];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => structuredPartsFromContent(entry, role));
+  }
+
+  if (typeof value !== "object") {
+    return structuredPartsFromContent(String(value), role);
+  }
+
+  const record = value as Record<string, unknown>;
+  const type = typeof record.type === "string" ? record.type : null;
+
+  if (type === "text" && typeof record.text === "string") {
+    return structuredPartsFromContent(record.text, role);
+  }
+
+  if (type === "toolCall") {
+    const toolName = resolveStructuredToolName(record) ?? "tool";
+    return [
+      {
+        type: "tool_call_summary",
+        toolName,
+        summary: `Calling ${toolName}`,
+        details: renderStructuredDetails(record.arguments),
+      },
+    ];
+  }
+
+  if (type === "toolResult") {
+    const toolName = resolveStructuredToolName(record);
+    return [
+      {
+        type: "tool_result_summary",
+        toolName,
+        summary: toolName
+          ? `${toolName} returned output`
+          : "Tool returned output",
+        details: renderStructuredDetails(
+          record.content ?? record.text ?? record.result ?? record.output,
+        ),
+      },
+    ];
+  }
+
+  if (typeof record.text === "string") {
+    return structuredPartsFromContent(record.text, role);
+  }
+
+  if (role === "tool" && ("content" in record || "result" in record || "output" in record)) {
+    return [
+      {
+        type: "tool_result_summary",
+        toolName: resolveStructuredToolName(record),
+        summary: resolveStructuredToolName(record)
+          ? `${resolveStructuredToolName(record)} returned output`
+          : "Tool returned output",
+        details: renderStructuredDetails(
+          record.content ?? record.result ?? record.output,
+        ),
+      },
+    ];
+  }
+
+  if ("content" in record) {
+    const nested = structuredPartsFromContent(record.content, role);
+    if (nested.length > 0) {
+      return nested;
+    }
+  }
+
+  if ("result" in record || "output" in record) {
+    const details = renderStructuredDetails(record.result ?? record.output);
+    return details
+      ? [
+          {
+            type: "tool_result_summary",
+            toolName: resolveStructuredToolName(record),
+            summary: resolveStructuredToolName(record)
+              ? `${resolveStructuredToolName(record)} returned output`
+              : "Tool returned output",
+            details,
+          },
+        ]
+      : [];
+  }
+
+  return [];
+}
+
 function parseMessageParts(params: {
   text: string;
   attachments: ReturnType<typeof publicAttachmentsFromPayload>;
@@ -1025,24 +1170,54 @@ function parseHistoryMessage(
   message: Record<string, unknown>,
   index: number,
 ): ChatMessage {
+  const role = resolveMessageRole(message.role);
+  const rawContent = message.content ?? message.text;
   const renderedText = renderHistoryContent(message);
   const { payload } = extractAttachmentPayload(
-    collectTextParts(message.content ?? message.text).join("\n\n") ||
+    collectTextParts(rawContent).join("\n\n") ||
       (typeof message.text === "string" ? message.text : ""),
   );
+  const attachments = publicAttachmentsFromPayload(payload);
+  const structuredParts =
+    typeof rawContent === "string"
+      ? role === "tool" && renderedText.trim()
+        ? [
+            {
+              type: "tool_result_summary" as const,
+              toolName: null,
+              summary: "Tool returned output",
+              details: renderedText.trim(),
+            },
+          ]
+        : []
+      : structuredPartsFromContent(rawContent, role);
+  const parts =
+    structuredParts.length > 0
+      ? [
+          ...(attachments.length > 0
+            ? [
+                {
+                  type: "attachments" as const,
+                  attachments,
+                },
+              ]
+            : []),
+          ...structuredParts,
+        ]
+      : parseMessageParts({
+          text: renderedText,
+          attachments,
+          role,
+          status: "complete",
+        });
 
   return ChatMessageSchema.parse({
     id: String(message.id ?? `${sessionKey}-${index}`),
     sessionId: sessionKey,
-    role: resolveMessageRole(message.role),
+    role,
     text: renderedText,
-    parts: parseMessageParts({
-      text: renderedText,
-      attachments: publicAttachmentsFromPayload(payload),
-      role: resolveMessageRole(message.role),
-      status: "complete",
-    }),
-    attachments: publicAttachmentsFromPayload(payload),
+    parts,
+    attachments,
     createdAt: resolveIsoTimestamp(message),
     status: "complete",
     source: "openclaw",

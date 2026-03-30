@@ -1503,11 +1503,13 @@ app.post("/api/sessions/:sessionId/messages", async (c) => {
       websocketHub.publishChatDone(sessionId, runId);
       await websocketHub.pushChatHistory(sessionId);
       await websocketHub.publishSessionsUpdated();
+      await websocketHub.publishPerformanceUpdated();
     },
     onError: async (message) => {
       websocketHub.publishChatError(sessionId, runId, message);
       await websocketHub.pushChatHistory(sessionId);
       await websocketHub.publishSessionsUpdated();
+      await websocketHub.publishPerformanceUpdated();
     },
   });
   const run = await harnessService.sendMessage(sessionId, body, measuredRelay.relay);

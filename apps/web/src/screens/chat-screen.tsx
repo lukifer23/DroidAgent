@@ -18,13 +18,15 @@ import type {
   DashboardState,
   HostPressureContributor,
   HostPressureRecoveryResult,
+  LatencySample,
   LatencySummary,
+  PerformanceSnapshot,
   SessionSummary,
 } from "@droidagent/shared";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { useAuthQuery, useDashboardQuery } from "../app-data";
+import { useAuthQuery, useDashboardQuery, usePerformanceQuery } from "../app-data";
 import {
   type ChatSessionFeedback,
   useClientPerformanceSnapshot,
@@ -40,6 +42,7 @@ import { useStreamingRuns } from "../lib/chat-stream-store";
 import { formatTokenBudget } from "../lib/formatters";
 
 const TERMINAL_PREFILL_STORAGE_KEY = "droidagent-terminal-prefill";
+const RECENT_RUN_SAMPLE_MAX_AGE_MS = 90_000;
 
 interface ExpandedImageState {
   src: string;
@@ -123,6 +126,204 @@ function formatHostRatio(value: number | null | undefined): string {
   return `${Math.round(value * 100)}%`;
 }
 
+interface RunBreakdownItem {
+  label: string;
+  value: string;
+  tone?: "neutral" | "warn" | "good";
+}
+
+interface RunBreakdown {
+  items: RunBreakdownItem[];
+  note: string | null;
+}
+
+function recentSessionSample(
+  snapshot: PerformanceSnapshot | undefined,
+  name: string,
+  sessionId: string | null | undefined,
+): LatencySample | null {
+  if (!snapshot || !sessionId) {
+    return null;
+  }
+
+  const metric = snapshot.metrics.find((entry) => entry.name === name);
+  if (!metric) {
+    return null;
+  }
+
+  const sample =
+    [...metric.recentSamples]
+      .reverse()
+      .find((entry) => entry.context.sessionId === sessionId) ?? null;
+  if (!sample) {
+    return null;
+  }
+
+  const ageMs = Date.now() - new Date(sample.endedAt).getTime();
+  return ageMs <= RECENT_RUN_SAMPLE_MAX_AGE_MS ? sample : null;
+}
+
+function buildRunBreakdown(params: {
+  sessionId: string | null | undefined;
+  activeRun: ChatRunState | null;
+  chatFeedback: ChatSessionFeedback | null;
+  clientSnapshot: PerformanceSnapshot;
+  serverSnapshot: PerformanceSnapshot | undefined;
+}): RunBreakdown {
+  if (!params.sessionId) {
+    return {
+      items: [],
+      note: null,
+    };
+  }
+
+  const serverAccept = recentSessionSample(
+    params.serverSnapshot,
+    "chat.send.submitToAccepted",
+    params.sessionId,
+  );
+  const modelWait = recentSessionSample(
+    params.serverSnapshot,
+    "chat.stream.acceptedToFirstDelta",
+    params.sessionId,
+  );
+  const relayForward = recentSessionSample(
+    params.serverSnapshot,
+    "chat.stream.firstDeltaForward",
+    params.sessionId,
+  );
+  const relayComplete = recentSessionSample(
+    params.serverSnapshot,
+    "chat.stream.acceptedToCompleteRelay",
+    params.sessionId,
+  );
+  const clientFirstToken = recentSessionSample(
+    params.clientSnapshot,
+    "client.chat.submit_to_first_token",
+    params.sessionId,
+  );
+  const clientComplete = recentSessionSample(
+    params.clientSnapshot,
+    "client.chat.submit_to_done",
+    params.sessionId,
+  );
+
+  const items: RunBreakdownItem[] = [
+    {
+      label: "Server accept",
+      value: serverAccept ? formatDurationMs(serverAccept.durationMs) : "Waiting...",
+      tone:
+        serverAccept && serverAccept.durationMs > 250 ? "warn" : "neutral",
+    },
+    {
+      label: "Model/tool wait",
+      value: modelWait ? formatDurationMs(modelWait.durationMs) : "Waiting...",
+      tone:
+        modelWait && modelWait.durationMs > 2_000 ? "warn" : "neutral",
+    },
+    {
+      label: "Relay first token",
+      value: relayForward ? formatDurationMs(relayForward.durationMs) : "Waiting...",
+      tone:
+        relayForward && relayForward.durationMs > 120 ? "warn" : "good",
+    },
+    {
+      label: "Client first token",
+      value:
+        params.chatFeedback?.firstTokenMs !== null
+          ? formatDurationMs(params.chatFeedback?.firstTokenMs)
+          : clientFirstToken
+            ? formatDurationMs(clientFirstToken.durationMs)
+            : "Waiting...",
+      tone:
+        (params.chatFeedback?.firstTokenMs ?? clientFirstToken?.durationMs ?? 0) >
+        2_000
+          ? "warn"
+          : "neutral",
+    },
+    {
+      label: "Full reply",
+      value:
+        params.chatFeedback?.completedMs !== null
+          ? formatDurationMs(params.chatFeedback?.completedMs)
+          : clientComplete
+            ? formatDurationMs(clientComplete.durationMs)
+            : relayComplete
+              ? formatDurationMs(relayComplete.durationMs)
+              : "In progress",
+      tone:
+        params.chatFeedback?.status === "done" ||
+        params.chatFeedback?.status === "streaming"
+          ? "good"
+          : "neutral",
+    },
+  ];
+
+  let note: string | null = null;
+  if (
+    params.chatFeedback?.status === "error" &&
+    params.chatFeedback.firstTokenMs === null
+  ) {
+    note =
+      "This run failed before the model or tool path produced a token. Check gateway health, approvals, or provider readiness.";
+  } else if (params.chatFeedback?.status === "error") {
+    note =
+      "The run failed after the live path started. Use the timings below to see whether the failure was in the Mac tool/model work or after the relay.";
+  } else if (params.activeRun?.stage === "approval_required") {
+    note = "The run is paused on approval. Once approved, DroidAgent continues in the same live turn.";
+  } else if (
+    modelWait &&
+    serverAccept &&
+    modelWait.durationMs >
+      Math.max(
+        (serverAccept.durationMs ?? 0) + (relayForward?.durationMs ?? 0) + 300,
+        2_000,
+      )
+  ) {
+    note =
+      "Most of the delay is inside the live model/tool run on the Mac, not the web relay.";
+  } else if (serverAccept && serverAccept.durationMs > 400) {
+    note =
+      "The gateway accepted this turn slowly. Check host pressure, runtime health, or maintenance activity.";
+  }
+
+  return {
+    items,
+    note,
+  };
+}
+
+function isTerminalChatFeedback(
+  feedback: ChatSessionFeedback | null | undefined,
+): feedback is ChatSessionFeedback {
+  return feedback?.status === "done" || feedback?.status === "error";
+}
+
+function RunBreakdownPanel({ breakdown }: { breakdown: RunBreakdown }) {
+  if (breakdown.items.length === 0 && !breakdown.note) {
+    return null;
+  }
+
+  return (
+    <div className="run-breakdown-panel">
+      <div className="run-breakdown-grid">
+        {breakdown.items.map((item) => (
+          <div
+            key={item.label}
+            className={`run-breakdown-chip${item.tone ? ` ${item.tone}` : ""}`}
+          >
+            <strong>{item.label}</strong>
+            <span>{item.value}</span>
+          </div>
+        ))}
+      </div>
+      {breakdown.note ? (
+        <p className="run-breakdown-note">{breakdown.note}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function describeChatFeedback(
   feedback: ChatSessionFeedback | null | undefined,
 ): { firstToken: string; reply: string } {
@@ -154,11 +355,13 @@ function describeChatFeedback(
 function PendingAssistantCard({
   activeRun,
   approval,
+  breakdown,
   chatFeedback,
   onResolveApproval,
 }: {
   activeRun: ChatRunState | null;
   approval: ApprovalRecord | null;
+  breakdown: RunBreakdown;
   chatFeedback: ChatSessionFeedback | null;
   onResolveApproval: (approvalId: string, resolution: "approved" | "denied") => void;
 }) {
@@ -190,10 +393,53 @@ function PendingAssistantCard({
             <span>First token: {feedback.firstToken}</span>
             <span>Reply: {feedback.reply}</span>
           </div>
+          <RunBreakdownPanel breakdown={breakdown} />
         </div>
         {activeRun?.stage === "approval_required" ? (
           <ApprovalCard approval={approval} onResolve={onResolveApproval} />
         ) : null}
+      </div>
+    </article>
+  );
+}
+
+function RecentRunSummaryCard({
+  breakdown,
+  chatFeedback,
+  historySettled,
+}: {
+  breakdown: RunBreakdown;
+  chatFeedback: ChatSessionFeedback;
+  historySettled: boolean;
+}) {
+  const feedback = describeChatFeedback(chatFeedback);
+  const failed = chatFeedback.status === "error";
+
+  return (
+    <article className="message-card assistant pending">
+      <div className="message-meta">
+        <div className="message-meta-copy">
+          <header>DroidAgent</header>
+          <span>recent run</span>
+        </div>
+      </div>
+
+      <div className="message-part-stack">
+        <div className={`operator-run-strip ${failed ? "failed" : "completed"}`}>
+          <strong>{failed ? "Latest run failed" : "Latest run finished"}</strong>
+          <span>
+            {failed
+              ? "The live run ended with an error. Use the timing breakdown below to locate whether the failure happened before first token, in the Mac tool/model path, or after the relay."
+              : historySettled
+                ? "The transcript is settled. Use the timing breakdown below to judge whether the wait was in the Mac, the model/tool path, or the relay."
+                : "The live run finished and the transcript is still settling. The timing breakdown below is already final for this run."}
+          </span>
+          <div className="operator-side-inline-meta">
+            <span>First token: {feedback.firstToken}</span>
+            <span>Reply: {feedback.reply}</span>
+          </div>
+          <RunBreakdownPanel breakdown={breakdown} />
+        </div>
       </div>
     </article>
   );
@@ -666,6 +912,7 @@ export function ChatScreen() {
   const threadRef = useRef<HTMLDivElement | null>(null);
   const {
     chatFeedbackBySessionId,
+    recentChatFeedbackBySessionId,
     selectedSessionId,
     setSelectedSessionId,
     sendRealtimeCommand,
@@ -676,6 +923,7 @@ export function ChatScreen() {
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const performanceQuery = usePerformanceQuery(Boolean(authQuery.data?.user));
   const dashboard = dashboardQuery.data;
   const clientPerformanceSnapshot = useClientPerformanceSnapshot();
   const streamingRuns = useStreamingRuns();
@@ -707,8 +955,11 @@ export function ChatScreen() {
     null;
   const selectedSessionKey = activeSession?.id ?? selectedSessionId;
   const activeRun = selectedSessionKey ? runStates[selectedSessionKey] : null;
-  const chatFeedback = selectedSessionKey
+  const liveChatFeedback = selectedSessionKey
     ? chatFeedbackBySessionId[selectedSessionKey] ?? null
+    : null;
+  const recentChatFeedback = selectedSessionKey
+    ? recentChatFeedbackBySessionId[selectedSessionKey] ?? null
     : null;
   const streaming = selectedSessionKey
     ? streamingRuns[selectedSessionKey]
@@ -805,26 +1056,57 @@ export function ChatScreen() {
     () => historyQuery.data ?? cachedMessages,
     [cachedMessages, historyQuery.data],
   );
+  const terminalChatFeedback =
+    recentChatFeedback ??
+    (isTerminalChatFeedback(liveChatFeedback) ? liveChatFeedback : null);
+  const feedbackForMetrics = liveChatFeedback ?? terminalChatFeedback;
   const liveMetricMap = useMemo(
     () => new Map(clientPerformanceSnapshot.metrics.map((metric) => [metric.name, metric])),
     [clientPerformanceSnapshot.metrics],
   );
   const selectedRunFeedback = useMemo(
-    () => describeChatFeedback(chatFeedback),
-    [chatFeedback],
+    () => describeChatFeedback(feedbackForMetrics),
+    [feedbackForMetrics],
+  );
+  const currentRunBreakdown = useMemo(
+    () =>
+      buildRunBreakdown({
+        sessionId: selectedSessionKey,
+        activeRun: activeRun ?? null,
+        chatFeedback: feedbackForMetrics,
+        clientSnapshot: clientPerformanceSnapshot,
+        serverSnapshot: performanceQuery.data,
+      }),
+    [
+      activeRun,
+      feedbackForMetrics,
+      clientPerformanceSnapshot,
+      performanceQuery.data,
+      selectedSessionKey,
+    ],
+  );
+  const showStreamingCard = Boolean(
+    streaming &&
+      !isTerminalChatFeedback(liveChatFeedback) &&
+      activeRun?.stage !== "completed" &&
+      activeRun?.stage !== "failed",
   );
   const showPendingAssistantCard = Boolean(
-    !streaming &&
+    !showStreamingCard &&
       (activeRun?.active ||
-        chatFeedback?.status === "waiting_first_token" ||
-        chatFeedback?.status === "error"),
+        liveChatFeedback?.status === "waiting_first_token"),
+  );
+  const showRecentRunSummaryCard = Boolean(
+    terminalChatFeedback &&
+      !activeRun?.active &&
+      currentRunBreakdown.items.length > 0,
   );
 
   const liveMetrics = useMemo(
     () => {
       const metrics = [];
 
-      if (activeRun?.active || streaming || chatFeedback) {
+      if (activeRun?.active || showStreamingCard || feedbackForMetrics) {
         metrics.push({
           label: "First token",
           value: selectedRunFeedback.firstToken,
@@ -833,6 +1115,15 @@ export function ChatScreen() {
           label: "Reply",
           value: selectedRunFeedback.reply,
         });
+        const modelWait = currentRunBreakdown.items.find(
+          (item) => item.label === "Model/tool wait",
+        );
+        if (modelWait && modelWait.value !== "Waiting...") {
+          metrics.push({
+            label: "Model/tool",
+            value: modelWait.value,
+          });
+        }
       }
 
       const reconnectValue = formatLatency(
@@ -849,17 +1140,55 @@ export function ChatScreen() {
     },
     [
       activeRun?.active,
-      chatFeedback,
+      feedbackForMetrics,
+      currentRunBreakdown.items,
       liveMetricMap,
       selectedRunFeedback.firstToken,
       selectedRunFeedback.reply,
-      streaming,
+      showStreamingCard,
     ],
   );
   const visibleLiveMetrics = useMemo(
     () => liveMetrics.filter((metric) => metric.value !== "Awaiting run"),
     [liveMetrics],
   );
+  const composerStateLabel = activeRun?.active
+    ? "Live run"
+    : showStreamingCard
+      ? "Streaming reply"
+      : liveChatFeedback?.status === "waiting_first_token"
+        ? "Waiting on first token"
+        : liveChatFeedback?.status === "error"
+          ? "Run failed"
+          : maintenanceActive
+            ? "Maintenance active"
+            : pressureBlocks
+              ? "Type preserved • sending paused"
+              : harnessReady
+                ? "Ready to send"
+                : "Agent unavailable";
+  const composerStatusMessage = activeRun?.active
+    ? `${activeRun.label}${activeRun.detail ? ` • ${activeRun.detail}` : ""}`
+    : showStreamingCard
+      ? "DroidAgent is streaming the live reply back into this chat."
+      : liveChatFeedback?.status === "waiting_first_token"
+        ? "The request was accepted. The Mac is working through the model/tool path before first token."
+        : liveChatFeedback?.status === "error"
+          ? liveChatFeedback.errorMessage ??
+            "The last run failed before DroidAgent could finish the reply."
+          : terminalChatFeedback
+            ? `Last run ${terminalChatFeedback.status === "error" ? "failed" : "finished"} • first token ${selectedRunFeedback.firstToken} • reply ${selectedRunFeedback.reply}.`
+            : maintenanceActive
+              ? maintenance?.current?.message ??
+                "Maintenance is active. New work is temporarily blocked."
+              : pressureBlocks
+                ? `${
+                    hostPressure?.message ??
+                    "Host pressure is critical. New chat runs are temporarily paused."
+                  } Use Cleanup cycle, stop jobs, or start a fresh chat while you wait.`
+                : harnessReady
+                  ? `${availableTools.length} tools ready. Paste or attach files below.`
+                  : "The live OpenClaw path is not ready yet.";
   const normalizedActiveModel =
     harness?.activeModel?.replace(/^ollama\//, "") ??
     activeProvider?.model ??
@@ -1389,7 +1718,7 @@ export function ChatScreen() {
             </div>
             <small>
               {activeSession?.title ?? "Operator Chat"} • {messages.length}
-              {streaming ? "+" : ""} message{messages.length === 1 ? "" : "s"}
+              {showStreamingCard ? "+" : ""} message{messages.length === 1 ? "" : "s"}
             </small>
           </div>
 
@@ -1425,9 +1754,10 @@ export function ChatScreen() {
               {!historyQuery.isLoading &&
               !historyQuery.isError &&
               messages.length === 0 &&
-              !streaming &&
+              !showStreamingCard &&
               !activeRun?.active &&
-              !chatFeedback ? (
+              !liveChatFeedback &&
+              !terminalChatFeedback ? (
                 <article className="panel-card compact">
                   This chat is empty. Start with a prompt, attach files, or restore an archived chat from the rail.
                 </article>
@@ -1530,7 +1860,8 @@ export function ChatScreen() {
                 <PendingAssistantCard
                   activeRun={activeRun ?? null}
                   approval={activeRunApproval}
-                  chatFeedback={chatFeedback}
+                  breakdown={currentRunBreakdown}
+                  chatFeedback={liveChatFeedback}
                   onResolveApproval={(approvalId, resolution) => {
                     void runAction(async () => {
                       await handleResolveApproval(approvalId, resolution);
@@ -1539,7 +1870,15 @@ export function ChatScreen() {
                 />
               ) : null}
 
-              {streaming ? (
+              {showRecentRunSummaryCard && terminalChatFeedback ? (
+                <RecentRunSummaryCard
+                  breakdown={currentRunBreakdown}
+                  chatFeedback={terminalChatFeedback}
+                  historySettled={!historyQuery.isFetching && !showStreamingCard}
+                />
+              ) : null}
+
+              {showStreamingCard ? (
                 <article className="message-card assistant streaming">
                   <div className="message-meta">
                     <div className="message-meta-copy">
@@ -1553,7 +1892,7 @@ export function ChatScreen() {
                         setExpandedImage(image);
                       }}
                       text={
-                        streaming.text ||
+                        streaming?.text ||
                         "Working through the live OpenClaw run..."
                       }
                     />
@@ -1597,7 +1936,7 @@ export function ChatScreen() {
                 </label>
               ) : (
                 <div className="operator-side-inline-meta">
-                  <span>{messages.length + (streaming ? 1 : 0)} visible items</span>
+                  <span>{messages.length + (showStreamingCard ? 1 : 0)} visible items</span>
                   <span>{transportReady ? "WebSocket live" : "HTTP fallback"}</span>
                 </div>
               )}
@@ -1796,17 +2135,7 @@ export function ChatScreen() {
             <div className="journey-kicker">Compose</div>
             <h3>Ask DroidAgent</h3>
           </div>
-          <small>
-            {activeRun?.active
-              ? "Live run"
-              : maintenanceActive
-                ? "Maintenance active"
-                : pressureBlocks
-                  ? "Type preserved • sending paused"
-                  : harnessReady
-                    ? "Ready to send"
-                    : "Agent unavailable"}
-          </small>
+          <small>{composerStateLabel}</small>
         </div>
 
         <div className="composer-shell operator-window-surface operator-composer-surface">
@@ -1828,21 +2157,7 @@ export function ChatScreen() {
           />
 
           <div className="composer-footer">
-            <small className="composer-status">
-              {activeRun?.active
-                ? `${activeRun.label}${activeRun.detail ? ` • ${activeRun.detail}` : ""}`
-                : maintenanceActive
-                  ? maintenance?.current?.message ??
-                    "Maintenance is active. New work is temporarily blocked."
-                : pressureBlocks
-                  ? `${
-                      hostPressure?.message ??
-                      "Host pressure is critical. New chat runs are temporarily paused."
-                    } Use Cleanup cycle, stop jobs, or start a fresh chat while you wait.`
-                : harnessReady
-                  ? `${availableTools.length} tools ready. Paste or attach files below.`
-                  : "The live OpenClaw path is not ready yet."}
-            </small>
+            <small className="composer-status">{composerStatusMessage}</small>
 
             <div className="composer-actions">
               <input

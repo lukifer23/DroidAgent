@@ -1452,6 +1452,13 @@ export function SettingsScreen() {
             <small>
               {metricDescription(
                 performanceQuery.data,
+                "chat.stream.acceptedToCompleteRelay",
+                "Accepted to complete relay",
+              )}
+            </small>
+            <small>
+              {metricDescription(
+                performanceQuery.data,
                 "file.write",
                 "File write",
               )}

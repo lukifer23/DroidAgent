@@ -492,6 +492,9 @@ export class WebsocketHub {
               outcome: "ok",
               chars: delta.length
             });
+            if (isFirstDelta) {
+              void this.publishPerformanceUpdated();
+            }
           },
           onDone: async () => {
             if (!firstDeltaRecorded) {
@@ -509,6 +512,7 @@ export class WebsocketHub {
             this.publishChatDone(sessionId, runId);
             await this.pushChatHistory(sessionId);
             await this.publishSessionsUpdated();
+            await this.publishPerformanceUpdated();
           },
           onError: async (message) => {
             if (!firstDeltaRecorded) {
@@ -526,6 +530,7 @@ export class WebsocketHub {
             this.publishChatError(sessionId, runId, message);
             await this.pushChatHistory(sessionId);
             await this.publishSessionsUpdated();
+            await this.publishPerformanceUpdated();
           }
         });
         runId = run.runId;

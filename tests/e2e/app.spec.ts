@@ -110,6 +110,8 @@ test("streams chat replies through the real websocket path", async ({
   await expect(
     page.locator(".metric-chip span").filter({ hasText: /ms|s/ }).first(),
   ).toBeVisible();
+  await expect(page.getByText("Latest run finished")).toBeVisible();
+  await expect(page.getByText("Model/tool wait")).toBeVisible();
 });
 
 test("uploads chat attachments and shows them in the live thread", async ({

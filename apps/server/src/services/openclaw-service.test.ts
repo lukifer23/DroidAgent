@@ -776,8 +776,56 @@ describe("OpenClaw context management policy", () => {
     });
     expect(messages[2]?.parts).toEqual([
       expect.objectContaining({
+        type: "tool_result_summary",
+        summary: "Tool returned output",
+        details: "HEARTBEAT_OK",
+      }),
+    ]);
+  });
+
+  it("preserves assistant text around structured tool calls without flattening it", async () => {
+    vi.spyOn(openclawService, "callGateway").mockResolvedValue({
+      messages: [
+        {
+          id: "message-assistant",
+          role: "assistant",
+          ts: 1_710_000_010_000,
+          content: [
+            {
+              type: "text",
+              text: "I am checking the workspace now.",
+            },
+            {
+              type: "toolCall",
+              name: "read",
+              arguments: {
+                path: "/tmp/README.md",
+              },
+            },
+            {
+              type: "text",
+              text: "I found the file and will summarize it next.",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    const messages = await openclawService.loadHistory("web:operator");
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.parts).toEqual([
+      expect.objectContaining({
         type: "markdown",
-        text: "HEARTBEAT_OK",
+        text: "I am checking the workspace now.",
+      }),
+      expect.objectContaining({
+        type: "tool_call_summary",
+        toolName: "read",
+      }),
+      expect.objectContaining({
+        type: "markdown",
+        text: "I found the file and will summarize it next.",
       }),
     ]);
   });

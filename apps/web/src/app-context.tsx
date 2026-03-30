@@ -56,6 +56,7 @@ interface DroidAgentAppContextValue {
   trackChatFailure: (sessionId: string, message: string) => void;
   trackJobStart: (jobId: string) => void;
   chatFeedbackBySessionId: Record<string, ChatSessionFeedback>;
+  recentChatFeedbackBySessionId: Record<string, ChatSessionFeedback>;
 }
 
 const DroidAgentAppContext = createContext<DroidAgentAppContextValue | null>(null);
@@ -81,6 +82,8 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const [chatFeedbackBySessionId, setChatFeedbackBySessionId] = useState<
     Record<string, ChatSessionFeedback>
   >({});
+  const [recentChatFeedbackBySessionId, setRecentChatFeedbackBySessionId] =
+    useState<Record<string, ChatSessionFeedback>>({});
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">(() => {
     if (
       typeof window !== "undefined" &&
@@ -282,11 +285,22 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
         updatedAt: new Date().toISOString(),
       },
     }));
+    setRecentChatFeedbackBySessionId((current) => {
+      if (!(sessionId in current)) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
   });
 
   const trackChatFailure = useEffectEvent(
     (sessionId: string, message: string) => {
       const tracked = pendingChatMetricsRef.current.get(sessionId);
+      const nextCompletedMs = tracked
+        ? Number((performance.now() - tracked.startedAt).toFixed(2))
+        : null;
       if (tracked && !tracked.firstTokenFinished) {
         tracked.firstToken.finish({
           outcome: "error",
@@ -303,9 +317,25 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
           sessionId,
           status: "error",
           firstTokenMs: current[sessionId]?.firstTokenMs ?? null,
-          completedMs: tracked
-            ? Number((performance.now() - tracked.startedAt).toFixed(2))
-            : current[sessionId]?.completedMs ?? null,
+          completedMs: nextCompletedMs ?? current[sessionId]?.completedMs ?? null,
+          errorMessage: message,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+      setRecentChatFeedbackBySessionId((current) => ({
+        ...current,
+        [sessionId]: {
+          sessionId,
+          status: "error",
+          firstTokenMs:
+            chatFeedbackBySessionId[sessionId]?.firstTokenMs ??
+            current[sessionId]?.firstTokenMs ??
+            null,
+          completedMs:
+            nextCompletedMs ??
+            chatFeedbackBySessionId[sessionId]?.completedMs ??
+            current[sessionId]?.completedMs ??
+            null,
           errorMessage: message,
           updatedAt: new Date().toISOString(),
         },
@@ -354,6 +384,9 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
 
     if (event.type === "chat.stream.done") {
       const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
+      const nextCompletedMs = tracked
+        ? Number((performance.now() - tracked.startedAt).toFixed(2))
+        : null;
       if (tracked && !tracked.firstTokenFinished) {
         tracked.firstToken.finish({
           runId: event.payload.runId,
@@ -372,9 +405,28 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
           sessionId: event.payload.sessionId,
           status: "done",
           firstTokenMs: current[event.payload.sessionId]?.firstTokenMs ?? null,
-          completedMs: tracked
-            ? Number((performance.now() - tracked.startedAt).toFixed(2))
-            : current[event.payload.sessionId]?.completedMs ?? null,
+          completedMs:
+            nextCompletedMs ??
+            current[event.payload.sessionId]?.completedMs ??
+            null,
+          errorMessage: null,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+      setRecentChatFeedbackBySessionId((current) => ({
+        ...current,
+        [event.payload.sessionId]: {
+          sessionId: event.payload.sessionId,
+          status: "done",
+          firstTokenMs:
+            chatFeedbackBySessionId[event.payload.sessionId]?.firstTokenMs ??
+            current[event.payload.sessionId]?.firstTokenMs ??
+            null,
+          completedMs:
+            nextCompletedMs ??
+            chatFeedbackBySessionId[event.payload.sessionId]?.completedMs ??
+            current[event.payload.sessionId]?.completedMs ??
+            null,
           errorMessage: null,
           updatedAt: new Date().toISOString(),
         },
@@ -385,6 +437,9 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
 
     if (event.type === "chat.stream.error") {
       const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
+      const nextCompletedMs = tracked
+        ? Number((performance.now() - tracked.startedAt).toFixed(2))
+        : null;
       if (tracked && !tracked.firstTokenFinished) {
         tracked.firstToken.finish({
           runId: event.payload.runId,
@@ -403,9 +458,28 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
           sessionId: event.payload.sessionId,
           status: "error",
           firstTokenMs: current[event.payload.sessionId]?.firstTokenMs ?? null,
-          completedMs: tracked
-            ? Number((performance.now() - tracked.startedAt).toFixed(2))
-            : current[event.payload.sessionId]?.completedMs ?? null,
+          completedMs:
+            nextCompletedMs ??
+            current[event.payload.sessionId]?.completedMs ??
+            null,
+          errorMessage: event.payload.message,
+          updatedAt: new Date().toISOString(),
+        },
+      }));
+      setRecentChatFeedbackBySessionId((current) => ({
+        ...current,
+        [event.payload.sessionId]: {
+          sessionId: event.payload.sessionId,
+          status: "error",
+          firstTokenMs:
+            chatFeedbackBySessionId[event.payload.sessionId]?.firstTokenMs ??
+            current[event.payload.sessionId]?.firstTokenMs ??
+            null,
+          completedMs:
+            nextCompletedMs ??
+            chatFeedbackBySessionId[event.payload.sessionId]?.completedMs ??
+            current[event.payload.sessionId]?.completedMs ??
+            null,
           errorMessage: event.payload.message,
           updatedAt: new Date().toISOString(),
         },
@@ -546,6 +620,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       trackChatFailure,
       trackJobStart,
       chatFeedbackBySessionId,
+      recentChatFeedbackBySessionId,
     }),
     [
       beginRouteTransition,
@@ -566,6 +641,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       trackJobStart,
       wsStatus,
       chatFeedbackBySessionId,
+      recentChatFeedbackBySessionId,
     ]
   );
 
