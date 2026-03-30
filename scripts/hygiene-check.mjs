@@ -65,18 +65,6 @@ const oversizedAllowlist = new Map([
     "apps/web/src/screens/settings-screen.tsx",
     "Settings still aggregates diagnostics and admin surfaces pending further extraction.",
   ],
-  [
-    "apps/web/src/screens/terminal-screen.tsx",
-    "Terminal screen still bundles PTY control and layout wiring pending further extraction.",
-  ],
-  [
-    "apps/web/src/app-layout.tsx",
-    "App shell still owns route chrome and inbox drawers pending further extraction.",
-  ],
-  [
-    "packages/shared/src/index.ts",
-    "Shared schema barrel remains intentionally broad while domain splits continue.",
-  ],
 ]);
 
 async function collectFiles(entryPath) {

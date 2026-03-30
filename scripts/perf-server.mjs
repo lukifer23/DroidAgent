@@ -68,6 +68,12 @@ async function ensureHarnessServer() {
 }
 
 async function requestText(targetUrl, headers = {}) {
+  return await request(targetUrl, {
+    headers,
+  });
+}
+
+async function request(targetUrl, options = {}) {
   const url = targetUrl instanceof URL ? targetUrl : new URL(targetUrl);
   const transport = url.protocol === "https:" ? https : http;
 
@@ -75,8 +81,8 @@ async function requestText(targetUrl, headers = {}) {
     const request = transport.request(
       url,
       {
-        method: "GET",
-        headers
+        method: options.method ?? "GET",
+        headers: options.headers ?? {}
       },
       (response) => {
         let body = "";
@@ -95,8 +101,19 @@ async function requestText(targetUrl, headers = {}) {
     );
 
     request.on("error", reject);
+    if (typeof options.body === "string") {
+      request.write(options.body);
+    }
     request.end();
   });
+}
+
+async function requestJson(targetUrl, options = {}) {
+  const response = await request(targetUrl, options);
+  return {
+    ...response,
+    json: response.body ? JSON.parse(response.body) : null,
+  };
 }
 
 async function measureEndpoint(baseUrl, sessionToken, pathname, iterations, authenticated = false) {
@@ -126,6 +143,68 @@ async function measureEndpoint(baseUrl, sessionToken, pathname, iterations, auth
   };
 }
 
+async function ensureChatRelayMetric(baseUrl, sessionToken) {
+  const authHeaders = sessionToken
+    ? { Cookie: `droidagent_session=${sessionToken}` }
+    : {};
+  const sessionsResponse = await requestJson(new URL("/api/sessions", baseUrl), {
+    headers: authHeaders,
+  });
+  if (!sessionsResponse.ok || !Array.isArray(sessionsResponse.json)) {
+    throw new Error("Failed to load sessions for the perf relay probe.");
+  }
+
+  let sessionId = sessionsResponse.json[0]?.id ?? null;
+  if (!sessionId) {
+    const createdSession = await requestJson(new URL("/api/sessions", baseUrl), {
+      method: "POST",
+      headers: authHeaders,
+    });
+    if (!createdSession.ok || !createdSession.json?.id) {
+      throw new Error("Failed to create a session for the perf relay probe.");
+    }
+    sessionId = createdSession.json.id;
+  }
+
+  const sendResponse = await request(
+    new URL(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, baseUrl),
+    {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        text: "perf-server-relay",
+        attachments: [],
+      }),
+    },
+  );
+  if (!sendResponse.ok) {
+    throw new Error(
+      `Perf relay probe returned ${sendResponse.status} while sending a chat message.`,
+    );
+  }
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const diagnosticsResponse = await requestJson(
+      new URL("/api/diagnostics/performance", baseUrl),
+      {
+        headers: authHeaders,
+      },
+    );
+    const relayMetric = diagnosticsResponse.json?.metrics?.find(
+      (entry) => entry.name === "chat.stream.firstDeltaForward",
+    );
+    if (relayMetric?.summary?.lastDurationMs != null) {
+      return;
+    }
+    await sleep(250);
+  }
+
+  throw new Error("Timed out waiting for the server chat relay metric.");
+}
+
 async function main() {
   await fs.mkdir(artifactDir, { recursive: true });
   const harness = await ensureHarnessServer();
@@ -143,6 +222,8 @@ async function main() {
       measureEndpoint(harness.baseUrl, harness.sessionToken, "/api/access", 20),
       measureEndpoint(harness.baseUrl, harness.sessionToken, "/api/dashboard", 20, true)
     ]);
+
+    await ensureChatRelayMetric(harness.baseUrl, harness.sessionToken);
 
     const diagnosticsResponse = await requestText(
       new URL("/api/diagnostics/performance", harness.baseUrl),
