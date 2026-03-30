@@ -1,22 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { readMaintenanceStatus } from "./lib/common.mjs";
 
 const serverUrl = "http://localhost:4318/api/health";
-const maintenanceStatePath = path.join(
-  os.homedir(),
-  ".droidagent",
-  "state",
-  "maintenance-status.json",
-);
-
-async function readMaintenanceStatus() {
-  try {
-    return JSON.parse(await fs.readFile(maintenanceStatePath, "utf8"));
-  } catch {
-    return null;
-  }
-}
 
 async function main() {
   const maintenance = await readMaintenanceStatus();

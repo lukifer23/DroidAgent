@@ -14,6 +14,7 @@ pnpm perf:e2e
 pnpm perf:report
 pnpm perf:baseline
 pnpm perf:check
+pnpm hygiene:check
 ```
 
 - `pnpm perf:server`
@@ -28,6 +29,8 @@ pnpm perf:check
   - snapshots current perf artifacts into `artifacts/perf/baseline.json`
 - `pnpm perf:check`
   - enforces `perf-budgets.json` and baseline regression threshold
+- `pnpm hygiene:check`
+  - blocks duplicate canonical helpers, oversized new production files, orphaned scripts, and missing architecture-boundary inventory docs before bloat slips into the hot path
 
 ## Metrics Captured
 

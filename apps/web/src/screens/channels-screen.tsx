@@ -5,7 +5,9 @@ import type { ChannelStatus } from "@droidagent/shared";
 
 import { useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
+import { useDecisionActions } from "../hooks/use-decision-actions";
 import { postJson } from "../lib/api";
+import { getPendingPairingDecisions } from "../lib/dashboard-selectors";
 
 export function ChannelsScreen() {
   const { runAction, setNotice } = useDroidAgentApp();
@@ -25,10 +27,8 @@ export function ChannelsScreen() {
   const canSendTestMessage = testTarget.trim().length > 0 && testMessage.trim().length > 0;
 
   const signal = dashboard?.channelConfig?.signal;
-  const pairingDecisions = (dashboard?.decisions ?? []).filter(
-    (decision) =>
-      decision.status === "pending" && decision.kind === "channelPairing",
-  );
+  const pairingDecisions = getPendingPairingDecisions(dashboard);
+  const { resolveDecision } = useDecisionActions(dashboard?.decisions ?? []);
 
   useEffect(() => {
     if (!signal?.linkUri) {
@@ -218,10 +218,7 @@ export function ChannelsScreen() {
                   <button
                     onClick={() =>
                       void runAction(async () => {
-                        await postJson(`/api/decisions/${encodeURIComponent(decision.id)}/resolve`, {
-                          resolution: "approved",
-                          expectedUpdatedAt: null,
-                        });
+                        await resolveDecision(decision, "approved", null);
                       }, "Signal pairing approved.")
                     }
                   >
@@ -231,10 +228,7 @@ export function ChannelsScreen() {
                     className="secondary"
                     onClick={() =>
                       void runAction(async () => {
-                        await postJson(`/api/decisions/${encodeURIComponent(decision.id)}/resolve`, {
-                          resolution: "denied",
-                          expectedUpdatedAt: null,
-                        });
+                        await resolveDecision(decision, "denied", null);
                       }, "Signal pairing denied.")
                     }
                   >

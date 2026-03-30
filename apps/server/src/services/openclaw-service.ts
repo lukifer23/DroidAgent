@@ -1,15 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { isDeepStrictEqual } from "node:util";
 
 import {
   ApprovalRecordSchema,
   ChannelConfigSummarySchema,
   ChannelStatusSchema,
-  ChatAttachmentSchema,
   ChatMessageSchema,
   ChatSendRequestSchema,
   ContextManagementStatusSchema,
@@ -24,7 +22,6 @@ import {
   type ChannelConfigSummary,
   type ChannelStatus,
   type ChatMessage,
-  type ChatMessagePart,
   type ChatSendRequest,
   type ContextManagementStatus,
   type HarnessStatus,
@@ -59,7 +56,37 @@ import type {
   StreamRelayCallbacks,
 } from "./harness-service.js";
 import { keychainService } from "./keychain-service.js";
+import {
+  buildAttachmentPrompt,
+  dedupeMessageParts,
+  extractAttachmentPayload,
+  parseMessageParts,
+  publicAttachmentsFromPayload,
+  renderHistoryContent,
+  resolveIsoTimestamp,
+  resolveMessageRole,
+  stripGeneratedAttachmentInstructions,
+  structuredPartsFromContent,
+  type GatewayAttachmentRecord,
+} from "./openclaw-message-parts.js";
+import {
+  configValueEquals,
+  getConfigPathValue,
+  hashConfigFingerprint,
+  setConfigPathValue,
+  stringifyConfigValue,
+} from "./openclaw-config.js";
 import { performanceService } from "./performance-service.js";
+import {
+  CODING_PROFILE_TOOLS,
+  MEMORY_FLUSH_PROMPT,
+  MEMORY_FLUSH_SYSTEM_PROMPT,
+  MEMORY_RECALL_EXTRA_PATHS,
+  MESSAGING_PROFILE_TOOLS,
+  MINIMAL_PROFILE_TOOLS,
+  WORKSPACE_BOOTSTRAP_EXTRA_FILES,
+  WORKSPACE_BOOTSTRAP_FILES,
+} from "./openclaw-workspace.js";
 
 const GATEWAY_READY_RETRIES = 5;
 const GATEWAY_READY_DELAY_MS = 800;
@@ -72,172 +99,6 @@ const CHANNEL_STATUS_TTL_MS = 5_000;
 const MEMORY_STATUS_TTL_MS = 5_000;
 const DEFAULT_WEB_SESSION_ID = "web:operator";
 const INTERNAL_SESSION_IDS = new Set(["agent:main:main"]);
-const ATTACHMENT_PAYLOAD_START = "<<DROIDAGENT_ATTACHMENTS_V1>>";
-const ATTACHMENT_PAYLOAD_END = "<<END_DROIDAGENT_ATTACHMENTS_V1>>";
-const CODING_PROFILE_TOOLS = [
-  "read",
-  "write",
-  "edit",
-  "apply_patch",
-  "exec",
-  "process",
-  "sessions_list",
-  "sessions_history",
-  "sessions_send",
-  "sessions_spawn",
-  "sessions_yield",
-  "session_status",
-  "subagents",
-  "memory_search",
-  "memory_get",
-  "image",
-  "pdf",
-] as const;
-const MESSAGING_PROFILE_TOOLS = [
-  "message",
-  "sessions_list",
-  "sessions_history",
-  "sessions_send",
-  "session_status",
-] as const;
-const MINIMAL_PROFILE_TOOLS = ["session_status"] as const;
-const AGENTS_TEMPLATE = `# DroidAgent Operator Rules
-
-- Treat this repository as the active workspace.
-- Keep operator replies short, direct, and action-oriented.
-- Prefer workspace-relative paths when practical.
-- Check PREFERENCES.md for stable operator preferences before settling on tone, formatting, or recurring workflow choices.
-- Persist durable facts in MEMORY.md or memory/YYYY-MM-DD.md.
-- Avoid dumping raw tool payloads when a readable summary is clearer.
-`;
-const TOOLS_TEMPLATE = `# DroidAgent Tooling Notes
-
-- Prefer \`rg\` and \`rg --files\` for search.
-- Keep edits inside the configured workspace.
-- Summarize large command output instead of echoing raw JSON to the user.
-- Default coding-profile tools: \`read\`, \`write\`, \`edit\`, \`apply_patch\`, \`exec\`, \`process\`, \`sessions_list\`, \`sessions_history\`, \`sessions_send\`, \`sessions_spawn\`, \`sessions_yield\`, \`session_status\`, \`subagents\`, \`memory_search\`, \`memory_get\`, \`image\`, \`pdf\`.
-- There is no dedicated weather tool in the default coding profile.
-- Do not claim you ran a tool, command, or check unless this turn actually emitted the tool call and received its result.
-- If a command still needs operator approval, present it as a suggestion and say the operator can run it from chat.
-- If the needed tool is unavailable, say that plainly instead of implying it already ran.
-`;
-const IDENTITY_TEMPLATE = `# Identity
-
-You are DroidAgent, a mobile-first control surface for a local OpenClaw host running on a Mac.
-`;
-const USER_TEMPLATE = `# User
-
-The user is the owner/operator of this DroidAgent host. Optimize for safe, efficient remote operation from a phone or browser.
-`;
-const SOUL_TEMPLATE = `# Tone
-
-Be calm, precise, concise, and operationally useful. Prefer clarity over flourish.
-`;
-const MEMORY_README_TEMPLATE = `# Workspace Memory Notes
-
-- Use this folder for dated durable notes and session summaries.
-- Prefer one file per day: \`YYYY-MM-DD.md\`.
-- Keep secrets out of memory files.
-`;
-const SKILLS_README_TEMPLATE = `# Workspace Skills
-
-- Put reusable operator skills and repo-specific runbooks here.
-- Keep files short, concrete, and safe for automatic bootstrap context.
-`;
-const MEMORY_RECALL_EXTRA_PATHS = [
-  "PREFERENCES.md",
-  "MEMORY.md",
-  "memory/**/*.md",
-  "skills/**/*.md",
-] as const;
-const MEMORY_FLUSH_SYSTEM_PROMPT =
-  "Session nearing compaction. Store durable memories now in a short structured note.";
-const MEMORY_FLUSH_PROMPT =
-  "Append durable notes to memory/YYYY-MM-DD.md with sections Summary, Decisions, Next Steps, and Durable Memory Candidates. Reply with NO_REPLY if nothing durable should be stored.";
-const MEMORY_TEMPLATE = `# Durable Memory
-
-Use this file for stable facts DroidAgent and OpenClaw should retain across sessions.
-
-## Product defaults
-
-- DroidAgent is a Tailscale-first mobile control surface for a local OpenClaw host.
-- The default local runtime is Ollama with qwen3.5:4b.
-- The default local context budget is 65k tokens unless explicitly changed later.
-
-## Keep here
-
-- long-lived decisions
-- deployment notes
-- environment caveats
-- repo-specific operating rules
-
-## Do not keep here
-
-- one-off task lists
-- transient debugging notes
-- secrets
-
-Use \`memory/YYYY-MM-DD.md\` for dated notes and session summaries.
-`;
-const HEARTBEAT_TEMPLATE = `# Heartbeat
-
-If nothing in this workspace needs periodic attention right now, reply HEARTBEAT_OK.
-
-When this file does contain tasks, follow them exactly and keep the heartbeat run terse.
-`;
-const PREFERENCES_TEMPLATE = `# Personal Preferences
-
-Use this file for stable operator preferences that should make DroidAgent feel more personal and more useful over time.
-
-## Keep updated
-
-- preferred tone and formatting
-- recurring commands and workflows
-- favorite apps, tools, and editors
-- project priorities and long-running goals
-- device habits, time windows, and interruption preferences
-
-## Example starter blocks
-
-### Tone
-
-- terse, direct, high-signal replies
-- summarize first, then details when needed
-
-### Workflow
-
-- prefer local runtimes first
-- keep commands copyable and non-interactive
-- treat the current repo as the primary workspace unless stated otherwise
-
-## Do not put here
-
-- API keys
-- passwords
-- temporary task notes
-`;
-const WORKSPACE_BOOTSTRAP_EXTRA_FILES = [
-  "SOUL.md",
-  "IDENTITY.md",
-  "USER.md",
-  "MEMORY.md",
-  "PREFERENCES.md",
-  "HEARTBEAT.md",
-  "memory/**/*.md",
-  "skills/**/*.md",
-];
-const WORKSPACE_BOOTSTRAP_FILES = [
-  ["AGENTS.md", AGENTS_TEMPLATE],
-  ["TOOLS.md", TOOLS_TEMPLATE],
-  ["IDENTITY.md", IDENTITY_TEMPLATE],
-  ["USER.md", USER_TEMPLATE],
-  ["SOUL.md", SOUL_TEMPLATE],
-  ["MEMORY.md", MEMORY_TEMPLATE],
-  ["PREFERENCES.md", PREFERENCES_TEMPLATE],
-  ["HEARTBEAT.md", HEARTBEAT_TEMPLATE],
-  ["memory/README.md", MEMORY_README_TEMPLATE],
-  ["skills/README.md", SKILLS_README_TEMPLATE],
-] as const;
 const OPERATOR_EXEC_ALLOWLIST_PATTERNS = [
   "df*",
   "/bin/df*",
@@ -266,21 +127,6 @@ const OPERATOR_EXEC_ALLOWLIST_PATTERNS = [
   "/sbin/mount*",
   "/usr/sbin/mount*",
 ] as const;
-
-interface GatewayAttachmentRecord {
-  id: string;
-  name: string;
-  kind: string;
-  mimeType: string;
-  size: number;
-  url: string;
-  filePath: string;
-}
-
-interface GatewayAttachmentPayload {
-  text: string;
-  attachments: GatewayAttachmentRecord[];
-}
 
 interface OpenClawMemorySourceCount {
   source: string;
@@ -314,61 +160,6 @@ interface OpenClawMemoryStatusEntry {
     ok?: boolean;
     error?: string;
   };
-}
-
-function stringifyConfigValue(value: unknown): string {
-  return JSON.stringify(value);
-}
-
-function hashConfigFingerprint(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
-
-function getConfigPathValue(
-  source: Record<string, unknown> | null,
-  dottedPath: string,
-): unknown {
-  if (!source) {
-    return undefined;
-  }
-
-  let current: unknown = source;
-  for (const segment of dottedPath.split(".")) {
-    if (
-      !current ||
-      typeof current !== "object" ||
-      Array.isArray(current) ||
-      !(segment in current)
-    ) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[segment];
-  }
-
-  return current;
-}
-
-function setConfigPathValue(
-  target: Record<string, unknown>,
-  dottedPath: string,
-  value: unknown,
-): void {
-  const segments = dottedPath.split(".");
-  let current: Record<string, unknown> = target;
-
-  for (const segment of segments.slice(0, -1)) {
-    const next = current[segment];
-    if (!next || typeof next !== "object" || Array.isArray(next)) {
-      current[segment] = {};
-    }
-    current = current[segment] as Record<string, unknown>;
-  }
-
-  current[segments.at(-1) ?? dottedPath] = value;
-}
-
-function configValueEquals(left: unknown, right: unknown): boolean {
-  return isDeepStrictEqual(left, right);
 }
 
 function extractEventData(block: string): string | null {
@@ -571,504 +362,6 @@ function collectTextParts(value: unknown): string[] {
   return [formatStructuredValue(record)];
 }
 
-function extractAttachmentPayload(
-  value: string,
-): { payload: GatewayAttachmentPayload | null; remainder: string } {
-  const startIndex = value.indexOf(ATTACHMENT_PAYLOAD_START);
-  const endIndex = value.indexOf(ATTACHMENT_PAYLOAD_END);
-  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
-    return { payload: null, remainder: value };
-  }
-
-  const payloadText = value
-    .slice(startIndex + ATTACHMENT_PAYLOAD_START.length, endIndex)
-    .trim();
-  const remainder = value.slice(endIndex + ATTACHMENT_PAYLOAD_END.length).trim();
-
-  try {
-    const parsed = JSON.parse(payloadText) as GatewayAttachmentPayload;
-    if (
-      !parsed ||
-      typeof parsed !== "object" ||
-      typeof parsed.text !== "string" ||
-      !Array.isArray(parsed.attachments)
-    ) {
-      return { payload: null, remainder: value };
-    }
-
-    return {
-      payload: {
-        text: parsed.text,
-        attachments: parsed.attachments,
-      },
-      remainder,
-    };
-  } catch {
-    return { payload: null, remainder: value };
-  }
-}
-
-function publicAttachmentsFromPayload(
-  payload: GatewayAttachmentPayload | null,
-) {
-  if (!payload) {
-    return [];
-  }
-
-  return payload.attachments.map((attachment) =>
-    ChatAttachmentSchema.parse({
-      id: attachment.id,
-      name: attachment.name,
-      kind: attachment.kind,
-      mimeType: attachment.mimeType,
-      size: attachment.size,
-      url: attachment.url,
-    }),
-  );
-}
-
-function stripGeneratedAttachmentInstructions(value: string): string {
-  const { payload, remainder } = extractAttachmentPayload(value);
-  if (!payload) {
-    return value;
-  }
-
-  return payload.text.trim() || remainder.trim() || "Inspect the attached files.";
-}
-
-function markdownPartsFromText(text: string): ChatMessagePart[] {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return [];
-  }
-
-  const parts: ChatMessagePart[] = [];
-  const codeBlockPattern = /```([a-z0-9_+\-.#]*)\n?([\s\S]*?)```/gi;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = codeBlockPattern.exec(trimmed)) !== null) {
-    const preceding = trimmed.slice(lastIndex, match.index).trim();
-    if (preceding) {
-      parts.push({
-        type: "markdown",
-        text: preceding,
-      });
-    }
-
-    const language = match[1]?.trim() || null;
-    const code = match[2]?.replace(/\n$/, "") ?? "";
-    if (code.trim()) {
-      parts.push({
-        type: "code_block",
-        language,
-        code,
-      });
-    }
-
-    lastIndex = match.index + match[0].length;
-  }
-
-  const trailing = trimmed.slice(lastIndex).trim();
-  if (trailing) {
-    parts.push({
-      type: "markdown",
-      text: trailing,
-    });
-  }
-
-  return parts.length > 0
-    ? parts
-    : [
-        {
-          type: "markdown",
-          text: trimmed,
-        },
-      ];
-}
-
-function parseToolCallPart(text: string): ChatMessagePart | null {
-  const match = text.trim().match(/^Tool call:\s*([^\n]+)\n?([\s\S]*)$/i);
-  if (!match) {
-    return null;
-  }
-
-  const toolName = match[1]?.trim() || "tool";
-  const details = match[2]?.trim() || null;
-  return {
-    type: "tool_call_summary",
-    toolName,
-    summary: `Calling ${toolName}`,
-    details,
-  };
-}
-
-function parseToolResultPart(text: string): ChatMessagePart | null {
-  const match = text.trim().match(/^Tool result(?:\s*-\s*([^\n]+))?\n?([\s\S]*)$/i);
-  if (!match) {
-    return null;
-  }
-
-  const toolName = match[1]?.trim() || null;
-  const details = match[2]?.trim() || null;
-  return {
-    type: "tool_result_summary",
-    toolName,
-    summary: toolName ? `${toolName} returned output` : "Tool returned output",
-    details,
-  };
-}
-
-function parseApprovalRequestPart(text: string): ChatMessagePart | null {
-  if (!/^Approval required/i.test(text.trim())) {
-    return null;
-  }
-
-  const approvalId =
-    text.match(/Approval required\s+\(id\s+([^)]+)\)/i)?.[1]?.trim() ?? null;
-
-  return {
-    type: "approval_request",
-    approvalId,
-    title: "Approval required",
-    details: text.trim(),
-    resolution: "pending",
-  };
-}
-
-function resolveStructuredToolName(record: Record<string, unknown>): string | null {
-  for (const key of ["name", "toolName", "tool"]) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-
-  return null;
-}
-
-function renderStructuredDetails(value: unknown): string | null {
-  const lines = collectTextParts(value);
-  if (lines.length > 0) {
-    const joined = lines.join("\n\n").trim();
-    if (joined) {
-      return joined;
-    }
-  }
-
-  const rendered = formatStructuredValue(value).trim();
-  return rendered || null;
-}
-
-function structuredPartsFromContent(
-  value: unknown,
-  role: ChatMessage["role"],
-): ChatMessagePart[] {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return [];
-    }
-
-    if (role === "tool") {
-      return [
-        {
-          type: "tool_result_summary",
-          toolName: null,
-          summary: "Tool returned output",
-          details: trimmed,
-        },
-      ];
-    }
-
-    return parseMessageParts({
-      text: value,
-      attachments: [],
-      role,
-      status: "complete",
-    });
-  }
-
-  if (value === null || value === undefined) {
-    return [];
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap((entry) => structuredPartsFromContent(entry, role));
-  }
-
-  if (typeof value !== "object") {
-    return structuredPartsFromContent(String(value), role);
-  }
-
-  const record = value as Record<string, unknown>;
-  const type = typeof record.type === "string" ? record.type : null;
-
-  if (type === "text" && typeof record.text === "string") {
-    return structuredPartsFromContent(record.text, role);
-  }
-
-  if (type === "toolCall") {
-    const toolName = resolveStructuredToolName(record) ?? "tool";
-    return [
-      {
-        type: "tool_call_summary",
-        toolName,
-        summary: `Calling ${toolName}`,
-        details: renderStructuredDetails(record.arguments),
-      },
-    ];
-  }
-
-  if (type === "toolResult") {
-    const toolName = resolveStructuredToolName(record);
-    return [
-      {
-        type: "tool_result_summary",
-        toolName,
-        summary: toolName
-          ? `${toolName} returned output`
-          : "Tool returned output",
-        details: renderStructuredDetails(
-          record.content ?? record.text ?? record.result ?? record.output,
-        ),
-      },
-    ];
-  }
-
-  if (typeof record.text === "string") {
-    return structuredPartsFromContent(record.text, role);
-  }
-
-  if (role === "tool" && ("content" in record || "result" in record || "output" in record)) {
-    return [
-      {
-        type: "tool_result_summary",
-        toolName: resolveStructuredToolName(record),
-        summary: resolveStructuredToolName(record)
-          ? `${resolveStructuredToolName(record)} returned output`
-          : "Tool returned output",
-        details: renderStructuredDetails(
-          record.content ?? record.result ?? record.output,
-        ),
-      },
-    ];
-  }
-
-  if ("content" in record) {
-    const nested = structuredPartsFromContent(record.content, role);
-    if (nested.length > 0) {
-      return nested;
-    }
-  }
-
-  if ("result" in record || "output" in record) {
-    const details = renderStructuredDetails(record.result ?? record.output);
-    return details
-      ? [
-          {
-            type: "tool_result_summary",
-            toolName: resolveStructuredToolName(record),
-            summary: resolveStructuredToolName(record)
-              ? `${resolveStructuredToolName(record)} returned output`
-              : "Tool returned output",
-            details,
-          },
-        ]
-      : [];
-  }
-
-  return [];
-}
-
-function parseMessageParts(params: {
-  text: string;
-  attachments: ReturnType<typeof publicAttachmentsFromPayload>;
-  role: ChatMessage["role"];
-  status: ChatMessage["status"];
-}): ChatMessagePart[] {
-  const trimmed = params.text.trim();
-  const parts: ChatMessagePart[] = [];
-
-  if (params.attachments.length > 0) {
-    parts.push({
-      type: "attachments",
-      attachments: params.attachments,
-    });
-  }
-
-  if (!trimmed) {
-    return parts;
-  }
-
-  if (params.status === "error") {
-    parts.push({
-      type: "error",
-      message: trimmed,
-      details: null,
-    });
-    return parts;
-  }
-
-  const approvalPart = parseApprovalRequestPart(trimmed);
-  if (approvalPart) {
-    parts.push(approvalPart);
-    return parts;
-  }
-
-  if (params.role !== "user") {
-    const toolCallPart = parseToolCallPart(trimmed);
-    if (toolCallPart) {
-      parts.push(toolCallPart);
-      return parts;
-    }
-
-    const toolResultPart = parseToolResultPart(trimmed);
-    if (toolResultPart) {
-      parts.push(toolResultPart);
-      return parts;
-    }
-  }
-
-  parts.push(...markdownPartsFromText(trimmed));
-  return parts;
-}
-
-function messagePartSignature(part: ChatMessagePart): string {
-  if (part.type === "attachments") {
-    return `attachments:${part.attachments
-      .map((attachment) => attachment.id)
-      .sort()
-      .join(",")}`;
-  }
-
-  if (part.type === "markdown") {
-    return `markdown:${part.text.trim()}`;
-  }
-
-  if (part.type === "code_block") {
-    return `code_block:${part.language ?? ""}:${part.code}`;
-  }
-
-  if (part.type === "tool_call_summary") {
-    return `tool_call:${part.toolName}:${part.summary}:${part.details ?? ""}`;
-  }
-
-  if (part.type === "tool_result_summary") {
-    return `tool_result:${part.toolName ?? ""}:${part.summary}:${part.details ?? ""}`;
-  }
-
-  if (part.type === "approval_request") {
-    return `approval:${part.approvalId ?? ""}:${part.title}:${part.details}`;
-  }
-
-  return `error:${part.message}:${part.details ?? ""}`;
-}
-
-function dedupeMessageParts(parts: ChatMessagePart[]): ChatMessagePart[] {
-  const deduped: ChatMessagePart[] = [];
-
-  for (const part of parts) {
-    const previous = deduped.at(-1);
-    if (!previous) {
-      deduped.push(part);
-      continue;
-    }
-
-    if (part.type === "markdown" && previous.type === "markdown") {
-      const currentText = part.text.trim();
-      const previousText = previous.text.trim();
-      if (!currentText) {
-        continue;
-      }
-      if (previousText === currentText) {
-        continue;
-      }
-      deduped[deduped.length - 1] = {
-        type: "markdown",
-        text: `${previousText}\n\n${currentText}`,
-      };
-      continue;
-    }
-
-    if (part.type === "attachments" && previous.type === "attachments") {
-      const mergedAttachments = [...previous.attachments];
-      for (const attachment of part.attachments) {
-        if (
-          !mergedAttachments.some((existing) => existing.id === attachment.id)
-        ) {
-          mergedAttachments.push(attachment);
-        }
-      }
-      deduped[deduped.length - 1] = {
-        type: "attachments",
-        attachments: mergedAttachments,
-      };
-      continue;
-    }
-
-    if (messagePartSignature(previous) === messagePartSignature(part)) {
-      continue;
-    }
-
-    deduped.push(part);
-  }
-
-  return deduped;
-}
-
-function renderHistoryContent(message: Record<string, unknown>): string {
-  const lines = collectTextParts(message.content ?? message.text);
-  if (lines.length > 0) {
-    return stripGeneratedAttachmentInstructions(lines.join("\n\n"));
-  }
-
-  if (typeof message.text === "string" && message.text.trim()) {
-    return stripGeneratedAttachmentInstructions(message.text);
-  }
-
-  return stripGeneratedAttachmentInstructions(
-    formatStructuredValue(message.content ?? ""),
-  );
-}
-
-function resolveMessageRole(role: unknown): ChatMessage["role"] {
-  if (role === "assistant" || role === "system" || role === "tool") {
-    return role;
-  }
-
-  if (role === "toolResult") {
-    return "tool";
-  }
-
-  return "user";
-}
-
-function resolveIsoTimestamp(message: Record<string, unknown>): string {
-  const timestamp =
-    message.ts ??
-    message.createdAtMs ??
-    message.updatedAtMs ??
-    message.updatedAt ??
-    message.createdAt;
-  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
-    return new Date(timestamp).toISOString();
-  }
-
-  if (typeof timestamp === "string" && timestamp.trim()) {
-    const parsed = Number(timestamp);
-    if (Number.isFinite(parsed)) {
-      return new Date(parsed).toISOString();
-    }
-    const normalized = new Date(timestamp);
-    if (!Number.isNaN(normalized.getTime())) {
-      return normalized.toISOString();
-    }
-  }
-
-  return nowIso();
-}
-
 function collapsePreview(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 140);
 }
@@ -1102,52 +395,6 @@ function renderPreviewValue(preview: unknown, lastMessage: unknown): string {
 
   return "";
 }
-
-function attachmentToolGuidance(kind: string): string {
-  if (kind === "image") {
-    return "Use the image tool to inspect it.";
-  }
-  if (kind === "pdf") {
-    return "Use the pdf tool to extract and analyze it.";
-  }
-  return "Use the read tool to inspect it.";
-}
-
-function buildAttachmentPrompt(
-  request: ChatSendRequest,
-  attachments: GatewayAttachmentRecord[],
-): string {
-  if (attachments.length === 0) {
-    return request.text.trim();
-  }
-
-  const normalizedText =
-    request.text.trim() ||
-    "Inspect the attached files and respond with the most useful summary, findings, and next actions.";
-  const payload: GatewayAttachmentPayload = {
-    text: normalizedText,
-    attachments,
-  };
-  const manifest = JSON.stringify(payload, null, 2);
-  const attachmentInstructions = attachments
-    .map(
-      (attachment) =>
-        `- ${attachment.name} (${attachment.kind}, ${attachment.mimeType}, ${attachment.size} bytes)\n  Local path: ${attachment.filePath}\n  ${attachmentToolGuidance(attachment.kind)}`,
-    )
-    .join("\n");
-
-  return [
-    ATTACHMENT_PAYLOAD_START,
-    manifest,
-    ATTACHMENT_PAYLOAD_END,
-    "Local attachments are available for this request. Use the listed local paths and the appropriate tools instead of guessing.",
-    attachmentInstructions,
-    "",
-    "User request:",
-    normalizedText,
-  ].join("\n");
-}
-
 function isInternalSessionRecord(
   item: Record<string, unknown>,
   sessionKey: string,

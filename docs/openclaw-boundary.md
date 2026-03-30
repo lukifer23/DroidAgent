@@ -2,6 +2,8 @@
 
 This repo treats OpenClaw as the system of record for agent execution and channel semantics. DroidAgent is the single-owner control layer above it.
 
+The concrete route, websocket, script, and data-path inventory that applies this boundary lives in [Surface Inventory](./surface-inventory.md).
+
 ## OpenClaw-owned truth
 
 - session lifecycle and chat routing

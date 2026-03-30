@@ -18,6 +18,7 @@ The default local path is `Ollama + qwen3.5:4b + 65k context + embeddinggemma:30
 ```bash
 pnpm dev
 pnpm run doctor
+pnpm hygiene:check
 pnpm verify
 pnpm verify:full
 ```
@@ -26,8 +27,10 @@ pnpm verify:full
   - starts the web dev server and the server dev process
 - `pnpm run doctor`
   - checks local binaries, app directories, and server health without mutating repo-tracked files
+- `pnpm hygiene:check`
+  - enforces canonical helper ownership, script reachability, required inventory docs, and size guardrails for new production files
 - `pnpm verify`
-  - lint, typecheck, unit tests, build, docs validation, and `pnpm audit --prod`
+  - lint, hygiene checks, typecheck, unit tests, build, docs validation, and `pnpm audit --prod`
 - `pnpm verify:full`
   - `pnpm verify` plus the real server-backed Playwright acceptance suite
 

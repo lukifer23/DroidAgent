@@ -33,7 +33,7 @@ export default defineConfig({
   ],
   webServer: {
     command: "node ./scripts/cleanup-e2e-server.mjs && node apps/server/dist/testing/e2e-server.js",
-    url: baseURL,
+    url: `${baseURL}/api/health`,
     reuseExistingServer: false,
     timeout: 120000
   }

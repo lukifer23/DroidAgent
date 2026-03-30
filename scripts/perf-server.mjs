@@ -6,12 +6,14 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { spawn } from "node:child_process";
 
-const repoRoot = process.cwd();
-const artifactDir = path.join(repoRoot, "artifacts", "perf");
+import {
+  repoRoot,
+  resolveE2EStatePath,
+  sleep,
+  waitForHealth,
+} from "./lib/common.mjs";
 
-function resolveE2EStatePath(port) {
-  return path.join(repoRoot, "artifacts", "e2e", `state-${port}.json`);
-}
+const artifactDir = path.join(repoRoot, "artifacts", "perf");
 
 function average(values) {
   return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2));
@@ -21,22 +23,6 @@ function percentile(values, ratio) {
   const sorted = [...values].sort((left, right) => left - right);
   const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * ratio) - 1));
   return Number(sorted[index].toFixed(2));
-}
-
-async function waitForHealth(baseUrl) {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl}/api/health`);
-      if (response.ok) {
-        return;
-      }
-    } catch {
-      // retry
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-
-  throw new Error(`Timed out waiting for ${baseUrl}/api/health`);
 }
 
 async function ensureHarnessServer() {
@@ -74,7 +60,7 @@ async function ensureHarnessServer() {
         }
       };
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await sleep(250);
     }
   }
 

@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import type { SetupState } from "@droidagent/shared";
 
 import type { E2EFixtureState, E2EWorkspaceFile } from "./e2e-fixture.js";
+import { writeE2EWorkspaceFiles } from "./e2e-fixture.js";
 import type {
   AccessSettings,
   RuntimeSettings,
@@ -26,10 +27,13 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-async function waitForHealth(baseUrl: string): Promise<void> {
+async function waitForHealth(
+  baseUrl: string,
+  pathname = "/api/health",
+): Promise<void> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
-      const response = await fetch(`${baseUrl}/api/health`);
+      const response = await fetch(`${baseUrl}${pathname}`);
       if (response.ok) {
         return;
       }
@@ -40,7 +44,7 @@ async function waitForHealth(baseUrl: string): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
-  throw new Error("Timed out waiting for the E2E DroidAgent server.");
+  throw new Error(`Timed out waiting for ${baseUrl}${pathname}.`);
 }
 
 async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
@@ -123,17 +127,7 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
     await fs.mkdir(dir, { recursive: true });
   }
 
-  await Promise.all(
-    workspaceFiles.map(async (file) => {
-      const targetPath = path.join(workspaceRoot, file.path);
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.writeFile(
-        targetPath,
-        file.content,
-        "utf8",
-      );
-    }),
-  );
+  await writeE2EWorkspaceFiles(workspaceRoot, workspaceFiles);
 
   const sqlite = new Database(dbPath);
   sqlite.exec(`
@@ -382,6 +376,11 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
 async function main() {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "droidagent-e2e-"));
   const state = await seedEnvironment(rootDir);
+  const perfMode = process.env.DROIDAGENT_PERF_MODE === "1";
+  const perfReadyFilePath = path.join(rootDir, ".perf-ready");
+  if (perfMode) {
+    await fs.rm(perfReadyFilePath, { force: true }).catch(() => undefined);
+  }
 
   const child = spawn(
     "node",
@@ -396,6 +395,11 @@ async function main() {
         DROIDAGENT_E2E_ROOT_DIR: rootDir,
         DROIDAGENT_E2E_RESET_TOKEN: state.resetToken,
         DROIDAGENT_E2E_STATE_PATH: statePath,
+        ...(perfMode
+          ? {
+              DROIDAGENT_PERF_READY_FILE: perfReadyFilePath,
+            }
+          : {}),
         DROIDAGENT_OPENCLAW_BIN: path.join(
           repoRoot,
           "apps",
@@ -421,6 +425,7 @@ async function main() {
       .rm(rootDir, { recursive: true, force: true })
       .catch(() => undefined);
     await fs.rm(statePath, { force: true }).catch(() => undefined);
+    await fs.rm(perfReadyFilePath, { force: true }).catch(() => undefined);
   };
 
   process.on("SIGINT", () => {
@@ -433,7 +438,58 @@ async function main() {
     void cleanup().finally(() => process.exit(code ?? 0));
   });
 
-  await waitForHealth(state.baseUrl);
+  await waitForHealth(
+    state.baseUrl,
+    perfMode ? "/api/auth/me" : "/api/health",
+  );
+  if (perfMode) {
+    const response = await fetch(new URL("/api/memory/prepare", state.baseUrl), {
+      method: "POST",
+      headers: {
+        cookie: `droidagent_session=${state.sessionToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to prewarm memory prepare: ${response.status}`);
+    }
+
+    let prewarmed = false;
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      const dashboardResponse = await fetch(
+        new URL("/api/dashboard", state.baseUrl),
+        {
+          headers: {
+            cookie: `droidagent_session=${state.sessionToken}`,
+          },
+        },
+      );
+      if (!dashboardResponse.ok) {
+        throw new Error(
+          `Failed to read prewarmed dashboard: ${dashboardResponse.status}`,
+        );
+      }
+      const dashboard = (await dashboardResponse.json()) as {
+        memory?: {
+          semanticReady?: boolean;
+          prepareState?: string | null;
+        };
+      };
+      if (
+        dashboard.memory?.semanticReady &&
+        dashboard.memory?.prepareState === "completed"
+      ) {
+        prewarmed = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    if (!prewarmed) {
+      throw new Error("Timed out waiting for prewarmed semantic memory.");
+    }
+    await fs.writeFile(perfReadyFilePath, "ready\n", "utf8");
+  }
   console.log(`DroidAgent E2E server ready at ${state.baseUrl}`);
 }
 

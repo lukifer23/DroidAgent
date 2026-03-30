@@ -52,6 +52,28 @@ describe("FileService", () => {
     expect(entries.map((entry) => entry.path)).toEqual(["src", "README.md"]);
   });
 
+  it("skips entries that disappear during directory listing", async () => {
+    await fs.mkdir(path.join(workspaceRoot, "src"));
+    const readmePath = path.join(workspaceRoot, "README.md");
+    await fs.writeFile(readmePath, "# DroidAgent\n", "utf8");
+    const originalStat = fs.stat.bind(fs);
+    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (target) => {
+      if (typeof target === "string" && path.basename(target) === "README.md") {
+        const error = new Error("missing") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+      return await originalStat(target);
+    });
+    try {
+      const entries = await fileService.listDirectory(".");
+
+      expect(entries.map((entry) => entry.path)).toEqual(["src"]);
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
   it("reads and writes text files with relative paths", async () => {
     const filePath = path.join(workspaceRoot, "notes.txt");
     await fs.writeFile(filePath, "first pass", "utf8");

@@ -13,7 +13,6 @@ import type {
   HostPressureStatus,
   MemoryDraft,
   MemoryDraftTarget,
-  PerformanceSnapshot,
 } from "@droidagent/shared";
 
 import {
@@ -26,48 +25,18 @@ import {
 import { useClientPerformanceSnapshot, useDroidAgentApp } from "../app-context";
 import { ApiError, api, patchJson, postJson } from "../lib/api";
 import { clientPerformance } from "../lib/client-performance";
-import { formatTokenBudget } from "../lib/formatters";
-
-function metricDescription(
-  snapshot: PerformanceSnapshot | undefined,
-  name: string,
-  label: string,
-): string {
-  const metric = snapshot?.metrics.find((entry) => entry.name === name);
-  if (!metric) {
-    return `${label}: no samples yet`;
-  }
-
-  const p95 = metric.summary.p95DurationMs ?? metric.summary.lastDurationMs;
-  const last = metric.summary.lastDurationMs;
-  const ageMs = metric.summary.sampleAgeMs;
-  const ageLabel =
-    typeof ageMs === "number"
-      ? ageMs >= 60_000
-        ? `${Math.round(ageMs / 60_000)}m old`
-        : ageMs >= 1_000
-          ? `${Math.round(ageMs / 1_000)}s old`
-          : `${Math.round(ageMs)}ms old`
-      : "age unknown";
-  const outcomeBits = [
-    `${metric.summary.count} samples`,
-    metric.summary.errorCount > 0 ? `${metric.summary.errorCount} errors` : null,
-    metric.summary.warnCount > 0 ? `${metric.summary.warnCount} warns` : null,
-  ]
-    .filter(Boolean)
-    .join(" • ");
-  return `${label}: p95 ${p95 ?? 0} ms • last ${last ?? 0} ms • ${outcomeBits} • ${ageLabel}`;
-}
-
-function formatHostBytes(value: number | null | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "unknown";
-  }
-  if (value >= 1024 ** 3) {
-    return `${(value / 1024 ** 3).toFixed(1)} GiB`;
-  }
-  return `${Math.round(value / 1024 ** 2)} MiB`;
-}
+import { useDecisionActions } from "../hooks/use-decision-actions";
+import {
+  getMemoryDraftDecisionMap,
+  getPendingMemoryDrafts,
+} from "../lib/dashboard-selectors";
+import {
+  formatDurationMs,
+  formatHostBytes,
+  formatTimeLabel,
+  formatTokenBudget,
+  metricDescription,
+} from "../lib/formatters";
 
 function hostPressureTone(
   hostPressure: HostPressureStatus | undefined,
@@ -82,29 +51,6 @@ function hostPressureTone(
     return "warn";
   }
   return "good";
-}
-
-function formatDurationMs(value: number | null | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "unknown";
-  }
-
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(1)}s`;
-  }
-
-  return `${Math.round(value)} ms`;
-}
-
-function formatTimeLabel(value: string | null | undefined): string | null {
-  if (!value) {
-    return null;
-  }
-
-  return new Date(value).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }
 
 function upsertDashboardMemoryDraft(
@@ -154,7 +100,6 @@ export function SettingsScreen() {
   const maintenance = dashboard?.maintenance;
   const memory = dashboard?.memory;
   const hostPressure = dashboard?.hostPressure;
-  const memoryDrafts = dashboard?.memoryDrafts ?? [];
   const decisions = dashboard?.decisions ?? [];
   const harness = dashboard?.harness;
   const build = dashboard?.build;
@@ -237,18 +182,9 @@ export function SettingsScreen() {
     harness?.activeModel?.replace(/^ollama\//, "") ?? null;
   const normalizedImageModel =
     harness?.imageModel?.replace(/^ollama\//, "") ?? null;
-  const pendingMemoryDraftDecisions = decisions.filter(
-    (decision) =>
-      decision.status === "pending" && decision.kind === "memoryDraftReview",
-  );
-  const memoryDraftDecisionById = new Map(
-    pendingMemoryDraftDecisions.map((decision) => [decision.sourceRef, decision]),
-  );
-  const pendingMemoryDrafts = pendingMemoryDraftDecisions
-    .map((decision) =>
-      memoryDrafts.find((draft) => draft.id === decision.sourceRef) ?? null,
-    )
-    .filter((draft): draft is MemoryDraft => Boolean(draft));
+  const memoryDraftDecisionById = getMemoryDraftDecisionMap(decisions);
+  const pendingMemoryDrafts = getPendingMemoryDrafts(dashboard);
+  const { resolveDecision } = useDecisionActions(decisions);
   const localhostMaintenance = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname,
   );
@@ -382,23 +318,7 @@ export function SettingsScreen() {
     if (!decision) {
       throw new Error("This memory review is no longer pending.");
     }
-    try {
-      await postJson(
-        `/api/decisions/${encodeURIComponent(decision.id)}/resolve`,
-        {
-          resolution: "approved",
-          expectedUpdatedAt: draft.updatedAt,
-        },
-      );
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      }
-      throw error;
-    }
-    if (wsStatus !== "connected") {
-      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-    }
+    await resolveDecision(decision, "approved", draft.updatedAt);
   }
 
   async function handleUpdateDraft(draft: MemoryDraft) {
@@ -444,21 +364,7 @@ export function SettingsScreen() {
     if (!decision) {
       throw new Error("This memory review is no longer pending.");
     }
-    try {
-      await postJson(
-        `/api/decisions/${encodeURIComponent(decision.id)}/resolve`,
-        {
-          resolution: "denied",
-          expectedUpdatedAt: draft.updatedAt,
-        },
-      );
-    } catch (error) {
-      if (error instanceof ApiError && error.status === 409) {
-        await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-      }
-      throw error;
-    }
-    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    await resolveDecision(decision, "denied", draft.updatedAt);
   }
 
   function beginDraftEdit(draft: MemoryDraft) {

@@ -47,6 +47,7 @@ Use `pnpm stop` when you need a clean local reset. It stops managed DroidAgent h
 ```bash
 pnpm verify
 pnpm verify:full
+pnpm hygiene:check
 pnpm perf:server
 pnpm perf:e2e
 pnpm perf:report
@@ -109,4 +110,5 @@ pnpm perf:check
 - Access, dashboard, runtime, provider, and startup-status reads use short-lived in-memory caches with explicit invalidation on mutations so the mobile shell stays responsive without serving long-lived stale state.
 - Request-path warmup now waits for startup restore, then primes the main dashboard/access/runtime/provider caches before readiness completes, which keeps the first signed-in dashboard path off the coldest setup work.
 - The global decision inbox is the main owner queue. Chat, Settings, and Channels are filtered views over the same decision ids instead of separate approval systems.
+- `pnpm hygiene:check` is part of the expected local verify path now. It enforces canonical helper ownership, script reachability, the surface inventory docs, and size guardrails for new production files.
 - OpenClaw runs with default thinking disabled unless you explicitly re-enable it in-session, while smart context management still controls compaction, pruning, and memory flush policy.

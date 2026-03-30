@@ -180,13 +180,15 @@ test("captures a chat message as a memory draft, edits it, and applies it", asyn
     hasText: prompt,
   });
   await expect(userMessage).toBeVisible();
-  await userMessage.getByRole("button", { name: "Save memory" }).click();
   await clickWithDetachRetry(
-    page
-      .locator(".message-card.user")
-      .filter({ hasText: prompt })
-      .getByRole("button", { name: "Memory", exact: true }),
+    userMessage.getByRole("button", { name: "Save memory" }),
   );
+  const draftMemoryButton = page
+    .locator(".message-card.user")
+    .filter({ hasText: prompt })
+    .getByRole("button", { name: "Memory", exact: true });
+  await expect(draftMemoryButton).toBeVisible();
+  await clickWithDetachRetry(draftMemoryButton);
 
   await page.getByRole("link", { name: "Settings" }).click();
   const draftCard = page.locator(".panel-card.compact").filter({
@@ -250,13 +252,15 @@ test("rejects stale memory draft mutations with a conflict response", async ({
     hasText: prompt,
   });
   await expect(userMessage).toBeVisible();
-  await userMessage.getByRole("button", { name: "Save memory" }).click();
   await clickWithDetachRetry(
-    page
-      .locator(".message-card.user")
-      .filter({ hasText: prompt })
-      .getByRole("button", { name: "Memory", exact: true }),
+    userMessage.getByRole("button", { name: "Save memory" }),
   );
+  const staleDraftMemoryButton = page
+    .locator(".message-card.user")
+    .filter({ hasText: prompt })
+    .getByRole("button", { name: "Memory", exact: true });
+  await expect(staleDraftMemoryButton).toBeVisible();
+  await clickWithDetachRetry(staleDraftMemoryButton);
 
   const draftsResponse = await page.request.get(
     new URL("/api/memory/drafts", state.baseUrl).toString(),

@@ -22,10 +22,18 @@ import type { DecisionRecord } from "@droidagent/shared";
 
 import { useAccessQuery, useAuthQuery, useDashboardQuery } from "./app-data";
 import { useDroidAgentApp } from "./app-context";
+import { useDecisionActions } from "./hooks/use-decision-actions";
 import { useViewportMeasure } from "./hooks/use-viewport-measure";
-import { formatTokenBudget } from "./lib/formatters";
-import { isOperatorReady } from "./lib/operator-readiness";
 import { postJson } from "./lib/api";
+import {
+  formatHostBytes,
+  formatTokenBudget,
+} from "./lib/formatters";
+import {
+  getPendingDecisions,
+  getResolvedDecisions,
+} from "./lib/dashboard-selectors";
+import { isOperatorReady } from "./lib/operator-readiness";
 
 const AuthScreen = lazy(async () => ({
   default: (await import("./screens/auth-screen")).AuthScreen,
@@ -45,16 +53,6 @@ interface HostStatusItem {
   value: string;
   detail: string;
   tone: "good" | "warn" | "critical";
-}
-
-function formatHostBytes(value: number | null | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "unknown";
-  }
-  if (value >= 1024 ** 3) {
-    return `${(value / 1024 ** 3).toFixed(1)} GiB`;
-  }
-  return `${Math.round(value / 1024 ** 2)} MiB`;
 }
 
 function decisionRoute(decision: DecisionRecord): string {
@@ -135,7 +133,6 @@ export function AppLayout() {
   const launchAgent = dashboard?.launchAgent;
   const providers = dashboard?.providers ?? [];
   const runtimes = dashboard?.runtimes ?? [];
-  const approvals = dashboard?.approvals ?? [];
   const decisions = dashboard?.decisions ?? [];
   const tailscaleStatus = access?.tailscaleStatus;
   const operatorReady = isOperatorReady(dashboard);
@@ -147,18 +144,14 @@ export function AppLayout() {
   const runtimeCount = runtimes.filter((runtime) => runtime.state === "running")
     .length;
   const passkeyCount = setup?.passkeyConfigured ? 1 : 0;
-  const pendingApprovals = approvals.length;
-  const pendingDecisions = decisions.filter(
-    (decision) => decision.status === "pending",
-  );
-  const recentDecisions = decisions.filter(
-    (decision) => decision.status !== "pending",
-  );
+  const pendingDecisions = getPendingDecisions(decisions);
+  const recentDecisions = getResolvedDecisions(decisions);
   const navItemsForState = navItems.filter(
     (item) => !operatorReady || item.readyOnly,
   );
   const hostPressureLevel = hostPressure?.level ?? "unknown";
   const hostPressureAvailableBytes = hostPressure?.memoryAvailableBytes ?? null;
+  const { resolveDecision } = useDecisionActions(decisions);
   useEffect(() => {
     finishRouteTransition(location.pathname);
   }, [finishRouteTransition, location.pathname]);
@@ -167,20 +160,6 @@ export function AppLayout() {
     setHostDrawerOpen(false);
     setDecisionDrawerOpen(false);
   }, [location.pathname]);
-
-  const resolveDecision = useCallback(
-    async (decision: DecisionRecord, resolution: "approved" | "denied") => {
-      await postJson(`/api/decisions/${encodeURIComponent(decision.id)}/resolve`, {
-        resolution,
-        expectedUpdatedAt:
-          decision.kind === "memoryDraftReview"
-            ? decision.sourceUpdatedAt
-            : null,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-    },
-    [queryClient],
-  );
 
   const updateViewportChrome = useCallback(() => {
     const shell = shellRef.current;

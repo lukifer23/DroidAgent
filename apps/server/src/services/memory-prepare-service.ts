@@ -137,7 +137,6 @@ export class MemoryPrepareService {
       );
       if (
         currentStatus.semanticReady &&
-        !currentStatus.dirty &&
         previousFingerprint === currentFingerprint
       ) {
         const finished = markFinished();
@@ -145,7 +144,7 @@ export class MemoryPrepareService {
           state: "completed",
           startedAt,
           ...finished,
-          progressLabel: "Semantic memory is already current.",
+          progressLabel: "Semantic memory is ready.",
           error: null,
         });
         metric.finish({

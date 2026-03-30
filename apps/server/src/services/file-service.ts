@@ -182,7 +182,15 @@ export class FileService {
               return null;
             }
 
-            const stats = await fs.stat(entryReal);
+            let stats: Awaited<ReturnType<typeof fs.stat>>;
+            try {
+              stats = await fs.stat(entryReal);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                return null;
+              }
+              throw error;
+            }
             return WorkspaceEntrySchema.parse({
               path: toPosixRelative(root, entryAbsolute),
               name: entry.name,

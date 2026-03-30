@@ -24,11 +24,28 @@ function run(command, args, env = {}) {
 async function main() {
   const perfPort = process.env.DROIDAGENT_E2E_PORT ?? String(4421);
   await run("pnpm", ["build"], {
-    DROIDAGENT_E2E_PORT: perfPort
+    DROIDAGENT_E2E_PORT: perfPort,
+    DROIDAGENT_PERF_MODE: "1",
   });
-  await run("pnpm", ["exec", "playwright", "test", "tests/perf/app.perf.spec.ts", "--config", "playwright.perf.config.ts"], {
-    DROIDAGENT_E2E_PORT: perfPort
-  });
+  for (const project of ["chromium", "fold-mobile"]) {
+    await run(
+      "pnpm",
+      [
+        "exec",
+        "playwright",
+        "test",
+        "tests/perf/app.perf.spec.ts",
+        "--config",
+        "playwright.perf.config.ts",
+        "--project",
+        project,
+      ],
+      {
+        DROIDAGENT_E2E_PORT: perfPort,
+        DROIDAGENT_PERF_MODE: "1",
+      },
+    );
+  }
 }
 
 void main().catch((error) => {

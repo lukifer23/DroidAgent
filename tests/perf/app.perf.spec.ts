@@ -4,7 +4,7 @@ import { performance } from "node:perf_hooks";
 
 import { expect, test } from "@playwright/test";
 
-import { readE2EState, resetE2EState, signInSeededOwner } from "../e2e/support";
+import { readE2EState, signInSeededOwner } from "../e2e/support";
 
 const artifactDir = path.resolve(process.cwd(), "artifacts", "perf");
 
@@ -13,7 +13,6 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   const metrics = [];
 
   await signInSeededOwner(page.context());
-  await resetE2EState(page);
   const state = await readE2EState();
 
   const coldDashboardStart = performance.now();

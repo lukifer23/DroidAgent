@@ -16,11 +16,9 @@ import type {
   ChatMessage,
   ChatMessagePart,
   DashboardState,
-  DecisionRecord,
   HostPressureContributor,
   HostPressureRecoveryResult,
   LatencySample,
-  LatencySummary,
   PerformanceSnapshot,
   SessionSummary,
 } from "@droidagent/shared";
@@ -36,6 +34,7 @@ import {
   useClientPerformanceSnapshot,
   useDroidAgentApp,
 } from "../app-context";
+import { useDecisionActions } from "../hooks/use-decision-actions";
 import { api, postFormData, postJson } from "../lib/api";
 import {
   buildRunInChatPrompt,
@@ -48,7 +47,18 @@ import {
   useChatRuns,
 } from "../lib/chat-run-store";
 import { useStreamingRuns } from "../lib/chat-stream-store";
-import { formatTokenBudget } from "../lib/formatters";
+import {
+  getPendingDecisions,
+  getSessionDecisions,
+} from "../lib/dashboard-selectors";
+import {
+  formatBytes,
+  formatDurationMs,
+  formatHostBytes,
+  formatLatency,
+  formatTokenBudget,
+  roleLabel,
+} from "../lib/formatters";
 
 const RECENT_RUN_SAMPLE_MAX_AGE_MS = 90_000;
 
@@ -63,18 +73,6 @@ type MarkdownRendererModule = {
   remarkGfm: typeof import("remark-gfm").default;
 };
 
-function roleLabel(role: ChatMessage["role"]): string {
-  if (role === "tool") {
-    return "Tool";
-  }
-
-  if (role === "system") {
-    return "System";
-  }
-
-  return role === "assistant" ? "DroidAgent" : "You";
-}
-
 function formatMessageTime(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -85,51 +83,6 @@ function formatMessageTime(value: string): string {
     hour: "numeric",
     minute: "2-digit",
   }).format(parsed);
-}
-
-function formatLatency(summary: LatencySummary | undefined): string {
-  const value = summary?.lastDurationMs ?? summary?.p95DurationMs ?? null;
-  if (!value || !Number.isFinite(value)) {
-    return "Awaiting run";
-  }
-
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(1)}s`;
-  }
-
-  return `${Math.round(value)} ms`;
-}
-
-function formatDurationMs(value: number | null | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "Waiting...";
-  }
-
-  if (value >= 1000) {
-    return `${(value / 1000).toFixed(1)}s`;
-  }
-
-  return `${Math.round(value)} ms`;
-}
-
-function formatBytes(value: number): string {
-  if (value >= 1024 * 1024) {
-    return `${(value / 1024 / 1024).toFixed(1)} MB`;
-  }
-  if (value >= 1024) {
-    return `${Math.round(value / 1024)} KB`;
-  }
-  return `${value} B`;
-}
-
-function formatHostBytes(value: number | null | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "unknown";
-  }
-  if (value >= 1024 ** 3) {
-    return `${(value / 1024 ** 3).toFixed(1)} GiB`;
-  }
-  return `${Math.round(value / 1024 ** 2)} MiB`;
 }
 
 function formatHostRatio(value: number | null | undefined): string {
@@ -982,21 +935,18 @@ function PendingAttachmentList({
 }
 
 function MessageMemoryActions({
+  expanded,
+  onToggle,
   onAddMemory,
   onAddPreferences,
   onAddTodayNote,
 }: {
+  expanded: boolean;
+  onToggle: () => void;
   onAddMemory: () => void;
   onAddPreferences: () => void;
   onAddTodayNote: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-
-  const runAndCollapse = (action: () => void) => {
-    action();
-    setExpanded(false);
-  };
-
   return (
     <div className={`message-utility-tray ${expanded ? "open" : ""}`.trim()}>
       <button
@@ -1004,7 +954,7 @@ function MessageMemoryActions({
         className="message-utility-toggle"
         title="Create a memory draft from this message"
         aria-expanded={expanded}
-        onClick={() => setExpanded((current) => !current)}
+        onClick={onToggle}
       >
         Save memory
       </button>
@@ -1013,21 +963,21 @@ function MessageMemoryActions({
           <button
             type="button"
             className="secondary"
-            onClick={() => runAndCollapse(onAddMemory)}
+            onClick={onAddMemory}
           >
           Memory
           </button>
           <button
             type="button"
             className="secondary"
-            onClick={() => runAndCollapse(onAddPreferences)}
+            onClick={onAddPreferences}
           >
           Preferences
           </button>
           <button
             type="button"
             className="secondary"
-            onClick={() => runAndCollapse(onAddTodayNote)}
+            onClick={onAddTodayNote}
           >
           Today Note
           </button>
@@ -1083,6 +1033,9 @@ export function ChatScreen() {
   const [expandedImage, setExpandedImage] = useState<ExpandedImageState | null>(
     null,
   );
+  const [expandedMemoryMessageId, setExpandedMemoryMessageId] = useState<
+    string | null
+  >(null);
 
   const dashboardSessions = dashboard?.sessions ?? [];
   const archivedSessionsQuery = useQuery({
@@ -1118,15 +1071,12 @@ export function ChatScreen() {
   const harness = dashboard?.harness;
   const maintenance = dashboard?.maintenance;
   const hostPressure = dashboard?.hostPressure;
-  const memoryDrafts = dashboard?.memoryDrafts ?? [];
   const decisions = dashboard?.decisions ?? [];
   const availableTools = harness?.availableTools ?? [];
   const memory = dashboard?.memory;
   const transportReady = wsStatus === "connected" && Boolean(selectedSessionKey);
   const maintenanceActive = Boolean(maintenance?.blocksNewWork);
   const hostPressureLevel = hostPressure?.level ?? "unknown";
-  const pressureElevated =
-    hostPressureLevel === "critical" || hostPressureLevel === "warn";
   const pressureBlocks = Boolean(hostPressure?.blocksAgentRuns);
   const harnessReady =
     openclawRuntime?.state === "running" &&
@@ -1134,22 +1084,11 @@ export function ChatScreen() {
     Boolean(harness?.configured) &&
     !maintenanceActive;
   const agentReady = harnessReady && !pressureBlocks;
-  const pendingDecisionCount = decisions.filter(
-    (decision) => decision.status === "pending",
+  const pendingDecisionCount = getPendingDecisions(decisions).length;
+  const sessionDecisions = getSessionDecisions(decisions, selectedSessionKey);
+  const pendingDraftCount = sessionDecisions.filter(
+    (decision) => decision.kind === "memoryDraftReview",
   ).length;
-  const pendingDraftCount = decisions.filter(
-    (decision) =>
-      decision.status === "pending" &&
-      decision.kind === "memoryDraftReview" &&
-      decision.sessionId === selectedSessionKey,
-  ).length;
-  const sessionDecisions = decisions.filter(
-    (decision) =>
-      decision.status === "pending" &&
-      (decision.kind === "execApproval" ||
-        (decision.kind === "memoryDraftReview" &&
-          decision.sessionId === selectedSessionKey)),
-  );
   const sessionOptions = useMemo(() => [...sessions], [sessions]);
   const showSessionSwitcher = sessionOptions.length > 1;
   const showTranscriptAlerts = maintenanceActive;
@@ -1170,20 +1109,11 @@ export function ChatScreen() {
           ? approvalsById.get(activeRun.approvalId) ?? null
           : null) ?? (approvals.length === 1 ? approvals[0]! : null))
       : null;
+  const { resolveDecision, resolveApproval } = useDecisionActions(decisions);
 
-  const handleResolveDecision = useCallback(
-    async (decision: DecisionRecord, resolution: "approved" | "denied") => {
-      await postJson(`/api/decisions/${encodeURIComponent(decision.id)}/resolve`, {
-        resolution,
-        expectedUpdatedAt:
-          decision.kind === "memoryDraftReview"
-            ? decision.sourceUpdatedAt
-            : null,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-    },
-    [queryClient],
-  );
+  useEffect(() => {
+    setExpandedMemoryMessageId(null);
+  }, [selectedSessionKey]);
 
   function updateDashboardSessions(
     updater: (sessions: SessionSummary[]) => SessionSummary[],
@@ -1458,15 +1388,12 @@ export function ChatScreen() {
     }
   }
 
-  const handleResolveApproval = useCallback(async (
-    approvalId: string,
-    resolution: "approved" | "denied",
-  ) => {
-    await postJson(`/api/approvals/${encodeURIComponent(approvalId)}`, {
-      resolution,
-    });
-    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
-  }, [queryClient]);
+  const handleResolveApproval = useCallback(
+    async (approvalId: string, resolution: "approved" | "denied") => {
+      await resolveApproval(approvalId, resolution);
+    },
+    [resolveApproval],
+  );
 
   async function handleAbortRun() {
     if (!selectedSessionKey) {
@@ -2019,13 +1946,21 @@ export function ChatScreen() {
 
               {message.text.trim() ? (
                     <MessageMemoryActions
+                      expanded={expandedMemoryMessageId === message.id}
+                      onToggle={() =>
+                        setExpandedMemoryMessageId((current) =>
+                          current === message.id ? null : message.id,
+                        )
+                      }
                       onAddMemory={() =>
                         void runAction(async () => {
+                          setExpandedMemoryMessageId(null);
                           await handleCreateMemoryDraft("memory", message);
                         }, "Draft added to durable memory.")
                       }
                       onAddPreferences={() =>
                         void runAction(async () => {
+                          setExpandedMemoryMessageId(null);
                           await handleCreateMemoryDraft(
                             "preferences",
                             message,
@@ -2034,6 +1969,7 @@ export function ChatScreen() {
                       }
                       onAddTodayNote={() =>
                         void runAction(async () => {
+                          setExpandedMemoryMessageId(null);
                           await handleCreateMemoryDraft("todayNote", message);
                         }, "Draft added to today's note.")
                       }
@@ -2067,7 +2003,7 @@ export function ChatScreen() {
                           <button
                             onClick={() =>
                               void runAction(async () => {
-                                await handleResolveDecision(decision, "approved");
+                                await resolveDecision(decision, "approved");
                               }, decision.kind === "memoryDraftReview"
                                 ? "Memory draft applied."
                                 : "Decision approved.")
@@ -2079,7 +2015,7 @@ export function ChatScreen() {
                             className="secondary"
                             onClick={() =>
                               void runAction(async () => {
-                                await handleResolveDecision(decision, "denied");
+                                await resolveDecision(decision, "denied");
                               }, decision.kind === "memoryDraftReview"
                                 ? "Memory draft dismissed."
                                 : "Decision denied.")

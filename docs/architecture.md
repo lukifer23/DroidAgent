@@ -18,6 +18,8 @@
 - `packages/shared`
   - common schemas for dashboard state, files, jobs, passkeys, owner decisions, access/bootstrap payloads, diagnostics telemetry, and WebSocket events
 
+The canonical public route, websocket, script, and data-path inventory lives in [Surface Inventory](./surface-inventory.md). Update that file before adding a new cross-layer surface.
+
 ## Harness boundary
 
 - DroidAgent now treats OpenClaw through an internal harness adapter boundary.
@@ -37,6 +39,7 @@
 - DroidAgent re-emits sanitized stream events to the browser over its own WebSocket.
 - OpenClaw remains loopback-only with token auth.
 - The explicit boundary map lives in [OpenClaw Boundary](./openclaw-boundary.md).
+- Public compatibility aliases remain intact, but the internal owner-action path is now centralized through `decisionService`.
 
 ## Maintenance lifecycle
 

@@ -1,4 +1,20 @@
 import { z } from "zod";
+import { DecisionRecordSchema } from "./decisions.js";
+
+export {
+  DecisionKindSchema,
+  DecisionRecordSchema,
+  DecisionResolveRequestSchema,
+  DecisionResolutionSchema,
+  DecisionStatusSchema,
+} from "./decisions.js";
+export type {
+  DecisionKind,
+  DecisionRecord,
+  DecisionResolveRequest,
+  DecisionResolution,
+  DecisionStatus,
+} from "./decisions.js";
 
 export { Utf8TailBuffer } from "./utf8-tail-buffer.js";
 
@@ -471,53 +487,6 @@ export const ApprovalRecordSchema = z.object({
   source: z.string(),
 });
 export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>;
-
-export const DecisionKindSchema = z.enum([
-  "execApproval",
-  "memoryDraftReview",
-  "channelPairing",
-  "ownerConfirmation",
-]);
-export type DecisionKind = z.infer<typeof DecisionKindSchema>;
-
-export const DecisionStatusSchema = z.enum(["pending", "resolved", "failed"]);
-export type DecisionStatus = z.infer<typeof DecisionStatusSchema>;
-
-export const DecisionResolutionSchema = z.enum([
-  "approved",
-  "denied",
-  "applied",
-  "dismissed",
-  "failed",
-]);
-export type DecisionResolution = z.infer<typeof DecisionResolutionSchema>;
-
-export const DecisionRecordSchema = z.object({
-  id: z.string(),
-  kind: DecisionKindSchema,
-  sourceSystem: z.enum(["openclaw", "droidagent"]),
-  sourceRef: z.string(),
-  title: z.string(),
-  summary: z.string(),
-  details: z.string(),
-  status: DecisionStatusSchema,
-  requestedAt: z.string(),
-  resolvedAt: z.string().nullable(),
-  actorUserId: z.string().nullable(),
-  actorLabel: z.string().nullable(),
-  sessionId: z.string().nullable(),
-  actorSessionId: z.string().nullable().default(null),
-  deviceLabel: z.string().nullable(),
-  resolution: DecisionResolutionSchema.nullable(),
-  sourceUpdatedAt: z.string().nullable().default(null),
-});
-export type DecisionRecord = z.infer<typeof DecisionRecordSchema>;
-
-export const DecisionResolveRequestSchema = z.object({
-  resolution: z.enum(["approved", "denied"]),
-  expectedUpdatedAt: z.string().trim().min(1).nullable().default(null),
-});
-export type DecisionResolveRequest = z.infer<typeof DecisionResolveRequestSchema>;
 
 export const WorkspaceEntrySchema = z.object({
   path: z.string(),

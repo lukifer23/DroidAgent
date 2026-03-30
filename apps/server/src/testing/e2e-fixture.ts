@@ -35,6 +35,8 @@ export interface E2EFixtureState {
   seed: E2EFixtureSeed;
 }
 
+export const E2E_FIXTURE_FILE_MTIME = new Date("2026-03-30T00:00:00.000Z");
+
 export function isWithinDir(rootDir: string, targetPath: string): boolean {
   const resolvedRoot = path.resolve(rootDir);
   const resolvedTarget = path.resolve(targetPath);
@@ -65,6 +67,20 @@ export async function clearDirectoryContents(dirPath: string): Promise<void> {
         recursive: entry.isDirectory(),
         force: true,
       });
+    }),
+  );
+}
+
+export async function writeE2EWorkspaceFiles(
+  workspaceRoot: string,
+  files: E2EWorkspaceFile[],
+): Promise<void> {
+  await Promise.all(
+    files.map(async (file) => {
+      const targetPath = path.join(workspaceRoot, file.path);
+      await fs.mkdir(path.dirname(targetPath), { recursive: true });
+      await fs.writeFile(targetPath, file.content, "utf8");
+      await fs.utimes(targetPath, E2E_FIXTURE_FILE_MTIME, E2E_FIXTURE_FILE_MTIME);
     }),
   );
 }

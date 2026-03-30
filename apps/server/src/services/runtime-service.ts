@@ -21,7 +21,6 @@ import {
   paths,
 } from "../env.js";
 import {
-  CommandError,
   findProcesses,
   runCommand,
   terminateProcesses,

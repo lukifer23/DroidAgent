@@ -110,27 +110,27 @@ function memoryTargetLabel(target: MemoryDraft["target"]): string {
 
 function decisionStatusForMemoryDraft(
   draft: MemoryDraft,
-): "pending" | "resolved" | "failed" {
+): DecisionRecord["status"] {
   if (draft.status === "pending") {
     return "pending";
-  }
-  if (draft.status === "failed") {
-    return "failed";
-  }
-  return "resolved";
-}
-
-function decisionResolutionForMemoryDraft(
-  draft: MemoryDraft,
-): DecisionResolution | null {
-  if (draft.status === "applied") {
-    return "applied";
   }
   if (draft.status === "dismissed") {
     return "dismissed";
   }
   if (draft.status === "failed") {
     return "failed";
+  }
+  return "approved";
+}
+
+function decisionResolutionForMemoryDraft(
+  draft: MemoryDraft,
+): DecisionResolution | null {
+  if (draft.status === "applied") {
+    return "approved";
+  }
+  if (draft.status === "dismissed") {
+    return "denied";
   }
   return null;
 }
@@ -171,7 +171,7 @@ export class DecisionService {
         sourceRef: record.sourceRef,
         title: record.title,
         summary: record.summary,
-        details: record.details,
+        details: record.details ?? "",
         status: record.status,
         requestedAt: record.requestedAt,
         resolvedAt: record.resolvedAt,
@@ -192,7 +192,7 @@ export class DecisionService {
           sourceRef: record.sourceRef,
           title: record.title,
           summary: record.summary,
-          details: record.details,
+          details: record.details ?? "",
           status: record.status,
           requestedAt: record.requestedAt,
           resolvedAt: record.resolvedAt,
@@ -406,7 +406,7 @@ export class DecisionService {
     return await this.persistDecision(
       this.buildExecDecision(approval, {
         actor,
-        status: "resolved",
+        status: resolution,
         resolution,
         resolvedAt: nowIso(),
       }),
@@ -430,7 +430,7 @@ export class DecisionService {
     return await this.persistDecision(
       this.buildChannelPairingDecision(pairing, {
         actor,
-        status: "resolved",
+        status: resolution,
         resolution,
         resolvedAt: nowIso(),
       }),

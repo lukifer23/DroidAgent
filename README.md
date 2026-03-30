@@ -23,6 +23,7 @@ pnpm restart
 pnpm run doctor
 pnpm verify
 pnpm verify:full
+pnpm hygiene:check
 pnpm perf:server
 pnpm perf:e2e
 pnpm perf:report
@@ -83,6 +84,7 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - [Remote Access Guide](./docs/remote-access.md)
 - [Architecture](./docs/architecture.md)
 - [OpenClaw Boundary](./docs/openclaw-boundary.md)
+- [Surface Inventory](./docs/surface-inventory.md)
 - [Security](./docs/security.md)
 - [Experimental Roadmap](./docs/experimental-roadmap.md)
 

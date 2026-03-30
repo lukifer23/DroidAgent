@@ -31,6 +31,8 @@ import { sessionLifecycleService } from "./services/session-lifecycle-service.js
 import { hostPressureService } from "./services/host-pressure-service.js";
 import { startupService } from "./services/startup-service.js";
 import { terminalService } from "./services/terminal-service.js";
+import { createMeasuredStreamRelay } from "./lib/chat-relay-metrics.js";
+import { publishDecisionEffects } from "./lib/decision-updates.js";
 
 function send(ws: WebSocket, payload: unknown): void {
   ws.send(JSON.stringify(payload));
@@ -632,20 +634,9 @@ export class WebsocketHub {
         await sessionLifecycleService.observeSession(sessionId, {
           restore: true,
         });
-        const submitToAcceptedMetric = performanceService.start("server", "chat.send.submitToAccepted", {
-          transport: "ws",
-          sessionId
-        });
-        let acceptedToFirstDeltaMetric: ReturnType<typeof performanceService.start> | null = null;
-        let acceptedToCompleteMetric: ReturnType<typeof performanceService.start> | null = null;
-        let firstDeltaRecorded = false;
         let finished = false;
         let runId = "";
-
-        const run = await harnessService.sendMessage(sessionId, {
-          text,
-          attachments,
-        }, {
+        const measuredRelay = createMeasuredStreamRelay("ws", sessionId, {
           onState: async (state) => {
             this.publishChatRun({
               sessionId,
@@ -653,41 +644,15 @@ export class WebsocketHub {
               ...state,
             });
           },
+          onFirstDelta: async () => {
+            await this.publishPerformanceUpdated();
+          },
           onDelta: async (delta) => {
-            const isFirstDelta = !firstDeltaRecorded;
-            if (!firstDeltaRecorded) {
-              firstDeltaRecorded = true;
-              acceptedToFirstDeltaMetric?.finish({
-                outcome: "ok"
-              });
-            }
-            const forwardMetric = isFirstDelta
-              ? performanceService.start("server", "chat.stream.firstDeltaForward", {
-                  transport: "ws",
-                  sessionId
-                })
-              : null;
             this.publishChatDelta(sessionId, runId, delta);
-            forwardMetric?.finish({
-              outcome: "ok",
-              chars: delta.length
-            });
-            if (isFirstDelta) {
-              void this.publishPerformanceUpdated();
-            }
           },
           onDone: async () => {
-            if (!firstDeltaRecorded) {
-              firstDeltaRecorded = true;
-              acceptedToFirstDeltaMetric?.finish({
-                outcome: "no-delta"
-              });
-            }
             if (!finished) {
               finished = true;
-              acceptedToCompleteMetric?.finish({
-                outcome: "done"
-              });
             }
             this.publishChatDone(sessionId, runId);
             await this.pushChatHistory(sessionId);
@@ -695,36 +660,26 @@ export class WebsocketHub {
             await this.publishPerformanceUpdated();
           },
           onError: async (message) => {
-            if (!firstDeltaRecorded) {
-              firstDeltaRecorded = true;
-              acceptedToFirstDeltaMetric?.finish({
-                outcome: "error"
-              });
-            }
             if (!finished) {
               finished = true;
-              acceptedToCompleteMetric?.finish({
-                outcome: "error"
-              });
             }
             this.publishChatError(sessionId, runId, message);
             await this.pushChatHistory(sessionId);
             await this.publishSessionsUpdated();
             await this.publishPerformanceUpdated();
-          }
+          },
         });
+
+        const run = await harnessService.sendMessage(
+          sessionId,
+          {
+            text,
+            attachments,
+          },
+          measuredRelay.relay,
+        );
         runId = run.runId;
-        submitToAcceptedMetric.finish({
-          outcome: "ok"
-        });
-        acceptedToFirstDeltaMetric = performanceService.start("server", "chat.stream.acceptedToFirstDelta", {
-          transport: "ws",
-          sessionId
-        });
-        acceptedToCompleteMetric = performanceService.start("server", "chat.stream.acceptedToCompleteRelay", {
-          transport: "ws",
-          sessionId
-        });
+        measuredRelay.markAccepted();
         this.publishChatRun({
           sessionId,
           runId,
@@ -774,18 +729,7 @@ export class WebsocketHub {
           },
           actor,
         );
-        if (decision.kind === "execApproval") {
-          await this.publishApprovalsUpdated();
-        } else if (decision.kind === "memoryDraftReview") {
-          await Promise.all([
-            this.publishMemoryDraftsUpdated(),
-            this.publishMemoryUpdated(),
-          ]);
-        } else if (decision.kind === "channelPairing") {
-          await this.publishChannelUpdated();
-        } else {
-          await this.publishDecisionsUpdated();
-        }
+        await publishDecisionEffects(this, decision);
         return;
       }
 

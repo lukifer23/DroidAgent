@@ -4,16 +4,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import {
+  maintenanceStatePath,
+  readMaintenanceStatus,
+  repoRoot,
+} from "./lib/common.mjs";
+
 const execFileAsync = promisify(execFile);
 
-const repoRoot = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "..",
-);
 const homeDir = os.homedir();
 const profile = process.env.DROIDAGENT_OPENCLAW_PROFILE ?? "droidagent";
 const launchAgentLabel = "com.droidagent.server";
@@ -24,12 +25,6 @@ const launchAgentPath = path.join(
   `${launchAgentLabel}.plist`,
 );
 const openclawStateDir = path.join(homeDir, `.openclaw-${profile}`);
-const maintenanceStatePath = path.join(
-  homeDir,
-  ".droidagent",
-  "state",
-  "maintenance-status.json",
-);
 const tailscaleSocketPath = path.join(
   homeDir,
   ".droidagent",
@@ -78,14 +73,6 @@ async function listProcesses() {
       };
     })
     .filter(Boolean);
-}
-
-async function readMaintenanceStatus() {
-  try {
-    return JSON.parse(await fs.promises.readFile(maintenanceStatePath, "utf8"));
-  } catch {
-    return null;
-  }
 }
 
 function isManagedServer(command) {

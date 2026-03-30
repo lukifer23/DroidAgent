@@ -274,11 +274,50 @@ describe("DecisionService", () => {
       expectedUpdatedAt: "2026-03-30T00:00:01.000Z",
     });
     expect(resolved).toMatchObject({
-      status: "resolved",
-      resolution: "applied",
+      status: "approved",
+      resolution: "approved",
       actorUserId: "owner-1",
       actorSessionId: "auth-session-1",
       deviceLabel: "iPhone Safari",
+    });
+  });
+
+  it("keeps the legacy approval id path mapped to the same decision ledger", async () => {
+    mocks.approvals.push({
+      id: "approval-compat-1",
+      kind: "exec",
+      title: "Exec approval required",
+      details: JSON.stringify({
+        command: "pnpm test",
+        sessionKey: "web:operator",
+      }),
+      createdAt: "2026-03-30T00:00:00.000Z",
+      status: "pending",
+      source: "openclaw",
+    });
+
+    const resolved = await decisionService.resolveApprovalDecision(
+      "approval-compat-1",
+      "denied",
+      {
+        user: {
+          id: "owner-1",
+          username: "owner",
+          displayName: "DroidAgent Owner",
+        },
+        authSession: null,
+      },
+    );
+
+    expect(mocks.resolveApproval).toHaveBeenCalledWith(
+      "approval-compat-1",
+      "denied",
+    );
+    expect(resolved).toMatchObject({
+      id: "exec:approval-compat-1",
+      sourceRef: "approval-compat-1",
+      status: "denied",
+      resolution: "denied",
     });
   });
 });

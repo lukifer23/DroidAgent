@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
+import { appDir, fetchJsonWithTimeout, repoRoot } from "./lib/common.mjs";
+
 const baseUrl = process.env.DROIDAGENT_BASE_URL ?? "http://localhost:4318";
-const appDir = path.join(os.homedir(), ".droidagent");
-const repoRoot = process.cwd();
 const requiredDirs = [
   appDir,
   path.join(appDir, "logs"),
@@ -31,24 +30,6 @@ async function checkPath(targetPath) {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function fetchJsonWithTimeout(url, timeoutMs = 8000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal
-    });
-    return {
-      ok: response.ok,
-      status: response.status,
-      payload: response.ok ? await response.json() : null
-    };
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

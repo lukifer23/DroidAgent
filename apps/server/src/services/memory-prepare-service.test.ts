@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => {
         updatedAt: "2026-03-29T00:00:01.000Z",
       };
     }),
-    getJsonSetting: vi.fn(async () => null),
+    getJsonSetting: vi.fn(async () => null as string | null),
     setJsonSetting: vi.fn(async () => undefined),
     getRuntimeSettings: vi.fn(async () => ({
       selectedRuntime: "ollama" as const,
@@ -77,6 +77,7 @@ vi.mock("./performance-service.js", () => ({
 }));
 
 import { MemoryPrepareService } from "./memory-prepare-service.js";
+import { computeMemorySourceFingerprint } from "../lib/memory-fingerprint.js";
 
 function makeMemoryStatus(overrides: Partial<MemoryStatus> = {}): MemoryStatus {
   return MemoryStatusSchema.parse({
@@ -208,6 +209,43 @@ describe("MemoryPrepareService", () => {
     expect(finish).toHaveBeenCalledWith(
       expect.objectContaining({
         outcome: "error",
+      }),
+    );
+  });
+
+  it("marks no-op prepares as ready when the current fingerprint is unchanged", async () => {
+    const finish = vi.fn();
+    mocks.performanceStart.mockReturnValue({
+      finish,
+    });
+    mocks.state.memoryStatus = makeMemoryStatus({
+      dirty: true,
+    });
+    const fingerprint = await computeMemorySourceFingerprint({
+      workspaceRoot: "/workspace",
+      memoryDirectory: "/workspace/memory",
+      memoryFilePath: "/workspace/MEMORY.md",
+    });
+    mocks.getJsonSetting.mockResolvedValue(fingerprint);
+
+    const service = new MemoryPrepareService();
+    const result = await service.triggerPrepare();
+
+    expect(result.started).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(mocks.state.prepareStatus.state).toBe("completed");
+    });
+
+    expect(mocks.prepareSemanticMemory).not.toHaveBeenCalled();
+    expect(mocks.state.prepareStatus.progressLabel).toBe(
+      "Semantic memory is ready.",
+    );
+    expect(finish).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "ok",
+        skipped: true,
+        semanticReady: true,
       }),
     );
   });

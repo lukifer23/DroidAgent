@@ -5,7 +5,7 @@ import type { ChildProcess } from "node:child_process";
 import { nowIso } from "@droidagent/shared";
 
 import { SIGNAL_DAEMON_PORT, SIGNAL_DAEMON_URL, baseEnv, paths } from "../env.js";
-import { CommandError, runCommand } from "../lib/process.js";
+import { runCommand } from "../lib/process.js";
 import { appStateService } from "./app-state-service.js";
 import { openclawService } from "./openclaw-service.js";
 

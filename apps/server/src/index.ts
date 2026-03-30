@@ -66,10 +66,13 @@ import {
   isSafeE2ERoot,
   isWithinDir,
   readE2EFixtureState,
+  writeE2EWorkspaceFiles,
 } from "./testing/e2e-fixture.js";
 import { websocketHub } from "./websocket-hub.js";
 import { SERVER_PORT, TEST_MODE, ensureAppDirs, paths } from "./env.js";
 import { performanceService } from "./services/performance-service.js";
+import { createMeasuredStreamRelay } from "./lib/chat-relay-metrics.js";
+import { publishDecisionEffects } from "./lib/decision-updates.js";
 
 ensureAppDirs();
 
@@ -80,7 +83,7 @@ type AppVariables = {
 const app = new Hono<{ Variables: AppVariables }>();
 app.use("*", logger());
 app.use("/api/*", cors());
-let requestPathWarmupPromise: Promise<void> = Promise.resolve();
+const requestPathWarmupPromise = warmRequestPathCaches(true);
 
 function isExpectedAppError(error: unknown): boolean {
   return (
@@ -239,139 +242,16 @@ function expandHomePath(input: string): string {
   return input;
 }
 
-function withMeasuredStreamRelay(
-  transport: "http" | "ws",
-  sessionId: string,
-  relay: {
-    onDelta(delta: string): void | Promise<void>;
-    onDone(): void | Promise<void>;
-    onError(message: string): void | Promise<void>;
-    onState?(state: {
-      stage: "accepted" | "streaming" | "tool_call" | "tool_result" | "approval_required" | "completed" | "failed";
-      label: string;
-      detail?: string | null;
-      toolName?: string | null;
-      approvalId?: string | null;
-      active?: boolean;
-    }): void | Promise<void>;
-  },
-) {
-  const submitToAcceptedMetric = performanceService.start(
-    "server",
-    "chat.send.submitToAccepted",
-    {
-      transport,
-      sessionId,
-    },
-  );
-  let acceptedToFirstDeltaMetric:
-    | ReturnType<typeof performanceService.start>
-    | null = null;
-  let acceptedToCompleteMetric:
-    | ReturnType<typeof performanceService.start>
-    | null = null;
-  let firstDeltaRecorded = false;
-  let finished = false;
-
-  return {
-    markAccepted() {
-      submitToAcceptedMetric.finish({
-        outcome: "ok",
-      });
-      acceptedToFirstDeltaMetric = performanceService.start(
-        "server",
-        "chat.stream.acceptedToFirstDelta",
-        {
-          transport,
-          sessionId,
-        },
-      );
-      acceptedToCompleteMetric = performanceService.start(
-        "server",
-        "chat.stream.acceptedToCompleteRelay",
-        {
-          transport,
-          sessionId,
-        },
-      );
-    },
-    relay: {
-      onDelta: async (delta: string) => {
-        const isFirstDelta = !firstDeltaRecorded;
-        if (!firstDeltaRecorded) {
-          firstDeltaRecorded = true;
-          acceptedToFirstDeltaMetric?.finish({
-            outcome: "ok",
-          });
-        }
-        const forwardMetric = isFirstDelta
-          ? performanceService.start("server", "chat.stream.firstDeltaForward", {
-              transport,
-              sessionId,
-            })
-          : null;
-        await relay.onDelta(delta);
-        forwardMetric?.finish({
-          outcome: "ok",
-          chars: delta.length,
-        });
-      },
-      onDone: async () => {
-        if (!firstDeltaRecorded) {
-          firstDeltaRecorded = true;
-          acceptedToFirstDeltaMetric?.finish({
-            outcome: "no-delta",
-          });
-        }
-        if (!finished) {
-          finished = true;
-          acceptedToCompleteMetric?.finish({
-            outcome: "done",
-          });
-        }
-        await relay.onDone();
-      },
-      onError: async (message: string) => {
-        if (!firstDeltaRecorded) {
-          firstDeltaRecorded = true;
-          acceptedToFirstDeltaMetric?.finish({
-            outcome: "error",
-          });
-        }
-        if (!finished) {
-          finished = true;
-          acceptedToCompleteMetric?.finish({
-            outcome: "error",
-          });
-        }
-        await relay.onError(message);
-      },
-      ...(relay.onState
-        ? {
-            onState: async (state: {
-              stage:
-                | "accepted"
-                | "streaming"
-                | "tool_call"
-                | "tool_result"
-                | "approval_required"
-                | "completed"
-                | "failed";
-              label: string;
-              detail?: string | null;
-              toolName?: string | null;
-              approvalId?: string | null;
-              active?: boolean;
-            }) => {
-              await relay.onState?.(state);
-            },
-          }
-        : {}),
-    },
-  };
-}
-
 app.get("/api/health", async (c) => {
+  if (PERF_READY_FILE && !fs.existsSync(PERF_READY_FILE)) {
+    return c.json(
+      {
+        ok: false,
+        warming: true,
+      },
+      503,
+    );
+  }
   signalService.refreshStateInBackground();
   const [runtimeSummary, setup, launchAgent, channels, harness] =
     await Promise.all([
@@ -1514,7 +1394,7 @@ app.post("/api/sessions/:sessionId/messages", async (c) => {
     restore: true,
   });
   let runId = "";
-  const measuredRelay = withMeasuredStreamRelay("http", sessionId, {
+  const measuredRelay = createMeasuredStreamRelay("http", sessionId, {
     onDelta: async (delta) => {
       websocketHub.publishChatDelta(sessionId, runId, delta);
     },
@@ -1605,18 +1485,7 @@ app.post("/api/decisions/:decisionId/resolve", async (c) => {
     body,
     actor,
   );
-  if (decision.kind === "execApproval") {
-    await websocketHub.publishApprovalsUpdated();
-  } else if (decision.kind === "memoryDraftReview") {
-    await Promise.all([
-      websocketHub.publishMemoryDraftsUpdated(),
-      websocketHub.publishMemoryUpdated(),
-    ]);
-  } else if (decision.kind === "channelPairing") {
-    await websocketHub.publishChannelUpdated();
-  } else {
-    await websocketHub.publishDecisionsUpdated();
-  }
+  await publishDecisionEffects(websocketHub, decision);
   return c.json(decision);
 });
 
@@ -1707,6 +1576,7 @@ app.get("/api/models/:runtimeId", async (c) => {
 const E2E_RESET_TOKEN = process.env.DROIDAGENT_E2E_RESET_TOKEN ?? null;
 const E2E_STATE_PATH = process.env.DROIDAGENT_E2E_STATE_PATH ?? null;
 const E2E_ROOT_DIR = process.env.DROIDAGENT_E2E_ROOT_DIR ?? null;
+const PERF_READY_FILE = process.env.DROIDAGENT_PERF_READY_FILE ?? null;
 
 if (TEST_MODE && E2E_RESET_TOKEN && E2E_STATE_PATH && E2E_ROOT_DIR) {
   app.post("/api/testing/e2e/reset", async (c) => {
@@ -1799,12 +1669,9 @@ if (TEST_MODE && E2E_RESET_TOKEN && E2E_STATE_PATH && E2E_ROOT_DIR) {
       clearDirectoryContents(fixture.workspaceRoot),
     ]);
 
-    await Promise.all(
-      fixture.seed.workspaceFiles.map(async (file) => {
-        const targetPath = path.join(fixture.workspaceRoot, file.path);
-        await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
-        await fs.promises.writeFile(targetPath, file.content, "utf8");
-      }),
+    await writeE2EWorkspaceFiles(
+      fixture.workspaceRoot,
+      fixture.seed.workspaceFiles,
     );
 
     await websocketHub.refreshAll();
@@ -1863,8 +1730,6 @@ async function warmRequestPathCaches(resetPerf = false): Promise<void> {
   }
 }
 
-requestPathWarmupPromise = warmRequestPathCaches(true);
-
 void (async () => {
   try {
     if (TEST_MODE) {
@@ -1873,6 +1738,7 @@ void (async () => {
       await startupService.restore();
     }
     await memoryPrepareService.resumePendingPrepare();
+    await requestPathWarmupPromise;
     void warmRequestPathCaches(false);
   } catch (error) {
     console.error("Failed to warm DroidAgent caches", error);
