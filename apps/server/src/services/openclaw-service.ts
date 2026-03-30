@@ -927,6 +927,89 @@ function parseMessageParts(params: {
   return parts;
 }
 
+function messagePartSignature(part: ChatMessagePart): string {
+  if (part.type === "attachments") {
+    return `attachments:${part.attachments
+      .map((attachment) => attachment.id)
+      .sort()
+      .join(",")}`;
+  }
+
+  if (part.type === "markdown") {
+    return `markdown:${part.text.trim()}`;
+  }
+
+  if (part.type === "code_block") {
+    return `code_block:${part.language ?? ""}:${part.code}`;
+  }
+
+  if (part.type === "tool_call_summary") {
+    return `tool_call:${part.toolName}:${part.summary}:${part.details ?? ""}`;
+  }
+
+  if (part.type === "tool_result_summary") {
+    return `tool_result:${part.toolName ?? ""}:${part.summary}:${part.details ?? ""}`;
+  }
+
+  if (part.type === "approval_request") {
+    return `approval:${part.approvalId ?? ""}:${part.title}:${part.details}`;
+  }
+
+  return `error:${part.message}:${part.details ?? ""}`;
+}
+
+function dedupeMessageParts(parts: ChatMessagePart[]): ChatMessagePart[] {
+  const deduped: ChatMessagePart[] = [];
+
+  for (const part of parts) {
+    const previous = deduped.at(-1);
+    if (!previous) {
+      deduped.push(part);
+      continue;
+    }
+
+    if (part.type === "markdown" && previous.type === "markdown") {
+      const currentText = part.text.trim();
+      const previousText = previous.text.trim();
+      if (!currentText) {
+        continue;
+      }
+      if (previousText === currentText) {
+        continue;
+      }
+      deduped[deduped.length - 1] = {
+        type: "markdown",
+        text: `${previousText}\n\n${currentText}`,
+      };
+      continue;
+    }
+
+    if (part.type === "attachments" && previous.type === "attachments") {
+      const mergedAttachments = [...previous.attachments];
+      for (const attachment of part.attachments) {
+        if (
+          !mergedAttachments.some((existing) => existing.id === attachment.id)
+        ) {
+          mergedAttachments.push(attachment);
+        }
+      }
+      deduped[deduped.length - 1] = {
+        type: "attachments",
+        attachments: mergedAttachments,
+      };
+      continue;
+    }
+
+    if (messagePartSignature(previous) === messagePartSignature(part)) {
+      continue;
+    }
+
+    deduped.push(part);
+  }
+
+  return deduped;
+}
+
 function renderHistoryContent(message: Record<string, unknown>): string {
   const lines = collectTextParts(message.content ?? message.text);
   if (lines.length > 0) {
@@ -1193,7 +1276,7 @@ function parseHistoryMessage(
       : structuredPartsFromContent(rawContent, role);
   const parts =
     structuredParts.length > 0
-      ? [
+      ? dedupeMessageParts([
           ...(attachments.length > 0
             ? [
                 {
@@ -1203,13 +1286,13 @@ function parseHistoryMessage(
               ]
             : []),
           ...structuredParts,
-        ]
-      : parseMessageParts({
+        ])
+      : dedupeMessageParts(parseMessageParts({
           text: renderedText,
           attachments,
           role,
           status: "complete",
-        });
+        }));
 
   return ChatMessageSchema.parse({
     id: String(message.id ?? `${sessionKey}-${index}`),

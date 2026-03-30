@@ -830,6 +830,68 @@ describe("OpenClaw context management policy", () => {
     ]);
   });
 
+  it("deduplicates repeated structured history parts before rendering", async () => {
+    vi.spyOn(openclawService, "callGateway").mockResolvedValue({
+      messages: [
+        {
+          id: "message-assistant",
+          role: "assistant",
+          ts: 1_710_000_020_000,
+          content: [
+            {
+              type: "text",
+              text: "Checking the workspace.",
+            },
+            {
+              type: "text",
+              text: "Checking the workspace.",
+            },
+            {
+              type: "toolCall",
+              name: "read",
+              arguments: {
+                path: "/tmp/README.md",
+              },
+            },
+            {
+              type: "toolCall",
+              name: "read",
+              arguments: {
+                path: "/tmp/README.md",
+              },
+            },
+            {
+              type: "text",
+              text: "Done.",
+            },
+            {
+              type: "text",
+              text: "Done.",
+            },
+          ],
+        },
+      ],
+    } as never);
+
+    const messages = await openclawService.loadHistory("web:operator");
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.parts).toEqual([
+      expect.objectContaining({
+        type: "markdown",
+        text: "Checking the workspace.",
+      }),
+      expect.objectContaining({
+        type: "tool_call_summary",
+        toolName: "read",
+      }),
+      expect.objectContaining({
+        type: "markdown",
+        text: "Done.",
+      }),
+    ]);
+  });
+
   it("strips attachment envelopes from history while preserving attachment metadata", async () => {
     vi.spyOn(openclawService, "callGateway").mockResolvedValue({
       messages: [

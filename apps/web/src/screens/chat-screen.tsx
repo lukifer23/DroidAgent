@@ -1152,6 +1152,8 @@ export function ChatScreen() {
     () => liveMetrics.filter((metric) => metric.value !== "Awaiting run"),
     [liveMetrics],
   );
+  const showHeaderHostPressureMetric =
+    hostPressureLevel !== "unknown" && hostPressureLevel !== "ok";
   const composerStateLabel = activeRun?.active
     ? "Live run"
     : showStreamingCard
@@ -1196,12 +1198,11 @@ export function ChatScreen() {
   const normalizedImageModel =
     harness?.imageModel?.replace(/^ollama\//, "") ?? null;
 
-  const headerFacts = [
+  const headerFacts = [...new Set([
     activeProvider?.model ?? "No active model",
     activeProvider?.contextWindow
       ? formatTokenBudget(activeProvider.contextWindow)
       : "context pending",
-    memory?.semanticReady ? "memory indexed" : "memory pending",
     pendingDraftCount > 0
       ? `${pendingDraftCount} draft${pendingDraftCount === 1 ? "" : "s"} pending`
       : "drafts clear",
@@ -1217,7 +1218,11 @@ export function ChatScreen() {
           : `vision ${normalizedImageModel}`
         : "attachments ready"
       : "attachments unavailable",
-  ].filter(Boolean) as string[];
+  ].filter(Boolean))] as string[];
+  const sessionSecondaryStatus = historyQuery.isFetching
+    ? "Syncing history"
+    : "History synced";
+  const showRailRunCard = Boolean(activeRun?.active);
 
   useEffect(() => {
     const container = threadRef.current;
@@ -1690,7 +1695,7 @@ export function ChatScreen() {
             </span>
           </div>
 
-          {visibleLiveMetrics.length > 0 || hostPressureLevel !== "unknown" ? (
+          {visibleLiveMetrics.length > 0 || showHeaderHostPressureMetric ? (
             <div className="metric-strip operator-metrics">
               {visibleLiveMetrics.map((metric) => (
                 <div key={metric.label} className="metric-chip">
@@ -1698,7 +1703,7 @@ export function ChatScreen() {
                   <span>{metric.value}</span>
                 </div>
               ))}
-              {hostPressureLevel !== "unknown" ? (
+              {showHeaderHostPressureMetric ? (
                 <div className="metric-chip">
                   <strong>Host pressure</strong>
                   <span>{hostPressureLevel}</span>
@@ -1937,7 +1942,7 @@ export function ChatScreen() {
               ) : (
                 <div className="operator-side-inline-meta">
                   <span>{messages.length + (showStreamingCard ? 1 : 0)} visible items</span>
-                  <span>{transportReady ? "WebSocket live" : "HTTP fallback"}</span>
+                  <span>{sessionSecondaryStatus}</span>
                 </div>
               )}
               <div className="message-action-row compact">
@@ -2098,7 +2103,7 @@ export function ChatScreen() {
               </div>
             </section>
 
-            {activeRun ? (
+            {showRailRunCard && activeRun ? (
               <section className="operator-side-module">
                 <div className="operator-side-module-head">
                   <strong>Live run</strong>

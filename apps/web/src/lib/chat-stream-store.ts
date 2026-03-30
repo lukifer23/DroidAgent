@@ -7,6 +7,34 @@ export interface StreamingRun {
 
 type Listener = () => void;
 
+function sameStreamingRun(
+  left: StreamingRun | undefined,
+  right: StreamingRun | undefined,
+): boolean {
+  if (!left && !right) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return false;
+  }
+
+  return left.runId === right.runId && left.text === right.text;
+}
+
+function sameStreamingSnapshot(
+  left: Record<string, StreamingRun>,
+  right: Record<string, StreamingRun>,
+): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) {
+    return false;
+  }
+
+  return leftKeys.every((key) => sameStreamingRun(left[key], right[key]));
+}
+
 class ChatStreamStore {
   private readonly listeners = new Set<Listener>();
   private runs: Record<string, StreamingRun> = {};
@@ -29,6 +57,10 @@ class ChatStreamStore {
   }
 
   setRuns(next: Record<string, StreamingRun>): void {
+    if (sameStreamingSnapshot(this.runs, next)) {
+      return;
+    }
+
     this.runs = next;
     this.emit();
   }
