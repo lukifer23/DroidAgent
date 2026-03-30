@@ -2233,6 +2233,37 @@ export class OpenClawService {
     const seenToolNames = new Set<string>();
     let firstDeltaSeen = false;
     let approvalRaised = false;
+    let activeToolWaitMetric: ReturnType<typeof performanceService.start> | null =
+      null;
+    let activeToolName: string | null = null;
+
+    const finishToolWaitMetric = (
+      outcome: "ok" | "warn" | "error",
+      phase: "delta" | "done" | "replaced" | "abort" | "error",
+    ) => {
+      activeToolWaitMetric?.finish({
+        outcome,
+        phase,
+        toolName: activeToolName,
+      });
+      activeToolWaitMetric = null;
+      activeToolName = null;
+    };
+
+    const startToolWaitMetric = (toolName: string) => {
+      if (activeToolWaitMetric) {
+        finishToolWaitMetric("warn", "replaced");
+      }
+      activeToolName = toolName;
+      activeToolWaitMetric = performanceService.start(
+        "server",
+        "chat.run.toolWait",
+        {
+          sessionId: sessionKey,
+          toolName,
+        },
+      );
+    };
 
     try {
       const response = await fetch(
@@ -2301,6 +2332,7 @@ export class OpenClawService {
                 continue;
               }
               seenToolNames.add(toolName);
+              startToolWaitMetric(toolName);
               await relay.onState?.({
                 stage: "tool_call",
                 label: `Using ${toolName}`,
@@ -2312,6 +2344,9 @@ export class OpenClawService {
 
             const delta = extractDeltaText(parsed);
             if (delta) {
+              if (activeToolWaitMetric) {
+                finishToolWaitMetric("ok", "delta");
+              }
               if (!firstDeltaSeen) {
                 firstDeltaSeen = true;
                 await relay.onState?.({
@@ -2371,6 +2406,7 @@ export class OpenClawService {
               continue;
             }
             seenToolNames.add(toolName);
+            startToolWaitMetric(toolName);
             await relay.onState?.({
               stage: "tool_call",
               label: `Using ${toolName}`,
@@ -2382,6 +2418,9 @@ export class OpenClawService {
 
           const delta = extractDeltaText(parsed);
           if (delta) {
+            if (activeToolWaitMetric) {
+              finishToolWaitMetric("ok", "delta");
+            }
             if (!firstDeltaSeen) {
               firstDeltaSeen = true;
               await relay.onState?.({
@@ -2402,6 +2441,9 @@ export class OpenClawService {
         }
       }
 
+      if (activeToolWaitMetric) {
+        finishToolWaitMetric("ok", "done");
+      }
       await relay.onState?.({
         stage: seenToolNames.size > 0 ? "tool_result" : "completed",
         label:
@@ -2417,6 +2459,9 @@ export class OpenClawService {
       await relay.onDone();
     } catch (error) {
       if ((error as { name?: string }).name === "AbortError") {
+        if (activeToolWaitMetric) {
+          finishToolWaitMetric("warn", "abort");
+        }
         await relay.onState?.({
           stage: "completed",
           label: "Run stopped",
@@ -2427,6 +2472,9 @@ export class OpenClawService {
         return;
       }
 
+      if (activeToolWaitMetric) {
+        finishToolWaitMetric("error", "error");
+      }
       await relay.onState?.({
         stage: "failed",
         label: "Run failed",

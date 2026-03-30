@@ -1526,6 +1526,61 @@ small {
   font-size: 0.86rem;
 }
 
+.run-activity-trail {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.15rem;
+}
+
+.run-activity-item {
+  display: grid;
+  gap: 0.16rem;
+  padding: 0.42rem 0.5rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.run-activity-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.run-activity-head strong {
+  font-size: 0.8rem;
+  color: var(--fg);
+}
+
+.run-activity-head span {
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.run-activity-item p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+  font-size: 0.85rem;
+}
+
+.run-activity-item.tool_call,
+.run-activity-item.tool_result,
+.run-activity-item.streaming {
+  border-color: rgba(77, 156, 248, 0.2);
+}
+
+.run-activity-item.approval_required {
+  border-color: rgba(214, 188, 144, 0.24);
+}
+
+.run-activity-item.failed {
+  border-color: rgba(234, 112, 95, 0.24);
+}
+
 .operator-run-strip.streaming,
 .operator-run-strip.tool_call,
 .operator-run-strip.tool_result {
@@ -1554,6 +1609,11 @@ small {
 }
 
 :root[data-theme="light"] .run-breakdown-chip {
+  background: rgba(245, 248, 252, 0.98);
+  border-color: rgba(23, 32, 43, 0.08);
+}
+
+:root[data-theme="light"] .run-activity-item {
   background: rgba(245, 248, 252, 0.98);
   border-color: rgba(23, 32, 43, 0.08);
 }

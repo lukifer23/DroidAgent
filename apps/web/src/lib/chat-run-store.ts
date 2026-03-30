@@ -1,9 +1,24 @@
 import { useSyncExternalStore } from "react";
-import type { ChatRunState } from "@droidagent/shared";
+import type { ChatRunStage, ChatRunState } from "@droidagent/shared";
 
 type Listener = () => void;
 
-function sameRunState(left: ChatRunState | undefined, right: ChatRunState): boolean {
+const MAX_RUN_ACTIVITIES = 6;
+
+export interface ChatRunActivity {
+  stage: ChatRunStage;
+  label: string;
+  detail: string | null;
+  toolName: string | null;
+  at: string;
+}
+
+export interface ChatRunViewState extends ChatRunState {
+  startedAt: string;
+  activities: ChatRunActivity[];
+}
+
+function sameRunState(left: ChatRunViewState | undefined, right: ChatRunState): boolean {
   return (
     left?.sessionId === right.sessionId &&
     left.runId === right.runId &&
@@ -12,14 +27,44 @@ function sameRunState(left: ChatRunState | undefined, right: ChatRunState): bool
     left.detail === right.detail &&
     left.toolName === right.toolName &&
     left.approvalId === right.approvalId &&
-    left.active === right.active &&
-    left.updatedAt === right.updatedAt
+    left.active === right.active
   );
+}
+
+function activitySignature(activity: ChatRunActivity): string {
+  return `${activity.stage}:${activity.label}:${activity.detail ?? ""}:${activity.toolName ?? ""}`;
+}
+
+function activityFromRun(run: ChatRunState): ChatRunActivity {
+  return {
+    stage: run.stage,
+    label: run.label,
+    detail: run.detail ?? null,
+    toolName: run.toolName ?? null,
+    at: run.updatedAt,
+  };
+}
+
+function appendActivity(
+  current: ChatRunActivity[],
+  next: ChatRunActivity,
+): ChatRunActivity[] {
+  const last = current.at(-1);
+  if (last && activitySignature(last) === activitySignature(next)) {
+    return current;
+  }
+
+  const combined = [...current, next];
+  if (combined.length <= MAX_RUN_ACTIVITIES) {
+    return combined;
+  }
+
+  return combined.slice(combined.length - MAX_RUN_ACTIVITIES);
 }
 
 class ChatRunStore {
   private readonly listeners = new Set<Listener>();
-  private runs: Record<string, ChatRunState> = {};
+  private runs: Record<string, ChatRunViewState> = {};
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -28,7 +73,7 @@ class ChatRunStore {
     };
   }
 
-  getSnapshot(): Record<string, ChatRunState> {
+  getSnapshot(): Record<string, ChatRunViewState> {
     return this.runs;
   }
 
@@ -43,9 +88,22 @@ class ChatRunStore {
       return;
     }
 
+    const current = this.runs[run.sessionId];
+    const next: ChatRunViewState = {
+      ...run,
+      startedAt:
+        current && current.runId === run.runId
+          ? current.startedAt
+          : run.updatedAt,
+      activities:
+        current && current.runId === run.runId
+          ? appendActivity(current.activities, activityFromRun(run))
+          : [activityFromRun(run)],
+    };
+
     this.runs = {
       ...this.runs,
-      [run.sessionId]: run,
+      [run.sessionId]: next,
     };
     this.emit();
   }
@@ -65,7 +123,7 @@ class ChatRunStore {
 export const chatRunStore = new ChatRunStore();
 
 export function useChatRuns() {
-  const emptySnapshot: Record<string, ChatRunState> = {};
+  const emptySnapshot: Record<string, ChatRunViewState> = {};
   return useSyncExternalStore(
     (listener) => chatRunStore.subscribe(listener),
     () => chatRunStore.getSnapshot(),

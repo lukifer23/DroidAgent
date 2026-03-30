@@ -33,4 +33,47 @@ describe("chatRunStore", () => {
       chatRunStore.clear(sessionId);
     }
   });
+
+  it("accumulates a short activity trail for one live run", () => {
+    const sessionId = "test-run-activity-session";
+
+    try {
+      chatRunStore.clear(sessionId);
+      chatRunStore.setRun({
+        sessionId,
+        runId: "run-2",
+        stage: "accepted",
+        label: "Run accepted",
+        detail: "Starting the live run.",
+        toolName: null,
+        approvalId: null,
+        active: true,
+        updatedAt: "2026-03-29T00:00:00.000Z",
+      });
+      chatRunStore.setRun({
+        sessionId,
+        runId: "run-2",
+        stage: "tool_call",
+        label: "Using read",
+        detail: "OpenClaw called the read tool.",
+        toolName: "read",
+        approvalId: null,
+        active: true,
+        updatedAt: "2026-03-29T00:00:01.000Z",
+      });
+
+      const snapshot = chatRunStore.getSnapshot()[sessionId];
+      expect(snapshot?.activities).toEqual([
+        expect.objectContaining({
+          stage: "accepted",
+        }),
+        expect.objectContaining({
+          stage: "tool_call",
+          toolName: "read",
+        }),
+      ]);
+    } finally {
+      chatRunStore.clear(sessionId);
+    }
+  });
 });

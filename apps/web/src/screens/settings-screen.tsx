@@ -1459,6 +1459,13 @@ export function SettingsScreen() {
             <small>
               {metricDescription(
                 performanceQuery.data,
+                "chat.run.toolWait",
+                "Tool wait",
+              )}
+            </small>
+            <small>
+              {metricDescription(
+                performanceQuery.data,
                 "file.write",
                 "File write",
               )}

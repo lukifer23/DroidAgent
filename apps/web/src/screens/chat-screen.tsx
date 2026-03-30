@@ -14,7 +14,6 @@ import type {
   ChatAttachment,
   ChatMessage,
   ChatMessagePart,
-  ChatRunState,
   DashboardState,
   HostPressureContributor,
   HostPressureRecoveryResult,
@@ -37,7 +36,11 @@ import {
   buildRunInChatPrompt,
   extractRunnableCommand,
 } from "../lib/command-suggestions";
-import { useChatRuns } from "../lib/chat-run-store";
+import {
+  type ChatRunActivity,
+  type ChatRunViewState,
+  useChatRuns,
+} from "../lib/chat-run-store";
 import { useStreamingRuns } from "../lib/chat-stream-store";
 import { formatTokenBudget } from "../lib/formatters";
 
@@ -165,7 +168,7 @@ function recentSessionSample(
 
 function buildRunBreakdown(params: {
   sessionId: string | null | undefined;
-  activeRun: ChatRunState | null;
+  activeRun: ChatRunViewState | null;
   chatFeedback: ChatSessionFeedback | null;
   clientSnapshot: PerformanceSnapshot;
   serverSnapshot: PerformanceSnapshot | undefined;
@@ -195,6 +198,11 @@ function buildRunBreakdown(params: {
   const relayComplete = recentSessionSample(
     params.serverSnapshot,
     "chat.stream.acceptedToCompleteRelay",
+    params.sessionId,
+  );
+  const toolWait = recentSessionSample(
+    params.serverSnapshot,
+    "chat.run.toolWait",
     params.sessionId,
   );
   const clientFirstToken = recentSessionSample(
@@ -258,6 +266,13 @@ function buildRunBreakdown(params: {
           : "neutral",
     },
   ];
+  if (toolWait) {
+    items.splice(2, 0, {
+      label: "Tool wait",
+      value: formatDurationMs(toolWait.durationMs),
+      tone: toolWait.durationMs > 2_000 ? "warn" : "neutral",
+    });
+  }
 
   let note: string | null = null;
   if (
@@ -269,6 +284,8 @@ function buildRunBreakdown(params: {
   } else if (params.chatFeedback?.status === "error") {
     note =
       "The run failed after the live path started. Use the timings below to see whether the failure was in the Mac tool/model work or after the relay.";
+  } else if (params.activeRun?.stage === "tool_call" && params.activeRun.toolName) {
+    note = `DroidAgent is currently waiting on ${params.activeRun.toolName} on the Mac.`;
   } else if (params.activeRun?.stage === "approval_required") {
     note = "The run is paused on approval. Once approved, DroidAgent continues in the same live turn.";
   } else if (
@@ -324,6 +341,35 @@ function RunBreakdownPanel({ breakdown }: { breakdown: RunBreakdown }) {
   );
 }
 
+function RunActivityTrail({
+  activities,
+}: {
+  activities: ChatRunActivity[];
+}) {
+  if (activities.length === 0) {
+    return null;
+  }
+
+  const visibleActivities = activities.slice(-4);
+
+  return (
+    <div className="run-activity-trail">
+      {visibleActivities.map((activity, index) => (
+        <div
+          key={`${activity.stage}-${activity.at}-${index}`}
+          className={`run-activity-item ${activity.stage}`}
+        >
+          <div className="run-activity-head">
+            <strong>{activity.label}</strong>
+            <span>{formatMessageTime(activity.at)}</span>
+          </div>
+          {activity.detail ? <p>{activity.detail}</p> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function describeChatFeedback(
   feedback: ChatSessionFeedback | null | undefined,
 ): { firstToken: string; reply: string } {
@@ -359,7 +405,7 @@ function PendingAssistantCard({
   chatFeedback,
   onResolveApproval,
 }: {
-  activeRun: ChatRunState | null;
+  activeRun: ChatRunViewState | null;
   approval: ApprovalRecord | null;
   breakdown: RunBreakdown;
   chatFeedback: ChatSessionFeedback | null;
@@ -393,6 +439,9 @@ function PendingAssistantCard({
             <span>First token: {feedback.firstToken}</span>
             <span>Reply: {feedback.reply}</span>
           </div>
+          {activeRun?.activities.length ? (
+            <RunActivityTrail activities={activeRun.activities} />
+          ) : null}
           <RunBreakdownPanel breakdown={breakdown} />
         </div>
         {activeRun?.stage === "approval_required" ? (
@@ -1122,6 +1171,15 @@ export function ChatScreen() {
           metrics.push({
             label: "Model/tool",
             value: modelWait.value,
+          });
+        }
+        const toolWait = currentRunBreakdown.items.find(
+          (item) => item.label === "Tool wait",
+        );
+        if (toolWait) {
+          metrics.push({
+            label: "Tool wait",
+            value: toolWait.value,
           });
         }
       }
@@ -2115,6 +2173,9 @@ export function ChatScreen() {
                   <div>
                     <strong>{activeRun.label}</strong>
                     {activeRun.detail ? <p>{activeRun.detail}</p> : null}
+                    {activeRun.activities.length > 0 ? (
+                      <RunActivityTrail activities={activeRun.activities} />
+                    ) : null}
                   </div>
                   {activeRun.stage === "approval_required" ? (
                     <ApprovalCard
