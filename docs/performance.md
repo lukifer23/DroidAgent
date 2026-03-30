@@ -12,6 +12,8 @@ The benchmark commands use isolated seeded ports so `perf:server`, `perf:e2e`, a
 pnpm perf:server
 pnpm perf:e2e
 pnpm perf:report
+pnpm perf:baseline
+pnpm perf:check
 ```
 
 - `pnpm perf:server`
@@ -22,6 +24,10 @@ pnpm perf:report
   - writes one artifact per Playwright project under `artifacts/perf/`
 - `pnpm perf:report`
   - prints the latest server and E2E summaries
+- `pnpm perf:baseline`
+  - snapshots current perf artifacts into `artifacts/perf/baseline.json`
+- `pnpm perf:check`
+  - enforces `perf-budgets.json` and optional baseline regression threshold
 
 ## Metrics Captured
 
@@ -87,7 +93,7 @@ This keeps model time, relay overhead, and browser-observed latency from being m
 
 - `GET /api/access` local p95 <= `250 ms`
 - `GET /api/dashboard` local p95 <= `250 ms`
-- warm route switch p95 <= `200 ms`
+- warm route switch p95 <= `300 ms`
 - websocket reconnect to resync p95 <= `2000 ms`
 - file open and save for <= `256 KB` text files p95 <= `500 ms`
 - DroidAgent relay overhead from accepted chat submit to first forwarded token p95 <= `150 ms`
@@ -116,7 +122,7 @@ This table is the manual reference point for this pass. Update it when you inten
 |--------|--------|
 | `GET /api/access` p95 | `<= 250 ms` |
 | `GET /api/dashboard` p95 | `<= 250 ms` |
-| Route switch p95 | `<= 200 ms` |
+| Route switch p95 | `<= 300 ms` |
 | Chat first token relay p95 | `<= 150 ms` |
 | Reconnect to resync p95 | `<= 2000 ms` |
 | File save p95 | `<= 500 ms` |

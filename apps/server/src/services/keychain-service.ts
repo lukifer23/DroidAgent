@@ -18,6 +18,7 @@ interface CloudProviderDefinition {
 
 const KEYCHAIN_ACCOUNT = "droidagent-owner";
 const PROVIDER_SUMMARIES_TTL_MS = 10000;
+const PROCESS_ENV_TTL_MS = 10_000;
 
 export const CLOUD_PROVIDER_DEFINITIONS: CloudProviderDefinition[] = [
   { id: "openai", label: "OpenAI", envVar: "OPENAI_API_KEY" },
@@ -63,9 +64,11 @@ async function findNamedGenericPassword(key: string): Promise<{ exitCode: number
 
 export class KeychainService {
   private readonly providerSummariesCache = new TtlCache<CloudProviderSummary[]>(PROVIDER_SUMMARIES_TTL_MS);
+  private readonly processEnvCache = new TtlCache<NodeJS.ProcessEnv>(PROCESS_ENV_TTL_MS);
 
   invalidateProviderSummaries(): void {
     this.providerSummariesCache.invalidate();
+    this.processEnvCache.invalidate();
   }
 
   providerDefinitions(): readonly CloudProviderDefinition[] {
@@ -155,14 +158,16 @@ export class KeychainService {
   }
 
   async getProcessEnv(): Promise<NodeJS.ProcessEnv> {
-    const entries = await Promise.all(
-      CLOUD_PROVIDER_DEFINITIONS.map(async (provider) => {
-        const secret = await this.getProviderSecret(provider.id);
-        return secret ? [provider.envVar, secret] : null;
-      })
-    );
+    return await this.processEnvCache.get(async () => {
+      const entries = await Promise.all(
+        CLOUD_PROVIDER_DEFINITIONS.map(async (provider) => {
+          const secret = await this.getProviderSecret(provider.id);
+          return secret ? [provider.envVar, secret] : null;
+        })
+      );
 
-    return Object.fromEntries(entries.filter((entry): entry is [string, string] => Boolean(entry)));
+      return Object.fromEntries(entries.filter((entry): entry is [string, string] => Boolean(entry)));
+    });
   }
 
   async listProviderSummaries(): Promise<CloudProviderSummary[]> {

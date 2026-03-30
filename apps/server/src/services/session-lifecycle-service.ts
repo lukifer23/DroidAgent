@@ -42,6 +42,22 @@ function toSummary(record: PersistedSessionRecord): SessionSummary {
   });
 }
 
+function recordsEqual(
+  left: PersistedSessionRecord,
+  right: PersistedSessionRecord,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.title === right.title &&
+    left.scope === right.scope &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt &&
+    left.unreadCount === right.unreadCount &&
+    left.lastMessagePreview === right.lastMessagePreview &&
+    left.archivedAt === right.archivedAt
+  );
+}
+
 export class SessionLifecycleService {
   private async loadRegistry(): Promise<PersistedSessionRecord[]> {
     const records = await appStateService.getJsonSetting(SESSION_REGISTRY_KEY, []);
@@ -103,19 +119,45 @@ export class SessionLifecycleService {
     return [...recordsById.values()].sort(compareSessions);
   }
 
-  private async syncRegistry(): Promise<PersistedSessionRecord[]> {
-    const [registry, harnessSessions] = await Promise.all([
-      this.loadRegistry(),
-      harnessService.listSessions(),
-    ]);
-    const merged = this.mergeHarnessSessions(registry, harnessSessions);
+  private async syncRegistry(
+    harnessSessions?: SessionSummary[],
+  ): Promise<PersistedSessionRecord[]> {
+    const registry = await this.loadRegistry();
+    const observedHarnessSessions =
+      harnessSessions ?? (await harnessService.listSessions());
+    const merged = this.mergeHarnessSessions(registry, observedHarnessSessions);
     const changed =
       merged.length !== registry.length ||
-      merged.some((record, index) => JSON.stringify(record) !== JSON.stringify(registry[index]));
+      merged.some((record, index) => !recordsEqual(record, registry[index]!));
     if (changed) {
       await this.saveRegistry(merged);
     }
     return merged;
+  }
+
+  private async observeSessionWithRegistry(
+    registry: PersistedSessionRecord[],
+    sessionId: string,
+    options?: {
+      title?: string;
+      restore?: boolean;
+      messages?: ChatMessage[];
+    },
+  ): Promise<SessionSummary> {
+    const current = registry.find((record) => record.id === sessionId);
+    const lastMessage = options?.messages?.at(-1) ?? null;
+    const updatedAt = lastMessage?.createdAt ?? current?.updatedAt ?? nowIso();
+    const nextTitle = options?.title ?? current?.title;
+    const nextRecord = this.createRecord(sessionId, {
+      ...(current ?? {}),
+      ...(nextTitle ? { title: nextTitle } : {}),
+      updatedAt,
+      lastMessagePreview: lastMessage?.text ?? current?.lastMessagePreview ?? "",
+      archivedAt: options?.restore ? null : current?.archivedAt ?? null,
+    });
+    const next = [nextRecord, ...registry.filter((record) => record.id !== sessionId)];
+    await this.saveRegistry(next);
+    return toSummary(nextRecord);
   }
 
   private nextWebSessionTitle(records: PersistedSessionRecord[]): string {
@@ -185,20 +227,18 @@ export class SessionLifecycleService {
     },
   ): Promise<SessionSummary> {
     const registry = await this.syncRegistry();
-    const current = registry.find((record) => record.id === sessionId);
-    const lastMessage = options?.messages?.at(-1) ?? null;
-    const updatedAt = lastMessage?.createdAt ?? current?.updatedAt ?? nowIso();
-    const nextTitle = options?.title ?? current?.title;
-    const nextRecord = this.createRecord(sessionId, {
-      ...(current ?? {}),
-      ...(nextTitle ? { title: nextTitle } : {}),
-      updatedAt,
-      lastMessagePreview: lastMessage?.text ?? current?.lastMessagePreview ?? "",
-      archivedAt: options?.restore ? null : current?.archivedAt ?? null,
+    return await this.observeSessionWithRegistry(registry, sessionId, options);
+  }
+
+  async observeSessionFromMessages(
+    sessionId: string,
+    messages: ChatMessage[],
+  ): Promise<SessionSummary> {
+    const registry = await this.loadRegistry();
+    return await this.observeSessionWithRegistry(registry, sessionId, {
+      messages,
+      restore: true,
     });
-    const next = [nextRecord, ...registry.filter((record) => record.id !== sessionId)];
-    await this.saveRegistry(next);
-    return toSummary(nextRecord);
   }
 }
 

@@ -1,5 +1,6 @@
 import {
   type ClipboardEvent,
+  useCallback,
   memo,
   useEffect,
   useMemo,
@@ -28,6 +29,7 @@ import remarkGfm from "remark-gfm";
 import { useAuthQuery, useDashboardQuery, usePerformanceQuery } from "../app-data";
 import {
   type ChatSessionFeedback,
+  useChatFeedbackSnapshot,
   useClientPerformanceSnapshot,
   useDroidAgentApp,
 } from "../app-context";
@@ -36,6 +38,7 @@ import {
   buildRunInChatPrompt,
   extractRunnableCommand,
 } from "../lib/command-suggestions";
+import { TERMINAL_PREFILL_STORAGE_KEY } from "../lib/constants";
 import {
   type ChatRunActivity,
   type ChatRunViewState,
@@ -44,7 +47,6 @@ import {
 import { useStreamingRuns } from "../lib/chat-stream-store";
 import { formatTokenBudget } from "../lib/formatters";
 
-const TERMINAL_PREFILL_STORAGE_KEY = "droidagent-terminal-prefill";
 const RECENT_RUN_SAMPLE_MAX_AGE_MS = 90_000;
 
 interface ExpandedImageState {
@@ -960,8 +962,6 @@ export function ChatScreen() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
   const {
-    chatFeedbackBySessionId,
-    recentChatFeedbackBySessionId,
     selectedSessionId,
     setSelectedSessionId,
     sendRealtimeCommand,
@@ -973,6 +973,7 @@ export function ChatScreen() {
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
   const performanceQuery = usePerformanceQuery(Boolean(authQuery.data?.user));
+  const chatFeedbackSnapshot = useChatFeedbackSnapshot();
   const dashboard = dashboardQuery.data;
   const clientPerformanceSnapshot = useClientPerformanceSnapshot();
   const streamingRuns = useStreamingRuns();
@@ -1005,10 +1006,10 @@ export function ChatScreen() {
   const selectedSessionKey = activeSession?.id ?? selectedSessionId;
   const activeRun = selectedSessionKey ? runStates[selectedSessionKey] : null;
   const liveChatFeedback = selectedSessionKey
-    ? chatFeedbackBySessionId[selectedSessionKey] ?? null
+    ? chatFeedbackSnapshot.liveBySessionId[selectedSessionKey] ?? null
     : null;
   const recentChatFeedback = selectedSessionKey
-    ? recentChatFeedbackBySessionId[selectedSessionKey] ?? null
+    ? chatFeedbackSnapshot.recentBySessionId[selectedSessionKey] ?? null
     : null;
   const streaming = selectedSessionKey
     ? streamingRuns[selectedSessionKey]
@@ -1335,10 +1336,10 @@ export function ChatScreen() {
     }
   }
 
-  async function handleResolveApproval(
+  const handleResolveApproval = useCallback(async (
     approvalId: string,
     resolution: "approved" | "denied",
-  ) {
+  ) => {
     if (
       transportReady &&
       sendRealtimeCommand({
@@ -1355,7 +1356,7 @@ export function ChatScreen() {
     await postJson(`/api/approvals/${encodeURIComponent(approvalId)}`, {
       resolution,
     });
-  }
+  }, [sendRealtimeCommand, transportReady]);
 
   async function handleAbortRun() {
     if (!selectedSessionKey) {
@@ -1397,7 +1398,7 @@ export function ChatScreen() {
     });
   }
 
-  async function handleRunSuggestedCommand(command: string) {
+  const handleRunSuggestedCommand = useCallback(async (command: string) => {
     if (pressureBlocks) {
       throw new Error(
         hostPressure?.message ??
@@ -1412,12 +1413,12 @@ export function ChatScreen() {
       attachments: [],
       clearComposer: false,
     });
-  }
+  }, [hostPressure?.message, pressureBlocks, selectedSessionKey, sendChatMessage]);
 
-  function handleOpenInTerminal(command: string) {
+  const handleOpenInTerminal = useCallback((command: string) => {
     window.sessionStorage.setItem(TERMINAL_PREFILL_STORAGE_KEY, command);
     void navigate({ to: "/terminal" });
-  }
+  }, [navigate]);
 
   async function handleSelectSession(sessionId: string) {
     if (!sessionId || sessionId === selectedSessionKey) {
@@ -1710,6 +1711,25 @@ export function ChatScreen() {
     });
   }
 
+  const handleRunCommandFromMessage = useCallback((command: string) => {
+    void runAction(async () => {
+      await handleRunSuggestedCommand(command);
+    }, "Command sent back into this chat. DroidAgent will execute it inside the live harness.");
+  }, [handleRunSuggestedCommand, runAction]);
+
+  const handleResolveApprovalAction = useCallback((
+    approvalId: string,
+    resolution: "approved" | "denied",
+  ) => {
+    void runAction(async () => {
+      await handleResolveApproval(approvalId, resolution);
+    });
+  }, [handleResolveApproval, runAction]);
+
+  const handleOpenImage = useCallback((image: ExpandedImageState) => {
+    setExpandedImage(image);
+  }, []);
+
   return (
     <>
       <section className="operator-chat-shell">
@@ -1870,25 +1890,10 @@ export function ChatScreen() {
                               : null
                           }
                           commandActionsEnabled={!pressureBlocks}
-                          onRunCommand={(command) => {
-                            void runAction(async () => {
-                              await handleRunSuggestedCommand(command);
-                            }, "Command sent back into this chat. DroidAgent will execute it inside the live harness.");
-                          }}
-                          onOpenInTerminal={(command) => {
-                            handleOpenInTerminal(command);
-                          }}
-                          onOpenImage={(image) => {
-                            setExpandedImage(image);
-                          }}
-                          onResolveApproval={(approvalId, resolution) => {
-                            void runAction(async () => {
-                              await handleResolveApproval(
-                                approvalId,
-                                resolution,
-                              );
-                            });
-                          }}
+                          onRunCommand={handleRunCommandFromMessage}
+                          onOpenInTerminal={handleOpenInTerminal}
+                          onOpenImage={handleOpenImage}
+                          onResolveApproval={handleResolveApprovalAction}
                         />
                       );
                     })}
@@ -1925,11 +1930,7 @@ export function ChatScreen() {
                   approval={activeRunApproval}
                   breakdown={currentRunBreakdown}
                   chatFeedback={liveChatFeedback}
-                  onResolveApproval={(approvalId, resolution) => {
-                    void runAction(async () => {
-                      await handleResolveApproval(approvalId, resolution);
-                    });
-                  }}
+                  onResolveApproval={handleResolveApprovalAction}
                 />
               ) : null}
 
@@ -1951,9 +1952,7 @@ export function ChatScreen() {
                   </div>
                   <div className="message-markdown">
                     <StreamingMarkdown
-                      onOpenImage={(image) => {
-                        setExpandedImage(image);
-                      }}
+                      onOpenImage={handleOpenImage}
                       text={
                         streaming?.text ||
                         "Working through the live OpenClaw run..."

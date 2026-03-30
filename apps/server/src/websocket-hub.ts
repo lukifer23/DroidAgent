@@ -26,6 +26,50 @@ function send(ws: WebSocket, payload: unknown): void {
 export class WebsocketHub {
   private sockets = new Set<WebSocket>();
   private hostPressureInterval: ReturnType<typeof setInterval> | null = null;
+  private pendingChatDeltas = new Map<string, { sessionId: string; runId: string; delta: string }>();
+  private pendingTerminalOutputs = new Map<string, { sessionId: string; data: string }>();
+  private pendingFlushHandle: ReturnType<typeof setImmediate> | null = null;
+
+  private flushPendingRealtimeEvents(): void {
+    this.pendingFlushHandle = null;
+    if (this.pendingChatDeltas.size > 0) {
+      for (const pending of this.pendingChatDeltas.values()) {
+        this.broadcast(
+          ServerEventSchema.parse({
+            type: "chat.stream.delta",
+            payload: pending,
+          }),
+        );
+      }
+      this.pendingChatDeltas.clear();
+    }
+    if (this.pendingTerminalOutputs.size > 0) {
+      for (const pending of this.pendingTerminalOutputs.values()) {
+        this.broadcast(
+          ServerEventSchema.parse({
+            type: "terminal.output",
+            payload: pending,
+          }),
+        );
+      }
+      this.pendingTerminalOutputs.clear();
+    }
+  }
+
+  private schedulePendingFlush(): void {
+    if (this.pendingFlushHandle !== null) {
+      return;
+    }
+    this.pendingFlushHandle = setImmediate(() => {
+      this.flushPendingRealtimeEvents();
+    });
+  }
+
+  private flushPendingSession(sessionId: string): void {
+    if (this.pendingChatDeltas.has(sessionId) || this.pendingTerminalOutputs.has(sessionId)) {
+      this.flushPendingRealtimeEvents();
+    }
+  }
 
   attach(wss: WebSocketServer): void {
     if (!this.hostPressureInterval) {
@@ -79,15 +123,16 @@ export class WebsocketHub {
     });
 
     terminalService.on("output", (event) => {
-      this.broadcast(
-        ServerEventSchema.parse({
-          type: "terminal.output",
-          payload: event,
-        }),
-      );
+      const existing = this.pendingTerminalOutputs.get(event.sessionId);
+      this.pendingTerminalOutputs.set(event.sessionId, {
+        sessionId: event.sessionId,
+        data: `${existing?.data ?? ""}${event.data}`,
+      });
+      this.schedulePendingFlush();
     });
 
     terminalService.on("closed", (event) => {
+      this.flushPendingSession(event.sessionId);
       this.broadcast(
         ServerEventSchema.parse({
           type: "terminal.closed",
@@ -321,19 +366,20 @@ export class WebsocketHub {
   }
 
   publishChatDelta(sessionId: string, runId: string, delta: string): void {
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "chat.stream.delta",
-        payload: {
-          sessionId,
-          runId,
-          delta
-        }
-      })
-    );
+    const existing = this.pendingChatDeltas.get(sessionId);
+    this.pendingChatDeltas.set(sessionId, {
+      sessionId,
+      runId,
+      delta:
+        existing && existing.runId === runId
+          ? `${existing.delta}${delta}`
+          : delta,
+    });
+    this.schedulePendingFlush();
   }
 
   publishChatDone(sessionId: string, runId: string): void {
+    this.flushPendingSession(sessionId);
     this.broadcast(
       ServerEventSchema.parse({
         type: "chat.stream.done",
@@ -346,6 +392,7 @@ export class WebsocketHub {
   }
 
   publishChatError(sessionId: string, runId: string, message: string): void {
+    this.flushPendingSession(sessionId);
     this.broadcast(
       ServerEventSchema.parse({
         type: "chat.stream.error",
@@ -390,9 +437,7 @@ export class WebsocketHub {
 
   async pushChatHistory(sessionId: string): Promise<void> {
     const messages = await harnessService.loadHistory(sessionId);
-    await sessionLifecycleService.observeSession(sessionId, {
-      messages,
-    });
+    await sessionLifecycleService.observeSessionFromMessages(sessionId, messages);
     this.broadcast(
       ServerEventSchema.parse({
         type: "chat.history",
@@ -429,9 +474,10 @@ export class WebsocketHub {
       const command = ClientCommandSchema.parse(JSON.parse(raw));
       if (command.type === "chat.history") {
         const messages = await harnessService.loadHistory(command.payload.sessionId);
-        await sessionLifecycleService.observeSession(command.payload.sessionId, {
+        await sessionLifecycleService.observeSessionFromMessages(
+          command.payload.sessionId,
           messages,
-        });
+        );
         send(
           ws,
           ServerEventSchema.parse({

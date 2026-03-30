@@ -27,6 +27,8 @@
     "perf:server": "node ./scripts/perf-server.mjs",
     "perf:e2e": "node ./scripts/perf-e2e.mjs",
     "perf:report": "node ./scripts/perf-report.mjs",
+    "perf:baseline": "node ./scripts/perf-baseline.mjs",
+    "perf:check": "node ./scripts/perf-check.mjs",
     "format": "prettier --write .",
     "bootstrap": "./scripts/bootstrap.sh",
     "start": "node ./scripts/start.mjs",

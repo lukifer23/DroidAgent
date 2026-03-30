@@ -4,6 +4,8 @@ import path from "node:path";
 
 const repoRoot = process.cwd();
 const artifactDir = path.join(repoRoot, "artifacts", "perf");
+const baselinePath = path.join(artifactDir, "baseline.json");
+const budgetsPath = path.join(repoRoot, "perf-budgets.json");
 
 async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, "utf8"));
@@ -36,6 +38,22 @@ async function main() {
     for (const metric of artifact.metrics ?? []) {
       console.log(`  ${metric.name}: ${metric.durationMs} ms`);
     }
+  }
+
+  try {
+    const [baseline, budgets] = await Promise.all([
+      readJson(baselinePath),
+      readJson(budgetsPath),
+    ]);
+    console.log("Perf policy");
+    console.log(`- baseline: ${Object.keys(baseline.metrics ?? {}).length} tracked metrics`);
+    console.log(
+      `- budget rules: ${(budgets.metrics ?? []).length} (max regression ${
+        Math.round((budgets.maxRegressionRatio ?? 0.1) * 100)
+      }%)`,
+    );
+  } catch {
+    // optional metadata
   }
 }
 

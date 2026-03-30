@@ -10,9 +10,8 @@ import "@xterm/xterm/css/xterm.css";
 import { useAuthQuery, useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { api, deleteJson, postJson } from "../lib/api";
+import { TERMINAL_PREFILL_STORAGE_KEY } from "../lib/constants";
 import { useTerminalState, terminalStore } from "../lib/terminal-store";
-
-const TERMINAL_PREFILL_STORAGE_KEY = "droidagent-terminal-prefill";
 
 function terminalTheme(theme: "dark" | "light") {
   return theme === "light"
@@ -66,6 +65,11 @@ export function TerminalScreen() {
   const sendRealtimeCommandRef = useRef(sendRealtimeCommand);
   const wsStatusRef = useRef(wsStatus);
   const terminalSessionIdRef = useRef<string | null>(terminalState.session?.id ?? null);
+  const lastResizeSentRef = useRef<{
+    sessionId: string;
+    cols: number;
+    rows: number;
+  } | null>(null);
 
   sendRealtimeCommandRef.current = sendRealtimeCommand;
   wsStatusRef.current = wsStatus;
@@ -171,6 +175,20 @@ export function TerminalScreen() {
       if (!sessionId || wsStatusRef.current !== "connected") {
         return;
       }
+      const previous = lastResizeSentRef.current;
+      if (
+        previous &&
+        previous.sessionId === sessionId &&
+        previous.cols === terminal.cols &&
+        previous.rows === terminal.rows
+      ) {
+        return;
+      }
+      lastResizeSentRef.current = {
+        sessionId,
+        cols: terminal.cols,
+        rows: terminal.rows,
+      };
       sendRealtimeCommandRef.current({
         type: "terminal.resize",
         payload: {
@@ -180,23 +198,47 @@ export function TerminalScreen() {
         },
       });
     };
+    let resizeHandle: number | ReturnType<typeof setTimeout> | null = null;
+    const scheduleSyncSize = () => {
+      if (resizeHandle !== null) {
+        return;
+      }
+      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+        resizeHandle = window.requestAnimationFrame(() => {
+          resizeHandle = null;
+          syncSize();
+        });
+        return;
+      }
+      resizeHandle = setTimeout(() => {
+        resizeHandle = null;
+        syncSize();
+      }, 16);
+    };
 
     const resizeObserver = new ResizeObserver(() => {
-      syncSize();
+      scheduleSyncSize();
     });
     resizeObserver.observe(container);
 
     const viewport = window.visualViewport;
-    viewport?.addEventListener("resize", syncSize);
-    window.addEventListener("resize", syncSize);
+    viewport?.addEventListener("resize", scheduleSyncSize);
+    window.addEventListener("resize", scheduleSyncSize);
 
     xtermRef.current = terminal;
     fitAddonRef.current = fitAddon;
 
     return () => {
       resizeObserver.disconnect();
-      viewport?.removeEventListener("resize", syncSize);
-      window.removeEventListener("resize", syncSize);
+      viewport?.removeEventListener("resize", scheduleSyncSize);
+      window.removeEventListener("resize", scheduleSyncSize);
+      if (resizeHandle !== null) {
+        if (typeof resizeHandle === "number" && typeof window.cancelAnimationFrame === "function") {
+          window.cancelAnimationFrame(resizeHandle);
+        } else {
+          clearTimeout(resizeHandle as ReturnType<typeof setTimeout>);
+        }
+      }
       dataDisposable.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
@@ -244,6 +286,26 @@ export function TerminalScreen() {
     renderedTranscriptRef.current = nextTranscript;
     fitAddonRef.current?.fit();
   }, [terminalState.session?.id, terminalState.transcript]);
+
+  useEffect(() => {
+    const sessionId = terminalState.session?.id ?? null;
+    if (!sessionId || wsStatus !== "connected") {
+      return;
+    }
+    const terminal = xtermRef.current;
+    if (!terminal) {
+      return;
+    }
+    lastResizeSentRef.current = null;
+    sendRealtimeCommand({
+      type: "terminal.resize",
+      payload: {
+        sessionId,
+        cols: terminal.cols,
+        rows: terminal.rows,
+      },
+    });
+  }, [sendRealtimeCommand, terminalState.session?.id, wsStatus]);
 
   const connectionTone = wsStatus === "connected" ? "ready" : "";
   const session = terminalState.session;

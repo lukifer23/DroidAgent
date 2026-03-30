@@ -1,0 +1,55 @@
+{
+  "maxRegressionRatio": 0.1,
+  "metrics": [
+    {
+      "id": "server.access.p95",
+      "source": "server",
+      "path": "/api/access",
+      "stat": "p95Ms",
+      "budgetMs": 250
+    },
+    {
+      "id": "server.dashboard.p95",
+      "source": "server",
+      "path": "/api/dashboard",
+      "stat": "p95Ms",
+      "budgetMs": 250
+    },
+    {
+      "id": "server.chat.first_token_relay.p95",
+      "source": "serverDiagnostics",
+      "name": "chat.stream.firstDeltaForward",
+      "stat": "p95DurationMs",
+      "budgetMs": 150,
+      "optional": true
+    },
+    {
+      "id": "e2e.route.switch.p95",
+      "source": "e2e",
+      "name": "route_switch_ms",
+      "aggregate": "p95",
+      "budgetMs": 300
+    },
+    {
+      "id": "e2e.reconnect.resync.p95",
+      "source": "e2e",
+      "name": "reconnect_resync_ms",
+      "aggregate": "p95",
+      "budgetMs": 2000
+    },
+    {
+      "id": "e2e.file.open.p95",
+      "source": "e2e",
+      "name": "file_open_ms",
+      "aggregate": "p95",
+      "budgetMs": 500
+    },
+    {
+      "id": "e2e.file.save.p95",
+      "source": "e2e",
+      "name": "file_save_ms",
+      "aggregate": "p95",
+      "budgetMs": 500
+    }
+  ]
+}

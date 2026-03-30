@@ -26,6 +26,7 @@ const textEncoder = new TextEncoder();
 class TerminalStore {
   private readonly listeners = new Set<Listener>();
   private state: TerminalStoreState = emptyState;
+  private emitHandle: number | ReturnType<typeof setTimeout> | null = null;
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -42,6 +43,23 @@ class TerminalStore {
     for (const listener of this.listeners) {
       listener();
     }
+  }
+
+  private scheduleEmit(): void {
+    if (this.emitHandle !== null) {
+      return;
+    }
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      this.emitHandle = window.requestAnimationFrame(() => {
+        this.emitHandle = null;
+        this.emit();
+      });
+      return;
+    }
+    this.emitHandle = setTimeout(() => {
+      this.emitHandle = null;
+      this.emit();
+    }, 16);
   }
 
   replace(snapshot: TerminalSnapshot): void {
@@ -65,7 +83,7 @@ class TerminalStore {
       transcriptBytes: session.transcriptBytes,
       closeReason: null,
     };
-    this.emit();
+    this.scheduleEmit();
   }
 
   appendOutput(sessionId: string, data: string): void {
@@ -108,7 +126,7 @@ class TerminalStore {
       transcriptBytes: nextTranscriptBytes,
       truncated,
     };
-    this.emit();
+    this.scheduleEmit();
   }
 
   close(sessionId: string, reason: string | null): void {
@@ -125,7 +143,7 @@ class TerminalStore {
       },
       closeReason: reason,
     };
-    this.emit();
+    this.scheduleEmit();
   }
 }
 

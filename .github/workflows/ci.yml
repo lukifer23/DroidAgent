@@ -27,3 +27,12 @@ jobs:
 
       - name: Verify Full
         run: pnpm verify:full
+
+      - name: Perf Server
+        run: pnpm perf:server
+
+      - name: Perf E2E
+        run: pnpm perf:e2e
+
+      - name: Perf Budget Check
+        run: pnpm perf:check

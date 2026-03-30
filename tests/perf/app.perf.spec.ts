@@ -24,12 +24,56 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
     durationMs: Number((performance.now() - loadStart).toFixed(2))
   });
 
+  await page.getByRole("link", { name: "Files" }).click();
+  await expect(page.getByRole("button", { name: "Create Directory" })).toBeVisible();
+  await page.getByRole("link", { name: "Chat" }).click();
+  await expect(
+    page.getByPlaceholder(
+      "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
+    ),
+  ).toBeVisible();
   const routeStart = performance.now();
   await page.getByRole("link", { name: "Files" }).click();
   await expect(page.getByRole("button", { name: "Create Directory" })).toBeVisible();
   metrics.push({
     name: "route_switch_ms",
     durationMs: Number((performance.now() - routeStart).toFixed(2))
+  });
+
+  const fileOpenStart = performance.now();
+  await page.getByRole("button", { name: /notes\.txt/i }).click();
+  await expect(page.locator(".editor-textarea")).toBeVisible();
+  metrics.push({
+    name: "file_open_ms",
+    durationMs: Number((performance.now() - fileOpenStart).toFixed(2))
+  });
+
+  const fileSaveStart = performance.now();
+  await page.locator(".editor-textarea").fill(`perf-save-${Date.now()}`);
+  await page.getByRole("button", { name: /^Save$/ }).click();
+  await expect(page.getByText(/Saved|File saved/i).first()).toBeVisible();
+  metrics.push({
+    name: "file_save_ms",
+    durationMs: Number((performance.now() - fileSaveStart).toFixed(2))
+  });
+
+  await page.getByRole("link", { name: "Settings" }).click();
+  await expect(
+    page.getByRole("button", { name: "Prepare / Reindex Memory" }),
+  ).toBeVisible();
+  const memoryPrepareStart = performance.now();
+  const prepareRequest = page.waitForResponse((response) => {
+    return (
+      response.url().includes("/api/memory/prepare") &&
+      response.request().method() === "POST"
+    );
+  });
+  await page.getByRole("button", { name: "Prepare / Reindex Memory" }).click();
+  const prepareResponse = await prepareRequest;
+  expect(prepareResponse.ok()).toBeTruthy();
+  metrics.push({
+    name: "memory_prepare_ms",
+    durationMs: Number((performance.now() - memoryPrepareStart).toFixed(2))
   });
 
   await page.getByRole("link", { name: "Chat" }).click();

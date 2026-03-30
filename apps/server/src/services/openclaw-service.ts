@@ -64,6 +64,9 @@ import { performanceService } from "./performance-service.js";
 const GATEWAY_READY_RETRIES = 5;
 const GATEWAY_READY_DELAY_MS = 800;
 const CHAT_COMPLETIONS_PATH = "/v1/chat/completions";
+const OPENCLAW_STREAM_TIMEOUT_MS = 60_000;
+const OPENCLAW_GATEWAY_CALL_TIMEOUT_MS = 20_000;
+const RELAY_QUEUE_SOFT_LIMIT = 24;
 const DEFAULT_CONTEXT_WINDOW = 200000;
 const CHANNEL_STATUS_TTL_MS = 5_000;
 const MEMORY_STATUS_TTL_MS = 5_000;
@@ -1388,6 +1391,8 @@ function todayMemoryNoteTemplate(date: string): string {
 
 export class OpenClawService {
   private gatewayProcess: ChildProcess | null = null;
+  private gatewayLogStream: fs.WriteStream | null = null;
+  private gatewayLogQueue: Promise<void> = Promise.resolve();
   private gatewayToken: string | null = null;
   private activeRuns = new Map<
     string,
@@ -1407,6 +1412,49 @@ export class OpenClawService {
 
   invalidateMemoryStatusCache(): void {
     this.memoryStatusCache.invalidate();
+  }
+
+  private ensureGatewayLogStream(): fs.WriteStream {
+    if (this.gatewayLogStream) {
+      return this.gatewayLogStream;
+    }
+    this.gatewayLogStream = fs.createWriteStream(`${paths.logsDir}/openclaw.log`, {
+      flags: "a",
+      encoding: "utf8",
+    });
+    this.gatewayLogStream.on("error", () => {
+      // Ignore log stream errors; they should not crash the gateway.
+    });
+    return this.gatewayLogStream;
+  }
+
+  private queueGatewayLogWrite(chunk: string | Buffer): void {
+    const payload = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, "utf8");
+    this.gatewayLogQueue = this.gatewayLogQueue
+      .then(
+        () =>
+          new Promise<void>((resolve) => {
+            const stream = this.ensureGatewayLogStream();
+            stream.write(payload, () => resolve());
+          }),
+      )
+      .catch(() => {});
+  }
+
+  private closeGatewayLogStream(): void {
+    const stream = this.gatewayLogStream;
+    this.gatewayLogStream = null;
+    if (!stream) {
+      return;
+    }
+    this.gatewayLogQueue = this.gatewayLogQueue
+      .then(
+        () =>
+          new Promise<void>((resolve) => {
+            stream.end(() => resolve());
+          }),
+      )
+      .catch(() => {});
   }
 
   private async gatewayHealthProbe(): Promise<{ version?: string }> {
@@ -1611,6 +1659,7 @@ export class OpenClawService {
   private async execOpenClaw(
     args: string[],
     allowFailure = false,
+    timeoutMs?: number,
   ): Promise<string> {
     try {
       const result = await runCommand(
@@ -1618,6 +1667,7 @@ export class OpenClawService {
         this.profileArgs(args),
         {
           env: await this.openclawEnv(),
+          ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
         },
       );
       return result.stdout;
@@ -1639,21 +1689,23 @@ export class OpenClawService {
     }
 
     const token = await this.ensureGatewayToken();
-    for (const pattern of OPERATOR_EXEC_ALLOWLIST_PATTERNS) {
-      await this.execOpenClaw([
-        "approvals",
-        "allowlist",
-        "add",
-        pattern,
-        "--agent",
-        "main",
-        "--gateway",
-        "--url",
-        OPENCLAW_GATEWAY_URL,
-        "--token",
-        token,
-      ]);
-    }
+    await Promise.all(
+      OPERATOR_EXEC_ALLOWLIST_PATTERNS.map(async (pattern) => {
+        await this.execOpenClaw([
+          "approvals",
+          "allowlist",
+          "add",
+          pattern,
+          "--agent",
+          "main",
+          "--gateway",
+          "--url",
+          OPENCLAW_GATEWAY_URL,
+          "--token",
+          token,
+        ]);
+      }),
+    );
 
     await appStateService.setJsonSetting(
       "openclawExecAllowlistSeedVersion",
@@ -2265,7 +2317,57 @@ export class OpenClawService {
       );
     };
 
+    const timeoutController = new AbortController();
+    const timeoutHandle = setTimeout(() => {
+      timeoutController.abort(
+        new Error(
+          `OpenClaw stream exceeded ${OPENCLAW_STREAM_TIMEOUT_MS} ms without completing.`,
+        ),
+      );
+    }, OPENCLAW_STREAM_TIMEOUT_MS);
+    timeoutHandle.unref?.();
+
     try {
+      const streamSignal = AbortSignal.any([
+        controller.signal,
+        timeoutController.signal,
+      ]);
+      let relayQueue = Promise.resolve();
+      let relayQueueDepth = 0;
+      let relayFailure: Error | null = null;
+      const enqueueRelay = (
+        work: () => Promise<void> | void,
+      ): Promise<void> => {
+        relayQueueDepth += 1;
+        relayQueue = relayQueue
+          .then(async () => {
+            if (relayFailure) {
+              return;
+            }
+            try {
+              await work();
+            } catch (error) {
+              relayFailure =
+                error instanceof Error
+                  ? error
+                  : new Error("OpenClaw relay callback failed.");
+            } finally {
+              relayQueueDepth = Math.max(0, relayQueueDepth - 1);
+            }
+          })
+          .catch(() => {});
+
+        if (relayQueueDepth >= RELAY_QUEUE_SOFT_LIMIT) {
+          return relayQueue;
+        }
+        return Promise.resolve();
+      };
+      const throwIfRelayFailed = () => {
+        if (relayFailure) {
+          throw relayFailure;
+        }
+      };
+
       const response = await fetch(
         `${OPENCLAW_GATEWAY_HTTP_URL}${CHAT_COMPLETIONS_PATH}`,
         {
@@ -2281,7 +2383,7 @@ export class OpenClawService {
               },
             ],
           }),
-          signal: controller.signal,
+          signal: streamSignal,
         },
       );
 
@@ -2333,13 +2435,16 @@ export class OpenClawService {
               }
               seenToolNames.add(toolName);
               startToolWaitMetric(toolName);
-              await relay.onState?.({
+              await enqueueRelay(() =>
+                relay.onState?.({
                 stage: "tool_call",
                 label: `Using ${toolName}`,
                 detail: `OpenClaw called the ${toolName} tool.`,
                 toolName,
                 active: true,
-              });
+                }),
+              );
+              throwIfRelayFailed();
             }
 
             const delta = extractDeltaText(parsed);
@@ -2349,7 +2454,8 @@ export class OpenClawService {
               }
               if (!firstDeltaSeen) {
                 firstDeltaSeen = true;
-                await relay.onState?.({
+                await enqueueRelay(() =>
+                  relay.onState?.({
                   stage: "streaming",
                   label:
                     seenToolNames.size > 0
@@ -2360,7 +2466,9 @@ export class OpenClawService {
                       ? "The live harness is returning output."
                       : "The model started replying.",
                   active: true,
-                });
+                  }),
+                );
+                throwIfRelayFailed();
               }
 
               if (
@@ -2371,15 +2479,19 @@ export class OpenClawService {
                 const approvalId =
                   delta.match(/Approval required\s+\(id\s+([^)]+)\)/i)?.[1] ??
                   null;
-                await relay.onState?.({
+                await enqueueRelay(() =>
+                  relay.onState?.({
                   stage: "approval_required",
                   label: "Approval required",
                   detail: delta.trim(),
                   approvalId,
                   active: true,
-                });
+                  }),
+                );
+                throwIfRelayFailed();
               }
-              await relay.onDelta(delta);
+              await enqueueRelay(() => relay.onDelta(delta));
+              throwIfRelayFailed();
             }
           } catch (error) {
             if (error instanceof SyntaxError) {
@@ -2407,13 +2519,16 @@ export class OpenClawService {
             }
             seenToolNames.add(toolName);
             startToolWaitMetric(toolName);
-            await relay.onState?.({
+            await enqueueRelay(() =>
+              relay.onState?.({
               stage: "tool_call",
               label: `Using ${toolName}`,
               detail: `OpenClaw called the ${toolName} tool.`,
               toolName,
               active: true,
-            });
+              }),
+            );
+            throwIfRelayFailed();
           }
 
           const delta = extractDeltaText(parsed);
@@ -2423,14 +2538,18 @@ export class OpenClawService {
             }
             if (!firstDeltaSeen) {
               firstDeltaSeen = true;
-              await relay.onState?.({
+              await enqueueRelay(() =>
+                relay.onState?.({
                 stage: "streaming",
                 label: "Reply streaming",
                 detail: "The model started replying.",
                 active: true,
-              });
+                }),
+              );
+              throwIfRelayFailed();
             }
-            await relay.onDelta(delta);
+            await enqueueRelay(() => relay.onDelta(delta));
+            throwIfRelayFailed();
           }
         } catch (error) {
           if (error instanceof SyntaxError) {
@@ -2444,7 +2563,8 @@ export class OpenClawService {
       if (activeToolWaitMetric) {
         finishToolWaitMetric("ok", "done");
       }
-      await relay.onState?.({
+      await enqueueRelay(() =>
+        relay.onState?.({
         stage: seenToolNames.size > 0 ? "tool_result" : "completed",
         label:
           seenToolNames.size > 0
@@ -2455,7 +2575,10 @@ export class OpenClawService {
             ? "OpenClaw finished the tool-assisted reply."
             : "The live run completed successfully.",
         active: false,
-      });
+        }),
+      );
+      await relayQueue;
+      throwIfRelayFailed();
       await relay.onDone();
     } catch (error) {
       if ((error as { name?: string }).name === "AbortError") {
@@ -2486,6 +2609,7 @@ export class OpenClawService {
         error instanceof Error ? error.message : "OpenClaw stream failed.",
       );
     } finally {
+      clearTimeout(timeoutHandle);
       const active = this.activeRuns.get(sessionKey);
       if (active?.runId === runId) {
         this.activeRuns.delete(sessionKey);
@@ -2876,13 +3000,14 @@ export class OpenClawService {
     );
 
     child.stdout.on("data", (chunk) => {
-      fs.appendFileSync(`${paths.logsDir}/openclaw.log`, chunk);
+      this.queueGatewayLogWrite(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      fs.appendFileSync(`${paths.logsDir}/openclaw.log`, chunk);
+      this.queueGatewayLogWrite(chunk);
     });
     child.on("exit", () => {
       this.gatewayProcess = null;
+      this.closeGatewayLogStream();
     });
 
     this.gatewayProcess = child;
@@ -2922,6 +3047,7 @@ export class OpenClawService {
       this.gatewayProcess.kill("SIGTERM");
       this.gatewayProcess = null;
     }
+    this.closeGatewayLogStream();
     await this.cleanupManagedOpenClawProcesses({
       includeTrackedGateway: true,
     });
@@ -2949,7 +3075,11 @@ export class OpenClawService {
       args.splice(3, 0, "--expect-final");
     }
 
-    const output = await this.execOpenClaw(args);
+    const output = await this.execOpenClaw(
+      args,
+      false,
+      OPENCLAW_GATEWAY_CALL_TIMEOUT_MS,
+    );
     const parsed = JSON.parse(output) as Record<string, unknown>;
     if ("error" in parsed && parsed.error) {
       const errorDetails = parsed.error as { message?: unknown };
