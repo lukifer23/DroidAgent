@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, type ComponentType } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   Navigate,
   RouterProvider,
@@ -10,9 +11,11 @@ import {
 import { useAuthQuery, useDashboardQuery } from "./app-data";
 import { DroidAgentAppProvider } from "./app-context";
 import { AppLayout } from "./app-layout";
+import { api } from "./lib/api";
 import { isOperatorReady } from "./lib/operator-readiness";
-import { ChatScreen } from "./screens/chat-screen";
+import type { WorkspaceEntry } from "@droidagent/shared";
 
+const loadChatScreen = () => import("./screens/chat-screen");
 const loadSetupScreen = () => import("./screens/setup-screen");
 const loadSettingsScreen = () => import("./screens/settings-screen");
 const loadJobsScreen = () => import("./screens/jobs-screen");
@@ -21,6 +24,9 @@ const loadChannelsScreen = () => import("./screens/channels-screen");
 const loadTerminalScreen = () => import("./screens/terminal-screen");
 const loadFilesScreen = () => import("./screens/files-screen");
 
+const ChatScreen = lazy(async () => ({
+  default: (await loadChatScreen()).ChatScreen,
+}));
 const SetupScreen = lazy(async () => ({
   default: (await loadSetupScreen()).SetupScreen,
 }));
@@ -44,13 +50,8 @@ const FilesScreen = lazy(async () => ({
 }));
 const preloadScreens = () =>
   Promise.all([
-    loadSetupScreen(),
-    loadSettingsScreen(),
-    loadJobsScreen(),
-    loadModelsScreen(),
-    loadChannelsScreen(),
-    loadTerminalScreen(),
     loadFilesScreen(),
+    loadSettingsScreen(),
   ]);
 
 function withLazyScreen(Component: ComponentType) {
@@ -72,7 +73,14 @@ function IndexRedirect() {
 }
 
 function IdleRoutePreloader() {
+  const authQuery = useAuthQuery();
+  const queryClient = useQueryClient();
+
   useEffect(() => {
+    if (!authQuery.data?.user) {
+      return;
+    }
+
     let didPreload = false;
     let idleHandle: number | null = null;
     let frameHandle: number | null = null;
@@ -82,7 +90,17 @@ function IdleRoutePreloader() {
         return;
       }
       didPreload = true;
-      void preloadScreens();
+      void Promise.all([
+        preloadScreens(),
+        queryClient.prefetchQuery({
+          queryKey: ["files", "."],
+          queryFn: () =>
+            api<WorkspaceEntry[]>(
+              `/api/files?path=${encodeURIComponent(".")}`,
+            ),
+          staleTime: 15_000,
+        }),
+      ]);
     };
 
     frameHandle = window.requestAnimationFrame(() => {
@@ -105,7 +123,7 @@ function IdleRoutePreloader() {
         window.cancelAnimationFrame(frameHandle);
       }
     };
-  }, []);
+  }, [authQuery.data?.user, queryClient]);
 
   return null;
 }

@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Bot,
   FolderTree,
@@ -13,10 +21,14 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { useAccessQuery, useAuthQuery, useDashboardQuery } from "./app-data";
 import { useDroidAgentApp } from "./app-context";
+import { useViewportMeasure } from "./hooks/use-viewport-measure";
 import { formatTokenBudget } from "./lib/formatters";
 import { isOperatorReady } from "./lib/operator-readiness";
-import { AuthScreen } from "./screens/auth-screen";
 import { postJson } from "./lib/api";
+
+const AuthScreen = lazy(async () => ({
+  default: (await import("./screens/auth-screen")).AuthScreen,
+}));
 
 const navItems = [
   { to: "/setup", label: "Setup", icon: ShieldCheck, readyOnly: false },
@@ -96,7 +108,7 @@ export function AppLayout() {
     setHostDrawerOpen(false);
   }, [location.pathname]);
 
-  useLayoutEffect(() => {
+  const updateViewportChrome = useCallback(() => {
     const shell = shellRef.current;
     const topbar = topbarRef.current;
     const nav = navRef.current;
@@ -104,56 +116,33 @@ export function AppLayout() {
       return;
     }
 
-    let frame = 0;
-    const updateViewportChrome = () => {
-      const topbarHeight = Math.round(topbar.getBoundingClientRect().height);
-      const navHeight = Math.round(nav.getBoundingClientRect().height);
-      const viewportHeight = Math.round(
-        window.visualViewport?.height ?? window.innerHeight,
-      );
-      shell.style.setProperty("--app-topbar-h", `${topbarHeight}px`);
-      shell.style.setProperty("--app-bottom-nav-h", `${navHeight}px`);
-      shell.style.setProperty("--app-viewport-h", `${viewportHeight}px`);
-    };
-    const scheduleUpdate = () => {
-      if (frame) {
-        return;
-      }
-      frame = window.requestAnimationFrame(() => {
-        frame = 0;
-        updateViewportChrome();
-      });
-    };
-
-    const observer = new ResizeObserver(() => {
-      scheduleUpdate();
-    });
-    observer.observe(topbar);
-    observer.observe(nav);
-
-    const viewport = window.visualViewport;
-    viewport?.addEventListener("resize", scheduleUpdate);
-    viewport?.addEventListener("scroll", scheduleUpdate);
-    window.addEventListener("resize", scheduleUpdate);
-    updateViewportChrome();
-
-    return () => {
-      if (frame) {
-        window.cancelAnimationFrame(frame);
-      }
-      observer.disconnect();
-      viewport?.removeEventListener("resize", scheduleUpdate);
-      viewport?.removeEventListener("scroll", scheduleUpdate);
-      window.removeEventListener("resize", scheduleUpdate);
-    };
+    const topbarHeight = Math.round(topbar.getBoundingClientRect().height);
+    const navHeight = Math.round(nav.getBoundingClientRect().height);
+    const viewportHeight = Math.round(
+      window.visualViewport?.height ?? window.innerHeight,
+    );
+    shell.style.setProperty("--app-topbar-h", `${topbarHeight}px`);
+    shell.style.setProperty("--app-bottom-nav-h", `${navHeight}px`);
+    shell.style.setProperty("--app-viewport-h", `${viewportHeight}px`);
   }, []);
+  const viewportRefs = useMemo(() => [topbarRef, navRef], []);
+  useViewportMeasure({
+    enabled: Boolean(shellRef.current),
+    refs: viewportRefs,
+    onMeasure: updateViewportChrome,
+    includeViewportScroll: true,
+  });
 
   if (authQuery.isLoading) {
     return <main className="app-shell loading">Loading DroidAgent...</main>;
   }
 
   if (!authQuery.data?.user) {
-    return <AuthScreen />;
+    return (
+      <Suspense fallback={<main className="app-shell loading">Loading DroidAgent...</main>}>
+        <AuthScreen />
+      </Suspense>
+    );
   }
 
   const topbarMeta = [

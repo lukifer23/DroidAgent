@@ -86,6 +86,29 @@ function hostPressureTone(
   return "good";
 }
 
+function formatDurationMs(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "unknown";
+  }
+
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(1)}s`;
+  }
+
+  return `${Math.round(value)} ms`;
+}
+
+function formatTimeLabel(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  return new Date(value).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function upsertDashboardMemoryDraft(
   dashboard: DashboardState,
   nextDraft: MemoryDraft,
@@ -118,6 +141,7 @@ export function SettingsScreen() {
     runAction,
     setThemePreference,
     themePreference,
+    wsStatus,
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
@@ -166,6 +190,50 @@ export function SettingsScreen() {
   const remoteReady = Boolean(access?.canonicalOrigin?.origin);
   const canGeneratePhoneLink = Boolean(access?.canonicalOrigin);
   const memoryReady = Boolean(memory?.semanticReady);
+  const memoryPrepareState = memory?.prepareState ?? "idle";
+  const memoryPrepareActive =
+    memoryPrepareState === "queued" || memoryPrepareState === "running";
+  const memoryPrepareRowClass =
+    memoryPrepareState === "failed"
+      ? " critical"
+      : memoryPrepareActive
+        ? " warn"
+        : memoryReady
+          ? " ready"
+          : "";
+  const memoryPrepareChipClass =
+    memoryPrepareState === "completed" || memoryReady ? " ready" : "";
+  const memoryPrepareChipLabel =
+    memoryPrepareState === "queued"
+      ? "Queued"
+      : memoryPrepareState === "running"
+        ? "Indexing"
+        : memoryPrepareState === "failed"
+          ? "Failed"
+          : memoryReady
+            ? "Live"
+            : "Needs prep";
+  const memoryPrepareActivityLabel =
+    memory?.prepareProgressLabel ??
+    (memoryPrepareState === "completed"
+      ? "Semantic memory is ready."
+      : memoryPrepareState === "failed"
+        ? "The last semantic memory prepare failed."
+        : memory?.embeddingModel
+          ? `${memory.embeddingProvider ?? "unknown"}/${memory.embeddingModel} • ${memory.indexedFiles} files • ${memory.indexedChunks} chunks`
+          : "No local embedding model is configured yet.");
+  const memoryPrepareTimingBits = [
+    memoryPrepareState === "running" || memoryPrepareState === "queued"
+      ? formatTimeLabel(memory?.prepareStartedAt)
+        ? `started ${formatTimeLabel(memory?.prepareStartedAt)}`
+        : null
+      : formatTimeLabel(memory?.prepareFinishedAt)
+        ? `finished ${formatTimeLabel(memory?.prepareFinishedAt)}`
+        : null,
+    typeof memory?.lastPrepareDurationMs === "number"
+      ? `last run ${formatDurationMs(memory.lastPrepareDurationMs)}`
+      : null,
+  ].filter(Boolean);
   const normalizedActiveModel =
     harness?.activeModel?.replace(/^ollama\//, "") ?? null;
   const normalizedImageModel =
@@ -296,7 +364,9 @@ export function SettingsScreen() {
       scope,
       action,
     });
-    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    if (wsStatus !== "connected") {
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    }
   }
 
   async function handleApplyDraft(draft: MemoryDraft) {
@@ -318,7 +388,9 @@ export function SettingsScreen() {
       }
       throw error;
     }
-    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    if (wsStatus !== "connected") {
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    }
   }
 
   async function handleUpdateDraft(draft: MemoryDraft) {
@@ -354,7 +426,9 @@ export function SettingsScreen() {
       delete next[draft.id];
       return next;
     });
-    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    if (wsStatus !== "connected") {
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    }
   }
 
   async function handleDismissDraft(draft: MemoryDraft) {
@@ -847,18 +921,17 @@ export function SettingsScreen() {
             </p>
           </div>
           <div className="status-list">
-            <article className={`health-row${memoryReady ? " ready" : ""}`}>
+            <article className={`health-row${memoryPrepareRowClass}`}>
               <div className="health-row-top">
                 <strong>Semantic memory</strong>
-                <span className={`status-chip${memoryReady ? " ready" : ""}`}>
-                  {memoryReady ? "Live" : "Needs prep"}
+                <span className={`status-chip${memoryPrepareChipClass}`}>
+                  {memoryPrepareChipLabel}
                 </span>
               </div>
-              <small>
-                {memory?.embeddingModel
-                  ? `${memory.embeddingProvider ?? "unknown"}/${memory.embeddingModel} • ${memory.indexedFiles} files • ${memory.indexedChunks} chunks`
-                  : "No local embedding model is configured yet."}
-              </small>
+              <small>{memoryPrepareActivityLabel}</small>
+              {memoryPrepareTimingBits.length > 0 ? (
+                <small>{memoryPrepareTimingBits.join(" • ")}</small>
+              ) : null}
             </article>
             <article className="health-row ready">
               <div className="health-row-top">
@@ -908,13 +981,20 @@ export function SettingsScreen() {
           <div className="button-row">
             <button
               className="secondary"
+              disabled={memoryPrepareActive}
               onClick={() =>
                 void runAction(async () => {
                   await handlePrepareMemory();
-                }, "Workspace memory prepared.")
+                }, "Workspace memory refresh queued.")
               }
             >
-              Prepare / Reindex Memory
+              {memoryPrepareState === "queued"
+                ? "Memory Prepare Queued"
+                : memoryPrepareState === "running"
+                  ? "Preparing Memory..."
+                  : memoryReady
+                    ? "Reindex Memory"
+                    : "Prepare / Reindex Memory"}
             </button>
             <Link className="button-link secondary" to="/files">
               Open Memory Files
@@ -927,6 +1007,9 @@ export function SettingsScreen() {
             <small className="error-copy">
               {memory.embeddingProbeError}
             </small>
+          ) : null}
+          {memory?.prepareError ? (
+            <small className="error-copy">{memory.prepareError}</small>
           ) : null}
         </article>
 

@@ -1,16 +1,24 @@
 import { WebSocketServer, type WebSocket } from "ws";
 
-import { ClientCommandSchema, ServerEventSchema } from "@droidagent/shared";
+import {
+  ClientCommandSchema,
+  ServerEventSchema,
+  type ServerEvent,
+} from "@droidagent/shared";
 
 import { accessService } from "./services/access-service.js";
 import { appStateService } from "./services/app-state-service.js";
-import { dashboardService } from "./services/dashboard-service.js";
+import {
+  dashboardService,
+  type DashboardSliceKey,
+} from "./services/dashboard-service.js";
 import { harnessService } from "./services/harness-service.js";
 import { jobService } from "./services/job-service.js";
 import { keychainService } from "./services/keychain-service.js";
 import { launchAgentService } from "./services/launch-agent-service.js";
 import { maintenanceService } from "./services/maintenance-service.js";
 import { memoryDraftService } from "./services/memory-draft-service.js";
+import { memoryPrepareService } from "./services/memory-prepare-service.js";
 import { openclawService } from "./services/openclaw-service.js";
 import { performanceService } from "./services/performance-service.js";
 import { runtimeService } from "./services/runtime-service.js";
@@ -27,30 +35,65 @@ export class WebsocketHub {
   private sockets = new Set<WebSocket>();
   private hostPressureInterval: ReturnType<typeof setInterval> | null = null;
   private pendingChatDeltas = new Map<string, { sessionId: string; runId: string; delta: string }>();
+  private pendingJobOutputs = new Map<string, { jobId: string; stream: "stdout" | "stderr"; chunk: string }>();
   private pendingTerminalOutputs = new Map<string, { sessionId: string; data: string }>();
   private pendingFlushHandle: ReturnType<typeof setImmediate> | null = null;
+
+  private invalidateDashboard(
+    slices: DashboardSliceKey[] = [],
+    options: { startup?: boolean } = {},
+  ): void {
+    dashboardService.invalidate(...slices);
+    if (options.startup) {
+      startupService.invalidate();
+    }
+  }
+
+  private broadcastEvent(event: ServerEvent): void {
+    this.broadcast(ServerEventSchema.parse(event));
+  }
+
+  private async publishEvents(options: {
+    slices?: DashboardSliceKey[];
+    startup?: boolean;
+    events: ServerEvent[] | Promise<ServerEvent[]>;
+  }): Promise<void> {
+    this.invalidateDashboard(
+      options.slices ?? [],
+      options.startup === undefined ? {} : { startup: options.startup },
+    );
+    const events = await options.events;
+    for (const event of events) {
+      this.broadcastEvent(event);
+    }
+  }
 
   private flushPendingRealtimeEvents(): void {
     this.pendingFlushHandle = null;
     if (this.pendingChatDeltas.size > 0) {
       for (const pending of this.pendingChatDeltas.values()) {
-        this.broadcast(
-          ServerEventSchema.parse({
-            type: "chat.stream.delta",
-            payload: pending,
-          }),
-        );
+        this.broadcastEvent({
+          type: "chat.stream.delta",
+          payload: pending,
+        });
       }
       this.pendingChatDeltas.clear();
     }
+    if (this.pendingJobOutputs.size > 0) {
+      for (const pending of this.pendingJobOutputs.values()) {
+        this.broadcastEvent({
+          type: "job.output",
+          payload: pending,
+        });
+      }
+      this.pendingJobOutputs.clear();
+    }
     if (this.pendingTerminalOutputs.size > 0) {
       for (const pending of this.pendingTerminalOutputs.values()) {
-        this.broadcast(
-          ServerEventSchema.parse({
-            type: "terminal.output",
-            payload: pending,
-          }),
-        );
+        this.broadcastEvent({
+          type: "terminal.output",
+          payload: pending,
+        });
       }
       this.pendingTerminalOutputs.clear();
     }
@@ -95,22 +138,22 @@ export class WebsocketHub {
     });
 
     jobService.on("output", (event) => {
-      this.broadcast(
-        ServerEventSchema.parse({
-          type: "job.output",
-          payload: event
-        })
-      );
+      const key = `${event.jobId}:${event.stream}`;
+      const existing = this.pendingJobOutputs.get(key);
+      this.pendingJobOutputs.set(key, {
+        jobId: event.jobId,
+        stream: event.stream,
+        chunk: `${existing?.chunk ?? ""}${event.chunk}`,
+      });
+      this.schedulePendingFlush();
     });
 
     jobService.on("updated", (job) => {
-      dashboardService.invalidate();
-      this.broadcast(
-        ServerEventSchema.parse({
-          type: "job.updated",
-          payload: job
-        })
-      );
+      this.invalidateDashboard(["jobs"]);
+      this.broadcastEvent({
+        type: "job.updated",
+        payload: job,
+      });
     });
 
     terminalService.on("updated", (session) => {
@@ -133,236 +176,257 @@ export class WebsocketHub {
 
     terminalService.on("closed", (event) => {
       this.flushPendingSession(event.sessionId);
-      this.broadcast(
-        ServerEventSchema.parse({
-          type: "terminal.closed",
-          payload: event,
-        }),
-      );
+      this.broadcastEvent({
+        type: "terminal.closed",
+        payload: event,
+      });
+    });
+
+    memoryPrepareService.subscribe(() => {
+      void this.publishMemoryUpdated();
     });
   }
 
   async refreshAll(): Promise<void> {
-    dashboardService.invalidate();
-    startupService.invalidate();
-    const state = await dashboardService.getDashboardState();
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "dashboard.state",
-        payload: state
-      })
-    );
+    await this.publishEvents({
+      slices: [],
+      startup: true,
+      events: (async () => [
+        {
+          type: "dashboard.state",
+          payload: await dashboardService.getDashboardState(),
+        },
+      ])(),
+    });
   }
 
   async publishSetupUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    startupService.invalidate();
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "setup.updated",
-        payload: await appStateService.getSetupState()
-      })
-    );
+    await this.publishEvents({
+      slices: ["setup"],
+      startup: true,
+      events: [
+        {
+          type: "setup.updated",
+          payload: await appStateService.getSetupState(),
+        },
+      ],
+    });
   }
 
   async publishAccessUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    startupService.invalidate();
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "access.updated",
-        payload: await accessService.getBootstrapState()
-      })
-    );
+    await this.publishEvents({
+      slices: ["access"],
+      startup: true,
+      events: [
+        {
+          type: "access.updated",
+          payload: await accessService.getBootstrapState(),
+        },
+      ],
+    });
   }
 
   async publishRuntimeUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    startupService.invalidate();
-    const [runtimes, harness] = await Promise.all([
-      runtimeService.getRuntimeStatuses(),
-      harnessService.harnessStatus(),
-    ]);
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "runtime.updated",
-        payload: runtimes
-      })
-    );
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "harness.updated",
-        payload: harness,
-      })
-    );
+    await this.publishEvents({
+      slices: ["runtimes", "harness"],
+      startup: true,
+      events: (async () => {
+        const [runtimes, harness] = await Promise.all([
+          runtimeService.getRuntimeStatuses(),
+          harnessService.harnessStatus(),
+        ]);
+        return [
+          {
+            type: "runtime.updated",
+            payload: runtimes,
+          },
+          {
+            type: "harness.updated",
+            payload: harness,
+          },
+        ];
+      })(),
+    });
   }
 
   async publishProvidersUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    startupService.invalidate();
-    const [providers, cloudProviders, harness] = await Promise.all([
-      runtimeService.listProviderProfiles(),
-      keychainService.listProviderSummaries(),
-      harnessService.harnessStatus(),
-    ]);
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "providers.updated",
-        payload: {
-          providers,
-          cloudProviders
-        }
-      })
-    );
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "harness.updated",
-        payload: harness,
-      })
-    );
+    await this.publishEvents({
+      slices: ["providers", "harness"],
+      startup: true,
+      events: (async () => {
+        const [providers, cloudProviders, harness] = await Promise.all([
+          runtimeService.listProviderProfiles(),
+          keychainService.listProviderSummaries(),
+          harnessService.harnessStatus(),
+        ]);
+        return [
+          {
+            type: "providers.updated",
+            payload: {
+              providers,
+              cloudProviders,
+            },
+          },
+          {
+            type: "harness.updated",
+            payload: harness,
+          },
+        ];
+      })(),
+    });
   }
 
   async publishChannelUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    startupService.invalidate();
-    const [channels, harness] = await Promise.all([
-      harnessService.listChannels(),
-      harnessService.harnessStatus(),
-    ]);
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "channel.updated",
-        payload: channels
-      })
-    );
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "harness.updated",
-        payload: harness,
-      })
-    );
+    await this.publishEvents({
+      slices: ["channels", "harness"],
+      startup: true,
+      events: (async () => {
+        const [channels, harness] = await Promise.all([
+          harnessService.listChannels(),
+          harnessService.harnessStatus(),
+        ]);
+        return [
+          {
+            type: "channel.updated",
+            payload: channels,
+          },
+          {
+            type: "harness.updated",
+            payload: harness,
+          },
+        ];
+      })(),
+    });
   }
 
   async publishLaunchAgentUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    startupService.invalidate();
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "launchAgent.updated",
-        payload: await launchAgentService.status()
-      })
-    );
+    await this.publishEvents({
+      slices: ["launchAgent"],
+      startup: true,
+      events: [
+        {
+          type: "launchAgent.updated",
+          payload: await launchAgentService.status(),
+        },
+      ],
+    });
   }
 
   async publishContextUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    startupService.invalidate();
-    const [context, harness] = await Promise.all([
-      openclawService.contextManagementStatus(),
-      harnessService.harnessStatus(),
-    ]);
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "context.updated",
-        payload: context
-      })
-    );
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "harness.updated",
-        payload: harness,
-      })
-    );
+    await this.publishEvents({
+      slices: ["contextManagement", "harness"],
+      startup: true,
+      events: (async () => {
+        const [context, harness] = await Promise.all([
+          openclawService.contextManagementStatus(),
+          harnessService.harnessStatus(),
+        ]);
+        return [
+          {
+            type: "context.updated",
+            payload: context,
+          },
+          {
+            type: "harness.updated",
+            payload: harness,
+          },
+        ];
+      })(),
+    });
   }
 
   async publishMemoryUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    startupService.invalidate();
-    const [memory, harness] = await Promise.all([
-      openclawService.memoryStatus(),
-      harnessService.harnessStatus(),
-    ]);
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "memory.updated",
-        payload: memory
-      })
-    );
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "harness.updated",
-        payload: harness,
-      })
-    );
+    await this.publishEvents({
+      slices: ["memory", "harness"],
+      startup: true,
+      events: (async () => {
+        const [memory, harness] = await Promise.all([
+          openclawService.memoryStatus(),
+          harnessService.harnessStatus(),
+        ]);
+        return [
+          {
+            type: "memory.updated",
+            payload: memory,
+          },
+          {
+            type: "harness.updated",
+            payload: harness,
+          },
+        ];
+      })(),
+    });
   }
 
   async publishHostPressureUpdated(force = false): Promise<void> {
-    dashboardService.invalidate();
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "hostPressure.updated",
-        payload: await hostPressureService.getStatus(force),
-      }),
-    );
+    this.invalidateDashboard(["hostPressure"]);
+    this.broadcastEvent({
+      type: "hostPressure.updated",
+      payload: await hostPressureService.getStatus(force),
+    });
   }
 
   async publishMemoryDraftsUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "memoryDrafts.updated",
-        payload: await memoryDraftService.listDrafts(),
-      }),
-    );
+    await this.publishEvents({
+      slices: ["memoryDrafts"],
+      events: [
+        {
+          type: "memoryDrafts.updated",
+          payload: await memoryDraftService.listDrafts(),
+        },
+      ],
+    });
   }
 
   async publishMaintenanceUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "maintenance.updated",
-        payload: await maintenanceService.getStatus(),
-      }),
-    );
+    await this.publishEvents({
+      slices: ["maintenance"],
+      events: [
+        {
+          type: "maintenance.updated",
+          payload: await maintenanceService.getStatus(),
+        },
+      ],
+    });
   }
 
   async publishPerformanceUpdated(): Promise<void> {
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "performance.updated",
-        payload: performanceService.serverSnapshot()
-      })
-    );
+    this.broadcastEvent({
+      type: "performance.updated",
+      payload: performanceService.serverSnapshot(),
+    });
   }
 
   async publishSessionsUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "sessions.updated",
-        payload: await sessionLifecycleService.listActiveSessions()
-      })
-    );
+    await this.publishEvents({
+      slices: ["sessions"],
+      events: [
+        {
+          type: "sessions.updated",
+          payload: await sessionLifecycleService.listActiveSessions(),
+        },
+      ],
+    });
   }
 
   publishApprovalUpdated(approval: Awaited<ReturnType<typeof harnessService.listApprovals>>[number]): void {
-    dashboardService.invalidate();
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "approval.updated",
-        payload: approval
-      })
-    );
+    this.invalidateDashboard(["approvals"]);
+    this.broadcastEvent({
+      type: "approval.updated",
+      payload: approval,
+    });
   }
 
   async publishApprovalsUpdated(): Promise<void> {
-    dashboardService.invalidate();
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "approvals.updated",
-        payload: await harnessService.listApprovals()
-      })
-    );
+    await this.publishEvents({
+      slices: ["approvals"],
+      events: [
+        {
+          type: "approvals.updated",
+          payload: await harnessService.listApprovals(),
+        },
+      ],
+    });
   }
 
   publishChatDelta(sessionId: string, runId: string, delta: string): void {

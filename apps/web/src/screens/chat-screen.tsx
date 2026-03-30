@@ -23,8 +23,6 @@ import type {
   PerformanceSnapshot,
   SessionSummary,
 } from "@droidagent/shared";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 
 import { useAuthQuery, useDashboardQuery, usePerformanceQuery } from "../app-data";
 import {
@@ -54,6 +52,11 @@ interface ExpandedImageState {
   alt: string;
   label?: string;
 }
+
+type MarkdownRendererModule = {
+  ReactMarkdown: typeof import("react-markdown").default;
+  remarkGfm: typeof import("remark-gfm").default;
+};
 
 function roleLabel(role: ChatMessage["role"]): string {
   if (role === "tool") {
@@ -129,6 +132,33 @@ function formatHostRatio(value: number | null | undefined): string {
     return "unknown";
   }
   return `${Math.round(value * 100)}%`;
+}
+
+function looksLikeRichMarkdown(text: string): boolean {
+  return (
+    text.includes("\n") ||
+    /[`*_#[\]-]/.test(text) ||
+    /\[[^\]]+\]\([^)]+\)/.test(text) ||
+    /https?:\/\//.test(text)
+  );
+}
+
+function PlainTextMessage({ text }: { text: string }) {
+  const blocks = text.split(/\n{2,}/).filter(Boolean);
+  return (
+    <>
+      {blocks.map((block, index) => (
+        <p key={`${block.slice(0, 24)}-${index}`}>
+          {block.split("\n").map((line, lineIndex) => (
+            <span key={`${lineIndex}-${line.slice(0, 24)}`}>
+              {lineIndex > 0 ? <br /> : null}
+              {line}
+            </span>
+          ))}
+        </p>
+      ))}
+    </>
+  );
 }
 
 interface RunBreakdownItem {
@@ -609,6 +639,39 @@ function ChatMarkdown({
   commandActionsEnabled?: boolean;
   commandActionDisabledReason?: string | null | undefined;
 }) {
+  const [renderer, setRenderer] = useState<MarkdownRendererModule | null>(null);
+
+  useEffect(() => {
+    if (!looksLikeRichMarkdown(text)) {
+      return;
+    }
+
+    let active = true;
+    void Promise.all([import("react-markdown"), import("remark-gfm")]).then(
+      ([reactMarkdownModule, remarkGfmModule]) => {
+        if (!active) {
+          return;
+        }
+        setRenderer({
+          ReactMarkdown: reactMarkdownModule.default,
+          remarkGfm: remarkGfmModule.default,
+        });
+      },
+    );
+    return () => {
+      active = false;
+    };
+  }, [text]);
+
+  if (!looksLikeRichMarkdown(text)) {
+    return <PlainTextMessage text={text} />;
+  }
+
+  if (!renderer) {
+    return <PlainTextMessage text={text} />;
+  }
+
+  const { ReactMarkdown, remarkGfm } = renderer;
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -1137,9 +1200,7 @@ export function ChatScreen() {
   );
   const showStreamingCard = Boolean(
     streaming &&
-      !isTerminalChatFeedback(liveChatFeedback) &&
-      activeRun?.stage !== "completed" &&
-      activeRun?.stage !== "failed",
+      !isTerminalChatFeedback(liveChatFeedback),
   );
   const showPendingAssistantCard = Boolean(
     !showStreamingCard &&
@@ -1486,18 +1547,20 @@ export function ChatScreen() {
     setSelectedSessionId(freshSession.id);
     setChatInput("");
     setPendingAttachments([]);
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-      queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
-      queryClient.prefetchQuery({
-        queryKey: ["sessions", freshSession.id, "messages"],
-        queryFn: () =>
-          api<ChatMessage[]>(
-            `/api/sessions/${encodeURIComponent(freshSession.id)}/messages`,
-          ),
-        staleTime: 15_000,
-      }),
-    ]);
+    await queryClient.prefetchQuery({
+      queryKey: ["sessions", freshSession.id, "messages"],
+      queryFn: () =>
+        api<ChatMessage[]>(
+          `/api/sessions/${encodeURIComponent(freshSession.id)}/messages`,
+        ),
+      staleTime: 15_000,
+    });
+    if (wsStatus !== "connected") {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
+      ]);
+    }
   }
 
   async function handleCloseCurrentSession() {
@@ -1548,18 +1611,20 @@ export function ChatScreen() {
       queryKey: ["sessions", closingSessionId, "messages"],
       exact: true,
     });
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-      queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
-      queryClient.prefetchQuery({
-        queryKey: ["sessions", replacementSession.id, "messages"],
-        queryFn: () =>
-          api<ChatMessage[]>(
-            `/api/sessions/${encodeURIComponent(replacementSession.id)}/messages`,
-          ),
-        staleTime: 15_000,
-      }),
-    ]);
+    await queryClient.prefetchQuery({
+      queryKey: ["sessions", replacementSession.id, "messages"],
+      queryFn: () =>
+        api<ChatMessage[]>(
+          `/api/sessions/${encodeURIComponent(replacementSession.id)}/messages`,
+        ),
+      staleTime: 15_000,
+    });
+    if (wsStatus !== "connected") {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
+      ]);
+    }
   }
 
   async function handleRestoreSession(sessionId: string) {
@@ -1575,18 +1640,20 @@ export function ChatScreen() {
       currentSessions.filter((session) => session.id !== restored.id),
     );
     setSelectedSessionId(restored.id);
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-      queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
-      queryClient.prefetchQuery({
-        queryKey: ["sessions", restored.id, "messages"],
-        queryFn: () =>
-          api<ChatMessage[]>(
-            `/api/sessions/${encodeURIComponent(restored.id)}/messages`,
-          ),
-        staleTime: 15_000,
-      }),
-    ]);
+    await queryClient.prefetchQuery({
+      queryKey: ["sessions", restored.id, "messages"],
+      queryFn: () =>
+        api<ChatMessage[]>(
+          `/api/sessions/${encodeURIComponent(restored.id)}/messages`,
+        ),
+      staleTime: 15_000,
+    });
+    if (wsStatus !== "connected") {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+        queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
+      ]);
+    }
   }
 
   async function sendChatMessage(params: {
@@ -1658,13 +1725,15 @@ export function ChatScreen() {
             attachments: nextAttachments,
           },
         );
+        if (wsStatus !== "connected") {
+          await Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+            queryClient.invalidateQueries({
+              queryKey: ["sessions", selectedSessionKey, "messages"],
+            }),
+          ]);
+        }
       }
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-        queryClient.invalidateQueries({
-          queryKey: ["sessions", selectedSessionKey, "messages"],
-          }),
-      ]);
     } catch (error) {
       trackChatFailure(
         selectedSessionKey,

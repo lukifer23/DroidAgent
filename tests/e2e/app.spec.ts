@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { gotoSignedIn } from "./support";
 
@@ -9,6 +9,24 @@ async function expectNoHorizontalOverflow(page: Page) {
     return document.documentElement.scrollWidth > document.documentElement.clientWidth;
   });
   expect(hasOverflow).toBe(false);
+}
+
+async function clickWithDetachRetry(locator: Locator): Promise<void> {
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      await locator.click();
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof Error) || !/detached from the DOM/i.test(error.message)) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 test("shows the passkey auth screen before sign-in", async ({
@@ -163,7 +181,12 @@ test("captures a chat message as a memory draft, edits it, and applies it", asyn
   });
   await expect(userMessage).toBeVisible();
   await userMessage.locator(".message-utility-tray summary").click();
-  await userMessage.getByRole("button", { name: "Memory" }).click();
+  await clickWithDetachRetry(
+    page
+      .locator(".message-card.user")
+      .filter({ hasText: prompt })
+      .getByRole("button", { name: "Memory" }),
+  );
 
   await page.getByRole("link", { name: "Settings" }).click();
   const draftCard = page.locator(".panel-card.compact").filter({
@@ -228,7 +251,12 @@ test("rejects stale memory draft mutations with a conflict response", async ({
   });
   await expect(userMessage).toBeVisible();
   await userMessage.locator(".message-utility-tray summary").click();
-  await userMessage.getByRole("button", { name: "Memory" }).click();
+  await clickWithDetachRetry(
+    page
+      .locator(".message-card.user")
+      .filter({ hasText: prompt })
+      .getByRole("button", { name: "Memory" }),
+  );
 
   const draftsResponse = await page.request.get(
     new URL("/api/memory/drafts", state.baseUrl).toString(),

@@ -1,103 +1,43 @@
 #!/usr/bin/env node
-import fs from "node:fs/promises";
 import path from "node:path";
 
-const repoRoot = process.cwd();
-const artifactDir = path.join(repoRoot, "artifacts", "perf");
-const budgetsPath = path.join(repoRoot, "perf-budgets.json");
-const baselinePath = path.join(artifactDir, "baseline.json");
-
-function percentile(values, ratio) {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].sort((left, right) => left - right);
-  const index = Math.min(
-    sorted.length - 1,
-    Math.max(0, Math.ceil(sorted.length * ratio) - 1),
-  );
-  return Number(sorted[index].toFixed(2));
-}
-
-async function readJson(filePath) {
-  return JSON.parse(await fs.readFile(filePath, "utf8"));
-}
-
-function formatMs(value) {
-  return `${Number(value).toFixed(2)} ms`;
-}
-
-function resolveServerMetric(serverArtifact, rule) {
-  const metric = (serverArtifact.metrics ?? []).find(
-    (entry) => entry.pathname === rule.path,
-  );
-  if (!metric || !metric.summary) {
-    return null;
-  }
-  return metric.summary[rule.stat] ?? null;
-}
-
-function resolveServerDiagnosticsMetric(serverArtifact, rule) {
-  const metric = (serverArtifact.diagnostics?.metrics ?? []).find(
-    (entry) => entry.name === rule.name,
-  );
-  if (!metric || !metric.summary) {
-    return null;
-  }
-  return metric.summary[rule.stat] ?? null;
-}
-
-function resolveE2EMetric(e2eArtifacts, rule) {
-  const values = [];
-  for (const artifact of e2eArtifacts) {
-    const metric = (artifact.metrics ?? []).find((entry) => entry.name === rule.name);
-    if (metric && typeof metric.durationMs === "number") {
-      values.push(metric.durationMs);
-    }
-  }
-  if (values.length === 0) {
-    return null;
-  }
-  if (rule.aggregate === "p95") {
-    return percentile(values, 0.95);
-  }
-  return percentile(values, 0.5);
-}
-
-async function loadE2EArtifacts() {
-  const files = await fs.readdir(artifactDir).catch(() => []);
-  const e2eFiles = files.filter(
-    (name) => name.startsWith("e2e-") && name.endsWith(".json"),
-  );
-  const artifacts = [];
-  for (const fileName of e2eFiles) {
-    artifacts.push(await readJson(path.join(artifactDir, fileName)));
-  }
-  return artifacts;
-}
+import {
+  artifactDir,
+  baselinePath,
+  budgetsPath,
+  formatMetricValue,
+  loadBuildManifest,
+  loadE2EArtifacts,
+  metricBudget,
+  metricUnit,
+  readJson,
+  resolveMetricValue,
+} from "./perf-utils.mjs";
 
 async function main() {
-  const [budgets, serverArtifact, e2eArtifacts] = await Promise.all([
-    readJson(budgetsPath),
-    readJson(path.join(artifactDir, "server-latest.json")),
-    loadE2EArtifacts(),
-  ]);
+  const [budgets, serverArtifact, e2eArtifacts, buildManifest] =
+    await Promise.all([
+      readJson(budgetsPath),
+      readJson(path.join(artifactDir, "server-latest.json")),
+      loadE2EArtifacts(),
+      loadBuildManifest(),
+    ]);
   const baseline = await readJson(baselinePath).catch(() => null);
   const maxRegressionRatio =
-    typeof budgets.maxRegressionRatio === "number" ? budgets.maxRegressionRatio : 0.1;
+    typeof budgets.maxRegressionRatio === "number"
+      ? budgets.maxRegressionRatio
+      : 0.1;
   const failures = [];
 
   console.log("Performance budget check");
   for (const rule of budgets.metrics ?? []) {
-    let value = null;
-    if (rule.source === "server") {
-      value = resolveServerMetric(serverArtifact, rule);
-    } else if (rule.source === "serverDiagnostics") {
-      value = resolveServerDiagnosticsMetric(serverArtifact, rule);
-    } else if (rule.source === "e2e") {
-      value = resolveE2EMetric(e2eArtifacts, rule);
-    }
-
+    const value = await resolveMetricValue(rule, {
+      serverArtifact,
+      e2eArtifacts,
+      buildManifest,
+    });
+    const budget = metricBudget(rule);
+    const unit = metricUnit(rule);
     if (typeof value !== "number") {
       if (!rule.optional) {
         failures.push(`Missing metric: ${rule.id}`);
@@ -105,8 +45,13 @@ async function main() {
       console.log(`- ${rule.id}: missing${rule.optional ? " (optional)" : ""}`);
       continue;
     }
+    if (typeof budget !== "number") {
+      failures.push(`Missing budget value: ${rule.id}`);
+      console.log(`- ${rule.id}: missing budget`);
+      continue;
+    }
 
-    const overBudget = value > rule.budgetMs;
+    const overBudget = value > budget;
     let overRegression = false;
     const baselineValue = baseline?.metrics?.[rule.id];
     const regressionLimit =
@@ -121,19 +66,24 @@ async function main() {
     const regressionLabel =
       regressionLimit === null
         ? "n/a"
-        : `${formatMs(regressionLimit)} max (${Math.round(maxRegressionRatio * 100)}% over baseline)`;
+        : `${formatMetricValue(regressionLimit, unit)} max (${Math.round(
+            maxRegressionRatio * 100,
+          )}% over baseline)`;
     console.log(
-      `- ${rule.id}: ${formatMs(value)} (budget ${formatMs(rule.budgetMs)}) [${budgetStatus}] regression ${regressionLabel}`,
+      `- ${rule.id}: ${formatMetricValue(value, unit)} (budget ${formatMetricValue(
+        budget,
+        unit,
+      )}) [${budgetStatus}] regression ${regressionLabel}`,
     );
 
     if (overBudget) {
       failures.push(
-        `${rule.id} exceeded budget: ${formatMs(value)} > ${formatMs(rule.budgetMs)}`,
+        `${rule.id} exceeded budget: ${formatMetricValue(value, unit)} > ${formatMetricValue(budget, unit)}`,
       );
     }
-    if (overRegression) {
+    if (overRegression && regressionLimit !== null) {
       failures.push(
-        `${rule.id} exceeded regression threshold: ${formatMs(value)} > ${formatMs(regressionLimit)}`,
+        `${rule.id} exceeded regression threshold: ${formatMetricValue(value, unit)} > ${formatMetricValue(regressionLimit, unit)}`,
       );
     }
   }

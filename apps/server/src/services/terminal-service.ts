@@ -7,6 +7,7 @@ import { spawn as spawnPty, type IPty, type IDisposable } from "@lydell/node-pty
 import {
   TerminalSessionSummarySchema,
   TerminalSnapshotSchema,
+  Utf8TailBuffer,
   nowIso,
   type TerminalScope,
   type TerminalSessionSummary,
@@ -39,7 +40,7 @@ type CreatePty = typeof spawnPty;
 type TerminalSessionRecord = {
   summary: TerminalSessionSummary;
   pty: IPty;
-  transcript: string;
+  transcript: Utf8TailBuffer;
   transcriptPath: string;
   closeReason: string | null;
   closed: boolean;
@@ -52,27 +53,6 @@ type TerminalSessionRecord = {
 
 function transcriptPathFor(sessionId: string): string {
   return path.join(paths.terminalLogsDir, `${sessionId}.log`);
-}
-
-function trimTranscript(transcript: string): {
-  transcript: string;
-  truncated: boolean;
-} {
-  const bytes = Buffer.byteLength(transcript, "utf8");
-  if (bytes <= TERMINAL_TRANSCRIPT_MAX_BYTES) {
-    return {
-      transcript,
-      truncated: false,
-    };
-  }
-
-  const buffer = Buffer.from(transcript, "utf8");
-  return {
-    transcript: buffer.subarray(bytes - TERMINAL_TRANSCRIPT_MAX_BYTES).toString(
-      "utf8",
-    ),
-    truncated: true,
-  };
 }
 
 function expandHomePath(input: string): string {
@@ -210,8 +190,7 @@ export class TerminalService extends EventEmitter<{
     }
 
     session.summary.transcriptBytes += Buffer.byteLength(data, "utf8");
-    const trimmed = trimTranscript(`${session.transcript}${data}`);
-    session.transcript = trimmed.transcript;
+    session.transcript.append(data);
     this.scheduleIdleTimeout(session, false);
     this.emit("output", {
       sessionId: session.summary.id,
@@ -229,10 +208,10 @@ export class TerminalService extends EventEmitter<{
       session: this.activeSession
         ? this.cloneSummary(this.activeSession.summary)
         : null,
-      transcript: this.activeSession?.transcript ?? "",
+      transcript: this.activeSession?.transcript.snapshot() ?? "",
       truncated: this.activeSession
         ? this.activeSession.summary.transcriptBytes >
-          Buffer.byteLength(this.activeSession.transcript, "utf8")
+          this.activeSession.transcript.size()
         : false,
       maxBytes: TERMINAL_TRANSCRIPT_MAX_BYTES,
       closeReason: this.activeSession?.closeReason ?? null,
@@ -321,7 +300,7 @@ export class TerminalService extends EventEmitter<{
     const session: TerminalSessionRecord = {
       summary,
       pty,
-      transcript: "",
+      transcript: new Utf8TailBuffer(TERMINAL_TRANSCRIPT_MAX_BYTES),
       transcriptPath,
       closeReason: null,
       closed: false,

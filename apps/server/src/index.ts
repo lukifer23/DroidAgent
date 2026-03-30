@@ -44,6 +44,7 @@ import {
   MemoryDraftStaleError,
   memoryDraftService,
 } from "./services/memory-draft-service.js";
+import { memoryPrepareService } from "./services/memory-prepare-service.js";
 import { openclawService } from "./services/openclaw-service.js";
 import { runtimeService } from "./services/runtime-service.js";
 import { appStateService } from "./services/app-state-service.js";
@@ -733,23 +734,22 @@ app.post("/api/memory/prepare", async (c) => {
     embeddingModel: settings.ollamaEmbeddingModel,
     reindex: true,
   });
-  if (settings.selectedRuntime === "ollama") {
-    await runtimeService.startRuntime("ollama");
-    await runtimeService.ensureOllamaModel(settings.ollamaEmbeddingModel);
-  }
   try {
-    const status = await openclawService.prepareSemanticMemory({
-      reindex: true,
-    });
+    const { status, started } = await memoryPrepareService.triggerPrepare();
     metric.finish({
       semanticReady: status.semanticReady,
       indexedFiles: status.indexedFiles,
       indexedChunks: status.indexedChunks,
       dirty: status.dirty,
+      started,
     });
-    await websocketHub.publishMemoryUpdated();
-    await websocketHub.publishSetupUpdated();
-    return c.json(status);
+    void Promise.all([
+      websocketHub.publishMemoryUpdated(),
+      websocketHub.publishSetupUpdated(),
+    ]).catch((error) => {
+      console.error("Failed to publish memory prepare updates", error);
+    });
+    return c.json(status, started ? 202 : 200);
   } catch (error) {
     metric.finish({
       outcome: "error",
@@ -1794,7 +1794,9 @@ void (async () => {
       runtimeService.getRuntimeStatuses(),
       runtimeService.listProviderProfiles(),
       keychainService.listProviderSummaries(),
+      dashboardService.getDashboardState(),
     ]);
+    await memoryPrepareService.resumePendingPrepare();
   } catch (error) {
     console.error("Failed to warm DroidAgent caches", error);
   }

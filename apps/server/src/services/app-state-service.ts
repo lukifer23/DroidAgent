@@ -69,6 +69,16 @@ export interface RuntimeSettings {
   cloudProviders: CloudProviderPreferences;
 }
 
+export interface MemoryPrepareStatus {
+  state: "idle" | "queued" | "running" | "completed" | "failed";
+  startedAt: string | null;
+  finishedAt: string | null;
+  progressLabel: string | null;
+  error: string | null;
+  lastDurationMs: number | null;
+  updatedAt: string;
+}
+
 const DEFAULT_ACCESS_SETTINGS: AccessSettings = {
   mode: "loopback",
   canonicalOrigin: null,
@@ -154,6 +164,16 @@ const DEFAULT_SETUP_STATE: SetupState = {
   selectedModel: "qwen3.5:4b",
   remoteAccessEnabled: false,
   signalEnabled: false,
+};
+
+const DEFAULT_MEMORY_PREPARE_STATUS: MemoryPrepareStatus = {
+  state: "idle",
+  startedAt: null,
+  finishedAt: null,
+  progressLabel: null,
+  error: null,
+  lastDurationMs: null,
+  updatedAt: nowIso(),
 };
 
 function deserializeJson<T>(raw: string, fallback: T): T {
@@ -298,6 +318,30 @@ export class AppStateService {
     });
     await this.setJsonSetting("setupState", merged);
     return merged;
+  }
+
+  async getMemoryPrepareStatus(): Promise<MemoryPrepareStatus> {
+    const current = await this.getJsonSetting(
+      "memoryPrepareStatus",
+      DEFAULT_MEMORY_PREPARE_STATUS,
+    );
+    return {
+      ...DEFAULT_MEMORY_PREPARE_STATUS,
+      ...current,
+    };
+  }
+
+  async updateMemoryPrepareStatus(
+    update: Partial<MemoryPrepareStatus>,
+  ): Promise<MemoryPrepareStatus> {
+    const current = await this.getMemoryPrepareStatus();
+    const next = {
+      ...current,
+      ...update,
+      updatedAt: nowIso(),
+    };
+    await this.setJsonSetting("memoryPrepareStatus", next);
+    return next;
   }
 
   async markSetupStepCompleted(

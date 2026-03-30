@@ -1,59 +1,83 @@
 #!/usr/bin/env node
-import fs from "node:fs/promises";
 import path from "node:path";
 
-const repoRoot = process.cwd();
-const artifactDir = path.join(repoRoot, "artifacts", "perf");
-const baselinePath = path.join(artifactDir, "baseline.json");
-const budgetsPath = path.join(repoRoot, "perf-budgets.json");
-
-async function readJson(filePath) {
-  return JSON.parse(await fs.readFile(filePath, "utf8"));
-}
+import {
+  artifactDir,
+  baselinePath,
+  budgetsPath,
+  formatMetricValue,
+  loadBuildManifest,
+  loadE2EArtifacts,
+  metricUnit,
+  readJson,
+  resolveMetricValue,
+} from "./perf-utils.mjs";
 
 async function main() {
-  const files = await fs.readdir(artifactDir).catch(() => []);
   const serverPath = path.join(artifactDir, "server-latest.json");
-  const e2ePaths = files.filter((name) => name.startsWith("e2e-") && name.endsWith(".json")).map((name) => path.join(artifactDir, name));
 
   try {
     const server = await readJson(serverPath);
     console.log("Server benchmarks");
     for (const metric of server.metrics ?? []) {
-      console.log(`- ${metric.pathname}: p95 ${metric.summary.p95Ms} ms, avg ${metric.summary.avgMs} ms`);
+      const label = metric.name ?? metric.pathname;
+      console.log(
+        `- ${label}: p95 ${metric.summary.p95Ms} ms, avg ${metric.summary.avgMs} ms`,
+      );
+    }
+    const coldDashboardMetric = (server.diagnostics?.metrics ?? []).find(
+      (entry) => entry.name === "dashboard.snapshot",
+    );
+    if (coldDashboardMetric?.summary?.maxDurationMs !== null) {
+      console.log(
+        `- dashboard.snapshot cold max: ${coldDashboardMetric.summary.maxDurationMs} ms`,
+      );
     }
   } catch {
     console.log("Server benchmarks: no artifact found");
   }
 
-  if (e2ePaths.length === 0) {
+  const e2eArtifacts = await loadE2EArtifacts();
+  if (e2eArtifacts.length === 0) {
     console.log("E2E benchmarks: no artifact found");
-    return;
-  }
-
-  console.log("E2E benchmarks");
-  for (const filePath of e2ePaths) {
-    const artifact = await readJson(filePath);
-    console.log(`- ${path.basename(filePath)} (${artifact.project})`);
-    for (const metric of artifact.metrics ?? []) {
-      console.log(`  ${metric.name}: ${metric.durationMs} ms`);
+  } else {
+    console.log("E2E benchmarks");
+    for (const artifact of e2eArtifacts) {
+      console.log(`- ${artifact.project} (${artifact.browserName})`);
+      for (const metric of artifact.metrics ?? []) {
+        console.log(`  ${metric.name}: ${metric.durationMs} ms`);
+      }
     }
   }
 
   try {
-    const [baseline, budgets] = await Promise.all([
-      readJson(baselinePath),
+    const [budgets, serverArtifact, buildManifest, baseline] = await Promise.all([
       readJson(budgetsPath),
+      readJson(serverPath),
+      loadBuildManifest(),
+      readJson(baselinePath).catch(() => null),
     ]);
-    console.log("Perf policy");
-    console.log(`- baseline: ${Object.keys(baseline.metrics ?? {}).length} tracked metrics`);
-    console.log(
-      `- budget rules: ${(budgets.metrics ?? []).length} (max regression ${
-        Math.round((budgets.maxRegressionRatio ?? 0.1) * 100)
-      }%)`,
-    );
+    console.log("Tracked budgets");
+    for (const rule of budgets.metrics ?? []) {
+      const value = await resolveMetricValue(rule, {
+        serverArtifact,
+        e2eArtifacts,
+        buildManifest,
+      });
+      if (typeof value !== "number") {
+        continue;
+      }
+      const baselineValue = baseline?.metrics?.[rule.id];
+      const baselineLabel =
+        typeof baselineValue === "number"
+          ? `baseline ${formatMetricValue(baselineValue, metricUnit(rule))}`
+          : "baseline n/a";
+      console.log(
+        `- ${rule.id}: ${formatMetricValue(value, metricUnit(rule))} (${baselineLabel})`,
+      );
+    }
   } catch {
-    // optional metadata
+    console.log("Tracked budgets: no budget metadata found");
   }
 }
 

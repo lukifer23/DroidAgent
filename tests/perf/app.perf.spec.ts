@@ -16,6 +16,16 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   await resetE2EState(page);
   const state = await readE2EState();
 
+  const coldDashboardStart = performance.now();
+  const coldDashboardResponse = await page.request.get(
+    new URL("/api/dashboard", state.baseUrl).toString(),
+  );
+  expect(coldDashboardResponse.ok()).toBeTruthy();
+  metrics.push({
+    name: "cold_dashboard_ms",
+    durationMs: Number((performance.now() - coldDashboardStart).toFixed(2)),
+  });
+
   const loadStart = performance.now();
   await page.goto(new URL("/chat", state.baseUrl).toString());
   await expect(page.locator(".topbar-copy h1")).toBeVisible();
@@ -58,22 +68,44 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   });
 
   await page.getByRole("link", { name: "Settings" }).click();
-  await expect(
-    page.getByRole("button", { name: "Prepare / Reindex Memory" }),
-  ).toBeVisible();
-  const memoryPrepareStart = performance.now();
-  const prepareRequest = page.waitForResponse((response) => {
-    return (
-      response.url().includes("/api/memory/prepare") &&
-      response.request().method() === "POST"
-    );
+  const memoryCard = page
+    .locator(".panel-card")
+    .filter({ has: page.getByRole("heading", { name: "Workspace Memory" }) });
+  const memoryPrepareButton = memoryCard.getByRole("button", {
+    name: /Prepare|Reindex|Preparing|Queued/i,
   });
-  await page.getByRole("button", { name: "Prepare / Reindex Memory" }).click();
-  const prepareResponse = await prepareRequest;
-  expect(prepareResponse.ok()).toBeTruthy();
+  await expect(memoryPrepareButton).toBeVisible();
+  const memoryPrepareStart = performance.now();
+  const prepareResponse = await page.evaluate(async () => {
+    const startedAt = performance.now();
+    const response = await fetch("/api/memory/prepare", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      durationMs: Number((performance.now() - startedAt).toFixed(2)),
+    };
+  });
+  expect(prepareResponse.ok).toBeTruthy();
   metrics.push({
-    name: "memory_prepare_ms",
-    durationMs: Number((performance.now() - memoryPrepareStart).toFixed(2))
+    name: "memory_prepare_accepted_ms",
+    durationMs: prepareResponse.durationMs,
+  });
+  await expect(memoryCard.getByText("Semantic memory is ready.")).toBeVisible({
+    timeout: 45_000,
+  });
+  await expect(
+    memoryCard.getByRole("button", { name: "Reindex Memory" }),
+  ).toBeVisible();
+  metrics.push({
+    name: "memory_prepare_completion_ms",
+    durationMs: Number((performance.now() - memoryPrepareStart).toFixed(2)),
   });
 
   await page.getByRole("link", { name: "Chat" }).click();
@@ -96,11 +128,18 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   const responseLocator = page.getByText(`Test harness reply: ${prompt}`, {
     exact: true,
   }).last();
-  await expect(responseLocator).toBeVisible();
+  const streamingResponseLocator = page
+    .locator(".message-card.assistant.streaming .message-markdown")
+    .last();
+  await Promise.any([
+    streamingResponseLocator.waitFor({ state: "visible", timeout: 5_000 }),
+    responseLocator.waitFor({ state: "visible", timeout: 5_000 }),
+  ]);
   metrics.push({
-    name: "chat_first_token_ms",
+    name: "chat_first_token_visible_ms",
     durationMs: Number((performance.now() - sendStart).toFixed(2))
   });
+  await expect(responseLocator).toBeVisible();
   metrics.push({
     name: "chat_done_ms",
     durationMs: Number((performance.now() - sendStart).toFixed(2))
@@ -137,6 +176,8 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
     ["chat.stream.acceptedToFirstDelta", "server_accepted_to_first_delta_ms"],
     ["chat.stream.firstDeltaForward", "server_first_delta_forward_ms"],
     ["chat.stream.acceptedToCompleteRelay", "server_accepted_to_done_ms"],
+    ["memory.prepare", "server_memory_prepare_accepted_ms"],
+    ["memory.prepare.complete", "server_memory_prepare_completion_ms"],
   ] as const;
   for (const [metricName, artifactName] of serverMetricNames) {
     const metric = serverSnapshot?.metrics?.find(

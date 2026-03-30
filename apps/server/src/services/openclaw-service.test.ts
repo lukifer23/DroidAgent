@@ -7,6 +7,7 @@ const {
   updateRuntimeSettings,
   getJsonSetting,
   setJsonSetting,
+  getMemoryPrepareStatus,
   getProcessEnv,
   runCommand,
   findProcesses,
@@ -16,6 +17,7 @@ const {
   updateRuntimeSettings: vi.fn(),
   getJsonSetting: vi.fn(),
   setJsonSetting: vi.fn(),
+  getMemoryPrepareStatus: vi.fn(),
   getProcessEnv: vi.fn(),
   runCommand: vi.fn(),
   findProcesses: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock("./app-state-service.js", () => ({
     updateRuntimeSettings,
     getJsonSetting,
     setJsonSetting,
+    getMemoryPrepareStatus,
   },
 }));
 
@@ -124,6 +127,15 @@ describe("OpenClaw context management policy", () => {
     );
     getJsonSetting.mockResolvedValue(null);
     setJsonSetting.mockResolvedValue(undefined);
+    getMemoryPrepareStatus.mockResolvedValue({
+      state: "idle",
+      startedAt: null,
+      finishedAt: null,
+      progressLabel: null,
+      error: null,
+      lastDurationMs: null,
+      updatedAt: "2026-03-29T00:00:00.000Z",
+    });
     getProcessEnv.mockResolvedValue({});
     runCommand.mockResolvedValue({
       stdout: "",

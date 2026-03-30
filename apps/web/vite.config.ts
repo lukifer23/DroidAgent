@@ -30,6 +30,45 @@ export default defineConfig({
       }
     })
   ],
+  build: {
+    manifest: true,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("node_modules")) {
+            if (id.includes("@tanstack/react-router")) {
+              return "router-vendor";
+            }
+            if (id.includes("@tanstack/react-query")) {
+              return "query-vendor";
+            }
+            if (
+              id.includes("/react-dom/") ||
+              id.includes("/react/")
+            ) {
+              return "react-vendor";
+            }
+          }
+
+          if (
+            id.includes("/src/app-context.tsx") ||
+            id.includes("/src/app-data.ts") ||
+            id.includes("/src/app-layout.tsx") ||
+            id.includes("/src/hooks/use-websocket.ts") ||
+            id.includes("/src/hooks/use-viewport-measure.ts") ||
+            id.includes("/src/lib/api.ts") ||
+            id.includes("/src/lib/client-performance.ts") ||
+            id.includes("/src/lib/formatters.ts") ||
+            id.includes("/src/lib/operator-readiness.ts")
+          ) {
+            return "app-shell";
+          }
+
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {
@@ -41,4 +80,3 @@ export default defineConfig({
     }
   }
 });
-

@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export { Utf8TailBuffer } from "./utf8-tail-buffer.js";
+
 export const RuntimeIdSchema = z.enum(["openclaw", "ollama", "llamaCpp"]);
 export type RuntimeId = z.infer<typeof RuntimeIdSchema>;
 
@@ -774,6 +776,15 @@ export const MemorySourceCountSchema = z.object({
 });
 export type MemorySourceCount = z.infer<typeof MemorySourceCountSchema>;
 
+export const MemoryPrepareStateSchema = z.enum([
+  "idle",
+  "queued",
+  "running",
+  "completed",
+  "failed",
+]);
+export type MemoryPrepareState = z.infer<typeof MemoryPrepareStateSchema>;
+
 export const MemoryStatusSchema = z.object({
   configuredWorkspaceRoot: z.string().nullable(),
   effectiveWorkspaceRoot: z.string(),
@@ -803,6 +814,12 @@ export const MemoryStatusSchema = z.object({
   embeddingProbeError: z.string().nullable(),
   sourceCounts: z.array(MemorySourceCountSchema),
   contextWindow: z.number().int().positive(),
+  prepareState: MemoryPrepareStateSchema,
+  prepareStartedAt: z.string().nullable(),
+  prepareFinishedAt: z.string().nullable(),
+  prepareProgressLabel: z.string().nullable(),
+  prepareError: z.string().nullable(),
+  lastPrepareDurationMs: z.number().nonnegative().nullable(),
 });
 export type MemoryStatus = z.infer<typeof MemoryStatusSchema>;
 

@@ -16,6 +16,13 @@
       "budgetMs": 250
     },
     {
+      "id": "server.dashboard.cold.max",
+      "source": "serverDiagnostics",
+      "name": "dashboard.snapshot",
+      "stat": "maxDurationMs",
+      "budgetMs": 750
+    },
+    {
       "id": "server.chat.first_token_relay.p95",
       "source": "serverDiagnostics",
       "name": "chat.stream.firstDeltaForward",
@@ -24,11 +31,18 @@
       "optional": true
     },
     {
+      "id": "e2e.dashboard.cold.p95",
+      "source": "e2e",
+      "name": "cold_dashboard_ms",
+      "aggregate": "p95",
+      "budgetMs": 1200
+    },
+    {
       "id": "e2e.route.switch.p95",
       "source": "e2e",
       "name": "route_switch_ms",
       "aggregate": "p95",
-      "budgetMs": 300
+      "budgetMs": 220
     },
     {
       "id": "e2e.reconnect.resync.p95",
@@ -50,6 +64,41 @@
       "name": "file_save_ms",
       "aggregate": "p95",
       "budgetMs": 500
+    },
+    {
+      "id": "e2e.memory.prepare.accepted.p95",
+      "source": "e2e",
+      "name": "memory_prepare_accepted_ms",
+      "aggregate": "p95",
+      "budgetMs": 250
+    },
+    {
+      "id": "e2e.memory.prepare.completion.p95",
+      "source": "e2e",
+      "name": "memory_prepare_completion_ms",
+      "aggregate": "p95",
+      "budgetMs": 35000
+    },
+    {
+      "id": "e2e.chat.first_token_visible.p95",
+      "source": "e2e",
+      "name": "chat_first_token_visible_ms",
+      "aggregate": "p95",
+      "budgetMs": 200
+    },
+    {
+      "id": "build.main.entry.bytes",
+      "source": "build",
+      "entry": "index.html",
+      "stat": "sizeBytes",
+      "budgetBytes": 350000
+    },
+    {
+      "id": "build.terminal.route.bytes",
+      "source": "build",
+      "entry": "src/screens/terminal-screen.tsx",
+      "stat": "sizeBytes",
+      "budgetBytes": 300000
     }
   ]
 }

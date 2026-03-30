@@ -33,6 +33,14 @@ export class SignalService {
   private daemonProcess: ChildProcess | null = null;
   private lastRefreshedAt = 0;
   private refreshPromise: Promise<void> | null = null;
+  private refreshInterval: ReturnType<typeof setInterval> | null = null;
+
+  constructor() {
+    this.refreshInterval = setInterval(() => {
+      this.refreshStateInBackground();
+    }, SIGNAL_STATE_TTL_MS);
+    this.refreshInterval.unref?.();
+  }
 
   invalidateStateCache(): void {
     this.lastRefreshedAt = 0;

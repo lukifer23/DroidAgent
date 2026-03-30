@@ -1,5 +1,9 @@
 import { useSyncExternalStore } from "react";
-import type { TerminalSessionSummary, TerminalSnapshot } from "@droidagent/shared";
+import {
+  Utf8TailBuffer,
+  type TerminalSessionSummary,
+  type TerminalSnapshot,
+} from "@droidagent/shared";
 
 type Listener = () => void;
 
@@ -21,12 +25,11 @@ const emptyState: TerminalStoreState = {
   closeReason: null,
 };
 
-const textEncoder = new TextEncoder();
-
 class TerminalStore {
   private readonly listeners = new Set<Listener>();
   private state: TerminalStoreState = emptyState;
   private emitHandle: number | ReturnType<typeof setTimeout> | null = null;
+  private readonly transcriptBuffer = new Utf8TailBuffer(emptyState.maxBytes);
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);
@@ -63,13 +66,13 @@ class TerminalStore {
   }
 
   replace(snapshot: TerminalSnapshot): void {
+    const replaced = this.transcriptBuffer.replace(snapshot.transcript);
     this.state = {
       session: snapshot.session,
-      transcript: snapshot.transcript,
+      transcript: this.transcriptBuffer.snapshot(),
       transcriptBytes:
-        snapshot.session?.transcriptBytes ??
-        textEncoder.encode(snapshot.transcript).length,
-      truncated: snapshot.truncated,
+        snapshot.session?.transcriptBytes ?? replaced.bytes,
+      truncated: snapshot.truncated || replaced.truncated,
       maxBytes: snapshot.maxBytes,
       closeReason: snapshot.closeReason,
     };
@@ -91,40 +94,13 @@ class TerminalStore {
       return;
     }
 
-    const maxBytes = this.state.maxBytes;
-    const chunkBytes = textEncoder.encode(data).length;
-    const nextBytes = this.state.transcriptBytes + chunkBytes;
-    let nextTranscript = `${this.state.transcript}${data}`;
-    let nextTranscriptBytes = nextBytes;
-    let truncated = nextBytes > maxBytes;
-
-    if (truncated) {
-      const overflow = nextBytes - maxBytes;
-      const estimatedCharsToTrim = Math.max(
-        64,
-        Math.ceil(
-          (overflow / Math.max(chunkBytes, 1)) * Math.max(data.length, 1),
-        ),
-      );
-      nextTranscript = nextTranscript.slice(estimatedCharsToTrim);
-      nextTranscriptBytes = textEncoder.encode(nextTranscript).length;
-
-      while (nextTranscriptBytes > maxBytes && nextTranscript.length > 0) {
-        nextTranscript = nextTranscript.slice(
-          Math.min(
-            nextTranscript.length,
-            Math.max(1, Math.ceil(nextTranscript.length * 0.1)),
-          ),
-        );
-        nextTranscriptBytes = textEncoder.encode(nextTranscript).length;
-      }
-    }
+    const next = this.transcriptBuffer.append(data);
 
     this.state = {
       ...this.state,
-      transcript: nextTranscript,
-      transcriptBytes: nextTranscriptBytes,
-      truncated,
+      transcript: this.transcriptBuffer.snapshot(),
+      transcriptBytes: next.bytes,
+      truncated: this.state.truncated || next.truncated,
     };
     this.scheduleEmit();
   }

@@ -1,14 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import type { Terminal } from "@xterm/xterm";
 import type { TerminalSnapshot } from "@droidagent/shared";
 
 import "@xterm/xterm/css/xterm.css";
 
 import { useAuthQuery, useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
+import { useViewportMeasure } from "../hooks/use-viewport-measure";
 import { api, deleteJson, postJson } from "../lib/api";
 import { TERMINAL_PREFILL_STORAGE_KEY } from "../lib/constants";
 import { useTerminalState, terminalStore } from "../lib/terminal-store";
@@ -132,119 +133,109 @@ export function TerminalScreen() {
     window.sessionStorage.removeItem(TERMINAL_PREFILL_STORAGE_KEY);
   }, [sendRealtimeCommand, terminalState.session, wsStatus]);
 
+  const syncSize = useCallback(() => {
+    const terminal = xtermRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (!terminal || !fitAddon) {
+      return;
+    }
+
+    fitAddon.fit();
+    const sessionId = terminalStore.getSnapshot().session?.id;
+    if (!sessionId || wsStatusRef.current !== "connected") {
+      return;
+    }
+    const previous = lastResizeSentRef.current;
+    if (
+      previous &&
+      previous.sessionId === sessionId &&
+      previous.cols === terminal.cols &&
+      previous.rows === terminal.rows
+    ) {
+      return;
+    }
+    lastResizeSentRef.current = {
+      sessionId,
+      cols: terminal.cols,
+      rows: terminal.rows,
+    };
+    sendRealtimeCommandRef.current({
+      type: "terminal.resize",
+      payload: {
+        sessionId,
+        cols: terminal.cols,
+        rows: terminal.rows,
+      },
+    });
+  }, []);
+  const viewportRefs = useMemo(() => [terminalContainerRef], []);
+  useViewportMeasure({
+    refs: viewportRefs,
+    onMeasure: syncSize,
+  });
+
   useEffect(() => {
     const container = terminalContainerRef.current;
     if (!container) {
       return;
     }
 
-    const terminal = new Terminal({
-      allowTransparency: true,
-      convertEol: false,
-      cursorBlink: true,
-      fontFamily:
-        '"SFMono-Regular", "Cascadia Code", "JetBrains Mono", ui-monospace, monospace',
-      fontSize: 13,
-      lineHeight: 1.25,
-      scrollback: 3000,
-      theme: terminalTheme(resolvedTheme),
-    });
-    const fitAddon = new FitAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.open(container);
-    fitAddon.fit();
-    terminal.focus();
+    let active = true;
+    let terminal: Terminal | null = null;
+    let fitAddon: FitAddon | null = null;
+    let dataDisposable: { dispose: () => void } | null = null;
 
-    const dataDisposable = terminal.onData((data) => {
-      const sessionId = terminalSessionIdRef.current;
-      if (!sessionId || wsStatusRef.current !== "connected") {
+    void (async () => {
+      const [{ Terminal }, { FitAddon }] = await Promise.all([
+        import("@xterm/xterm"),
+        import("@xterm/addon-fit"),
+      ]);
+      if (!active) {
         return;
       }
-      sendRealtimeCommandRef.current({
-        type: "terminal.input",
-        payload: {
-          sessionId,
-          data,
-        },
-      });
-    });
 
-    const syncSize = () => {
-      fitAddon.fit();
-      const sessionId = terminalStore.getSnapshot().session?.id;
-      if (!sessionId || wsStatusRef.current !== "connected") {
-        return;
-      }
-      const previous = lastResizeSentRef.current;
-      if (
-        previous &&
-        previous.sessionId === sessionId &&
-        previous.cols === terminal.cols &&
-        previous.rows === terminal.rows
-      ) {
-        return;
-      }
-      lastResizeSentRef.current = {
-        sessionId,
-        cols: terminal.cols,
-        rows: terminal.rows,
-      };
-      sendRealtimeCommandRef.current({
-        type: "terminal.resize",
-        payload: {
-          sessionId,
-          cols: terminal.cols,
-          rows: terminal.rows,
-        },
+      terminal = new Terminal({
+        allowTransparency: true,
+        convertEol: false,
+        cursorBlink: true,
+        fontFamily:
+          '"SFMono-Regular", "Cascadia Code", "JetBrains Mono", ui-monospace, monospace',
+        fontSize: 13,
+        lineHeight: 1.25,
+        scrollback: 3000,
+        theme: terminalTheme(resolvedTheme),
       });
-    };
-    let resizeHandle: number | ReturnType<typeof setTimeout> | null = null;
-    const scheduleSyncSize = () => {
-      if (resizeHandle !== null) {
-        return;
-      }
-      if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
-        resizeHandle = window.requestAnimationFrame(() => {
-          resizeHandle = null;
-          syncSize();
+      fitAddon = new FitAddon();
+      terminal.loadAddon(fitAddon);
+      terminal.open(container);
+      xtermRef.current = terminal;
+      fitAddonRef.current = fitAddon;
+      syncSize();
+      terminal.focus();
+
+      dataDisposable = terminal.onData((data) => {
+        const sessionId = terminalSessionIdRef.current;
+        if (!sessionId || wsStatusRef.current !== "connected") {
+          return;
+        }
+        sendRealtimeCommandRef.current({
+          type: "terminal.input",
+          payload: {
+            sessionId,
+            data,
+          },
         });
-        return;
-      }
-      resizeHandle = setTimeout(() => {
-        resizeHandle = null;
-        syncSize();
-      }, 16);
-    };
-
-    const resizeObserver = new ResizeObserver(() => {
-      scheduleSyncSize();
-    });
-    resizeObserver.observe(container);
-
-    const viewport = window.visualViewport;
-    viewport?.addEventListener("resize", scheduleSyncSize);
-    window.addEventListener("resize", scheduleSyncSize);
-
-    xtermRef.current = terminal;
-    fitAddonRef.current = fitAddon;
+      });
+    })();
 
     return () => {
-      resizeObserver.disconnect();
-      viewport?.removeEventListener("resize", scheduleSyncSize);
-      window.removeEventListener("resize", scheduleSyncSize);
-      if (resizeHandle !== null) {
-        if (typeof resizeHandle === "number" && typeof window.cancelAnimationFrame === "function") {
-          window.cancelAnimationFrame(resizeHandle);
-        } else {
-          clearTimeout(resizeHandle as ReturnType<typeof setTimeout>);
-        }
-      }
-      dataDisposable.dispose();
+      active = false;
+      dataDisposable?.dispose();
       xtermRef.current = null;
       fitAddonRef.current = null;
-      terminal.dispose();
+      terminal?.dispose();
     };
-  }, [resolvedTheme]);
+  }, [resolvedTheme, syncSize]);
 
   useEffect(() => {
     const terminal = xtermRef.current;
