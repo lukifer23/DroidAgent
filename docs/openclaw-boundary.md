@@ -34,3 +34,13 @@ The concrete route, websocket, script, and data-path inventory that applies this
 - Do not add a second session, approval, or pairing state machine in DroidAgent.
 - If OpenClaw already owns the underlying truth, DroidAgent should surface, filter, or audit it instead of recreating it.
 - New DroidAgent-native flows are justified only when they add owner control, mobile usability, workspace safety, or auditability that OpenClaw does not already provide.
+
+## Change Checklist
+
+For any PR that touches sessions, approvals, pairing, websocket semantics, maintenance lifecycle, or remote/origin enforcement:
+
+- Does this introduce a second source of truth for session lifecycle?
+- Does this recreate OpenClaw approval semantics instead of routing through `decisionService`?
+- Does this recreate Signal pairing state instead of resolving through the decision ledger?
+- Does this expose raw OpenClaw control semantics directly to browser clients?
+- Could this be implemented as DroidAgent-side filtering, attribution, or auditability instead?

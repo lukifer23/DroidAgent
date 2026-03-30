@@ -320,4 +320,21 @@ describe("DecisionService", () => {
       resolution: "denied",
     });
   });
+
+  it("rejects approval resolution when the source approval is no longer pending", async () => {
+    await expect(
+      decisionService.resolveApprovalDecision(
+        "missing-approval",
+        "approved",
+        {
+          user: {
+            id: "owner-1",
+            username: "owner",
+            displayName: "DroidAgent Owner",
+          },
+          authSession: null,
+        },
+      ),
+    ).rejects.toThrow(/no longer pending/i);
+  });
 });

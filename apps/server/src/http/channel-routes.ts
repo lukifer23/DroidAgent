@@ -3,8 +3,8 @@ import type { Hono } from "hono";
 import { decisionService } from "../services/decision-service.js";
 import { harnessService } from "../services/harness-service.js";
 import { launchAgentService } from "../services/launch-agent-service.js";
-import { openclawService } from "../services/openclaw-service.js";
 import { signalService } from "../services/signal-service.js";
+import { publishDecisionEffects } from "../lib/decision-updates.js";
 import { websocketHub } from "../websocket-hub.js";
 import {
   getDecisionActor,
@@ -176,13 +176,13 @@ export function registerChannelRoutes(app: Hono<{ Variables: AppVariables }>) {
       code: string;
       resolution: "approved" | "denied";
     };
-    await decisionService.resolveChannelPairingDecision(
+    const decision = await decisionService.resolveChannelPairingDecision(
       body.code,
       body.resolution,
       actor,
     );
-    await websocketHub.publishChannelUpdated();
-    return c.json({ ok: true });
+    await publishDecisionEffects(websocketHub, decision);
+    return c.json(decision);
   });
 
   app.post("/api/channels/signal/pairing/approve", async (c) => {
@@ -190,10 +190,15 @@ export function registerChannelRoutes(app: Hono<{ Variables: AppVariables }>) {
     if (blocked) return blocked;
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;
+    const actor = await getDecisionActor(c);
     const body = (await c.req.json()) as { code: string };
-    await openclawService.approveSignalPairing(body.code);
-    await websocketHub.publishChannelUpdated();
-    return c.json({ ok: true });
+    const decision = await decisionService.resolveChannelPairingDecision(
+      body.code,
+      "approved",
+      actor,
+    );
+    await publishDecisionEffects(websocketHub, decision);
+    return c.json(decision);
   });
 
   app.post("/api/channels/signal/test-message", async (c) => {

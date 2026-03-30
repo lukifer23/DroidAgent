@@ -152,13 +152,18 @@ function MarkdownCodeBlock({
             >
               Run in Chat
             </button>
-            <button
-              type="button"
-              className="secondary"
-              onClick={() => onOpenInTerminal(runnableCommand)}
-            >
-              Open in Terminal
-            </button>
+            <details className="message-details">
+              <summary>More</summary>
+              <div className="message-action-row compact">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onOpenInTerminal(runnableCommand)}
+                >
+                  Open in Terminal
+                </button>
+              </div>
+            </details>
           </div>
           {!commandActionsEnabled && commandActionDisabledReason ? (
             <p className="message-action-note">{commandActionDisabledReason}</p>

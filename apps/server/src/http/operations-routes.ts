@@ -10,6 +10,7 @@ import {
   MemoryDraftDismissRequestSchema,
   MemoryDraftUpdateRequestSchema,
 } from "@droidagent/shared";
+import { z } from "zod";
 
 import { accessService } from "../services/access-service.js";
 import { appStateService } from "../services/app-state-service.js";
@@ -45,6 +46,15 @@ type CloudProviderId =
   | "xai";
 
 type RuntimeId = "ollama" | "llamaCpp" | "openclaw";
+
+const MaintenanceRecoveryActionSchema = z.enum([
+  "retryVerify",
+  "refreshHarnessHealth",
+  "reconnectResync",
+  "clearStaleMaintenanceState",
+  "restartRuntime",
+  "restartAppShell",
+]);
 
 function buildSignalRegistrationRequest(body: {
   phoneNumber: string;
@@ -287,6 +297,63 @@ export function registerOperationsRoutes(
       websocketHub.publishSessionsUpdated(),
     ]);
     return c.json(operation, 202);
+  });
+
+  app.post("/api/maintenance/recover", async (c) => {
+    const blocked = await mutationGuard(c);
+    if (blocked) return blocked;
+    const unauthorized = await requireUser(c);
+    if (unauthorized) return unauthorized;
+    const body = (await c.req.json()) as { action: string };
+    const action = MaintenanceRecoveryActionSchema.parse(body.action);
+
+    let result: unknown = null;
+    if (action === "retryVerify") {
+      result = await maintenanceService.retryVerification();
+      await Promise.all([
+        websocketHub.publishMaintenanceUpdated(),
+        websocketHub.publishSessionsUpdated(),
+      ]);
+    } else if (action === "refreshHarnessHealth") {
+      await openclawService.status();
+      await websocketHub.publishRuntimeUpdated();
+      result = { refreshed: true };
+    } else if (action === "reconnectResync") {
+      await websocketHub.refreshAll();
+      result = { resynced: true };
+    } else if (action === "clearStaleMaintenanceState") {
+      result = await maintenanceService.clearStaleState();
+      await Promise.all([
+        websocketHub.publishMaintenanceUpdated(),
+        websocketHub.publishSessionsUpdated(),
+      ]);
+    } else if (action === "restartRuntime") {
+      const settings = await appStateService.getRuntimeSettings();
+      await runtimeService.stopRuntime(settings.selectedRuntime);
+      await runtimeService.startRuntime(settings.selectedRuntime);
+      await Promise.all([
+        websocketHub.publishRuntimeUpdated(),
+        websocketHub.publishProvidersUpdated(),
+      ]);
+      result = { runtime: settings.selectedRuntime };
+    } else {
+      result = await maintenanceService.requestOperation({
+        scope: "app",
+        action: "restart",
+        requestedByUserId: c.get("user")?.id ?? null,
+        requestedFromLocalhost: accessService.isLocalhostRequest(c),
+      });
+      await Promise.all([
+        websocketHub.publishMaintenanceUpdated(),
+        websocketHub.publishSessionsUpdated(),
+      ]);
+    }
+
+    return c.json({
+      action,
+      result,
+      maintenance: await maintenanceService.getStatus(),
+    });
   });
 
   app.get("/api/setup", async (c) => {

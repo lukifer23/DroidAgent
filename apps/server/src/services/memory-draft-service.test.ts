@@ -181,6 +181,31 @@ describe("MemoryDraftService", () => {
     expect(updated.content).toBe("Prefer concise replies");
   });
 
+  it("reuses an existing pending draft for duplicate create requests", async () => {
+    const created = await service.createDraft({
+      target: "memory",
+      title: "Initial",
+      content: "Remember this exact item",
+      sourceKind: "chatMessage",
+      sourceLabel: "Chat",
+      sourceRef: "msg-1",
+      sessionId: "web:operator",
+    });
+
+    const duplicate = await service.createDraft({
+      target: "memory",
+      title: "Different title ignored for duplicates",
+      content: " Remember   this exact item ",
+      sourceKind: "chatMessage",
+      sourceLabel: "Chat",
+      sourceRef: "msg-1",
+      sessionId: "web:operator",
+    });
+
+    expect(duplicate.id).toBe(created.id);
+    expect(draftRecords).toHaveLength(1);
+  });
+
   it("applies a draft to MEMORY.md atomically and reindexes incrementally", async () => {
     draftRecords.push({
       id: "draft-1",

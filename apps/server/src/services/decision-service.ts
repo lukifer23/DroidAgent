@@ -391,17 +391,12 @@ export class DecisionService {
     actor: DecisionActor,
   ): Promise<DecisionRecord> {
     const approvals = await harnessService.listApprovals();
-    const approval =
-      approvals.find((entry) => entry.id === approvalId) ??
-      ({
-        id: approvalId,
-        kind: "exec",
-        title: "OpenClaw approval",
-        details: "",
-        createdAt: nowIso(),
-        status: "pending",
-        source: "openclaw",
-      } satisfies ApprovalRecord);
+    const approval = approvals.find((entry) => entry.id === approvalId);
+    if (!approval) {
+      throw new Error(
+        "Approval is no longer pending in OpenClaw. Refresh decisions and try again.",
+      );
+    }
     await harnessService.resolveApproval(approvalId, resolution);
     return await this.persistDecision(
       this.buildExecDecision(approval, {
@@ -419,13 +414,12 @@ export class DecisionService {
     actor: DecisionActor,
   ): Promise<DecisionRecord> {
     const pairings = await this.getChannelPairings();
-    const pairing =
-      pairings.find((entry) => entry.code === code) ??
-      {
-        code,
-        from: "Unknown sender",
-        requestedAt: nowIso(),
-      };
+    const pairing = pairings.find((entry) => entry.code === code);
+    if (!pairing) {
+      throw new Error(
+        "Signal pairing request is no longer pending. Refresh decisions and try again.",
+      );
+    }
     await openclawService.resolveSignalPairing(code, resolution);
     return await this.persistDecision(
       this.buildChannelPairingDecision(pairing, {

@@ -346,28 +346,33 @@ function TranscriptWindow(props: ChatScreenShellProps) {
                       >
                         {decision.kind === "memoryDraftReview" ? "Apply" : "Approve"}
                       </button>
-                      <button
-                        className="secondary"
-                        onClick={() =>
-                          void runAction(async () => {
-                            await resolveDecision(decision, "denied");
-                          }, decision.kind === "memoryDraftReview"
-                            ? "Memory draft dismissed."
-                            : "Decision denied.")
-                        }
-                      >
-                        {decision.kind === "memoryDraftReview" ? "Dismiss" : "Deny"}
-                      </button>
-                      {decision.kind === "memoryDraftReview" ? (
-                        <button
-                          className="secondary"
-                          onClick={() => {
-                            void navigate({ to: "/settings" });
-                          }}
-                        >
-                          Review
-                        </button>
-                      ) : null}
+                      <details className="message-details">
+                        <summary>More</summary>
+                        <div className="button-row">
+                          <button
+                            className="secondary"
+                            onClick={() =>
+                              void runAction(async () => {
+                                await resolveDecision(decision, "denied");
+                              }, decision.kind === "memoryDraftReview"
+                                ? "Memory draft dismissed."
+                                : "Decision denied.")
+                            }
+                          >
+                            {decision.kind === "memoryDraftReview" ? "Dismiss" : "Deny"}
+                          </button>
+                          {decision.kind === "memoryDraftReview" ? (
+                            <button
+                              className="secondary"
+                              onClick={() => {
+                                void navigate({ to: "/settings" });
+                              }}
+                            >
+                              Review
+                            </button>
+                          ) : null}
+                        </div>
+                      </details>
                     </div>
                   </article>
                 ))}
@@ -576,40 +581,6 @@ function SidebarRail(props: ChatScreenShellProps) {
                 Stop run
               </button>
             ) : null}
-            {hostPressure?.activeJobs ? (
-              <button
-                type="button"
-                className="secondary"
-                onClick={() =>
-                  void runAction(async () => {
-                    await onRecoverHostPressure({
-                      abortSessionRun: false,
-                      cancelActiveJobs: true,
-                      closeTerminalSession: false,
-                    });
-                  }, "Active jobs cancelled for recovery.")
-                }
-              >
-                Cancel jobs
-              </button>
-            ) : null}
-            {hostPressure?.activeTerminalSession ? (
-              <button
-                type="button"
-                className="secondary"
-                onClick={() =>
-                  void runAction(async () => {
-                    await onRecoverHostPressure({
-                      abortSessionRun: false,
-                      cancelActiveJobs: false,
-                      closeTerminalSession: true,
-                    });
-                  }, "Rescue terminal closed for recovery.")
-                }
-              >
-                Close terminal
-              </button>
-            ) : null}
             <button
               type="button"
               className={hostPressureLevel === "critical" ? "" : "secondary"}
@@ -621,6 +592,47 @@ function SidebarRail(props: ChatScreenShellProps) {
             >
               Cleanup cycle
             </button>
+            {hostPressure?.activeJobs || hostPressure?.activeTerminalSession ? (
+              <details className="message-details">
+                <summary>More recovery</summary>
+                <div className="message-action-row compact">
+                  {hostPressure?.activeJobs ? (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() =>
+                        void runAction(async () => {
+                          await onRecoverHostPressure({
+                            abortSessionRun: false,
+                            cancelActiveJobs: true,
+                            closeTerminalSession: false,
+                          });
+                        }, "Active jobs cancelled for recovery.")
+                      }
+                    >
+                      Cancel jobs
+                    </button>
+                  ) : null}
+                  {hostPressure?.activeTerminalSession ? (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() =>
+                        void runAction(async () => {
+                          await onRecoverHostPressure({
+                            abortSessionRun: false,
+                            cancelActiveJobs: false,
+                            closeTerminalSession: true,
+                          });
+                        }, "Rescue terminal closed for recovery.")
+                      }
+                    >
+                      Close terminal
+                    </button>
+                  ) : null}
+                </div>
+              </details>
+            ) : null}
           </div>
         </section>
 

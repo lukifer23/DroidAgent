@@ -117,6 +117,24 @@ function formatDraftBlock(draft: MemoryDraft): string {
   return lines.join("\n");
 }
 
+function normalizeDraftContent(content: string): string {
+  return content.replace(/\s+/gu, " ").trim().toLowerCase();
+}
+
+function duplicateFingerprint(input: {
+  target: MemoryDraft["target"];
+  sourceKind: MemoryDraft["sourceKind"];
+  sourceRef: string | null;
+  content: string;
+}): string {
+  return [
+    input.target,
+    input.sourceKind,
+    input.sourceRef?.trim() || "",
+    normalizeDraftContent(input.content),
+  ].join("|");
+}
+
 export class MemoryDraftNotFoundError extends Error {}
 
 export class MemoryDraftStateError extends Error {}
@@ -198,6 +216,28 @@ export class MemoryDraftService {
 
   async createDraft(input: MemoryDraftCreateRequest): Promise<MemoryDraft> {
     const parsed = MemoryDraftCreateRequestSchema.parse(input);
+    const pendingDrafts = (await this.listDrafts(200)).filter(
+      (draft) => draft.status === "pending",
+    );
+    const nextFingerprint = duplicateFingerprint({
+      target: parsed.target,
+      sourceKind: parsed.sourceKind,
+      sourceRef: parsed.sourceRef ?? null,
+      content: parsed.content,
+    });
+    const duplicate = pendingDrafts.find(
+      (draft) =>
+        duplicateFingerprint({
+          target: draft.target,
+          sourceKind: draft.sourceKind,
+          sourceRef: draft.sourceRef,
+          content: draft.content,
+        }) === nextFingerprint,
+    );
+    if (duplicate) {
+      return duplicate;
+    }
+
     const timestamp = nowIso();
     const record: typeof schema.memoryDrafts.$inferInsert = {
       id: randomUUID(),

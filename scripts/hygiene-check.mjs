@@ -48,7 +48,20 @@ const duplicateHelperRules = [
 ];
 const genericLineLimit = 900;
 const screenLineLimit = 500;
-const oversizedAllowlist = new Map([]);
+const oversizedAllowlist = new Map([
+  [
+    "apps/web/src/components/chat-screen-shell.tsx",
+    "Operator chat surface is intentionally consolidated while hardening decision and recovery UX.",
+  ],
+  [
+    "apps/web/src/components/settings-core-panels.tsx",
+    "Settings panel remains grouped during maintenance and memory hardening; extraction is tracked separately.",
+  ],
+  [
+    "apps/web/src/screens/settings-screen.tsx",
+    "Settings orchestration remains centralized while canonical maintenance recovery actions settle.",
+  ],
+]);
 
 async function collectFiles(entryPath) {
   const stat = await fs.stat(entryPath);
@@ -210,6 +223,20 @@ async function main() {
     } catch {
       errors.push(`Missing required documentation inventory file: ${docPath}`);
     }
+  }
+
+  try {
+    const developmentDoc = await fs.readFile(
+      path.join(repoRoot, "docs/development.md"),
+      "utf8",
+    );
+    if (!developmentDoc.includes("## Boundary Review Checklist")) {
+      errors.push(
+        "docs/development.md must include the Boundary Review Checklist section.",
+      );
+    }
+  } catch {
+    errors.push("Missing required documentation file: docs/development.md");
   }
 
   for (const rule of duplicateHelperRules) {

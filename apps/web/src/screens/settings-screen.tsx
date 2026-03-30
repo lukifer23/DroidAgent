@@ -145,19 +145,28 @@ export function SettingsScreen() {
           : "";
   const memoryPrepareChipClass =
     memoryPrepareState === "completed" || memoryReady ? " ready" : "";
+  const memoryPrepareSkipped = Boolean(
+    memory?.prepareProgressLabel?.toLowerCase().includes("fingerprint current"),
+  );
   const memoryPrepareChipLabel =
     memoryPrepareState === "queued"
-      ? "Queued"
+      ? "Accepted"
       : memoryPrepareState === "running"
-        ? "Indexing"
+        ? "Running"
         : memoryPrepareState === "failed"
           ? "Failed"
-          : memoryReady
-            ? "Live"
-            : "Needs prep";
+          : memoryPrepareState === "completed"
+            ? memoryPrepareSkipped
+              ? "Skipped"
+              : "Completed"
+            : memoryReady
+              ? "Ready"
+              : "Needs prep";
   const memoryPrepareActivityLabel =
     memory?.prepareProgressLabel ??
-    (memoryPrepareState === "completed"
+    (memoryPrepareState === "completed" && memoryPrepareSkipped
+      ? "Semantic memory is already current for this fingerprint."
+      : memoryPrepareState === "completed"
       ? "Semantic memory is ready."
       : memoryPrepareState === "failed"
         ? "The last semantic memory prepare failed."
@@ -311,6 +320,21 @@ export function SettingsScreen() {
     }
   }
 
+  async function handleMaintenanceRecoveryAction(
+    action:
+      | "retryVerify"
+      | "refreshHarnessHealth"
+      | "reconnectResync"
+      | "clearStaleMaintenanceState"
+      | "restartRuntime"
+      | "restartAppShell",
+  ) {
+    await postJson("/api/maintenance/recover", { action });
+    if (wsStatus !== "connected") {
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+  }
+
   async function handleApplyDraft(draft: MemoryDraft) {
     const decision = memoryDraftDecisionById.get(draft.id);
     if (!decision) {
@@ -428,6 +452,7 @@ export function SettingsScreen() {
         handleDismissDraft={handleDismissDraft}
         handlePrepareMemory={handlePrepareMemory}
         handleRunMaintenance={handleRunMaintenance}
+        handleMaintenanceRecoveryAction={handleMaintenanceRecoveryAction}
         handleUpdateDraft={handleUpdateDraft}
         harness={harness}
         hostPressure={hostPressure}

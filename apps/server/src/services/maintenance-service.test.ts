@@ -375,4 +375,72 @@ describe("MaintenanceService", () => {
     expect(failed.active).toBe(false);
     expect(failed.lastError).toMatch(/ollama stop failed/i);
   });
+
+  it("fails restart verification when OpenClaw health checks fail", async () => {
+    const operation = await service.beginOperation({
+      scope: "runtime",
+      action: "restart",
+      requestedFromLocalhost: true,
+    });
+    dependencyMocks.openclawService.status.mockRejectedValueOnce(
+      new Error("gateway unavailable"),
+    );
+
+    await expect(service.runDetached(operation.id)).rejects.toThrow(
+      /gateway unavailable/i,
+    );
+
+    const failed = await service.getOperation(operation.id);
+    expect(failed.phase).toBe("failed");
+    expect(failed.active).toBe(false);
+  });
+
+  it("reconciles stale active maintenance on startup", async () => {
+    const staleUpdatedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+    await db.insert(maintenanceOperationsTable).values({
+      id: "stale-op",
+      scope: "app",
+      action: "restart",
+      phase: "verifying",
+      active: true,
+      requestedAt: staleUpdatedAt,
+      startedAt: staleUpdatedAt,
+      updatedAt: staleUpdatedAt,
+      finishedAt: null,
+      requestedByUserId: "owner-1",
+      requestedFromLocalhost: true,
+      message: "stuck",
+      lastError: null,
+    });
+
+    const reconciled = await service.reconcileStartupState();
+    expect(reconciled?.phase).toBe("failed");
+    expect(reconciled?.active).toBe(false);
+    expect(reconciled?.lastError).toMatch(/stale maintenance state/i);
+  });
+
+  it("retries verification for an active verifying operation", async () => {
+    const operation = await service.beginOperation({
+      scope: "app",
+      action: "restart",
+      requestedFromLocalhost: true,
+    });
+    await service.markPhase(operation.id, "verifying", "Waiting for health.");
+
+    const completed = await service.retryVerification();
+    expect(completed.phase).toBe("completed");
+    expect(completed.active).toBe(false);
+  });
+
+  it("rejects clearing stale state for fresh active maintenance", async () => {
+    const operation = await service.beginOperation({
+      scope: "app",
+      action: "restart",
+      requestedFromLocalhost: true,
+    });
+
+    await expect(service.clearStaleState()).rejects.toThrow(/still fresh/i);
+    const current = await service.getOperation(operation.id);
+    expect(current.active).toBe(true);
+  });
 });

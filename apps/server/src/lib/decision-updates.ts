@@ -12,23 +12,28 @@ export async function publishDecisionEffects(
   publisher: DecisionPublisher,
   decision: DecisionRecord,
 ): Promise<void> {
+  const tasks: Array<Promise<void>> = [publisher.publishDecisionsUpdated()];
+
   if (decision.kind === "execApproval") {
-    await publisher.publishApprovalsUpdated();
+    tasks.push(publisher.publishApprovalsUpdated());
+    await Promise.all(tasks);
     return;
   }
 
   if (decision.kind === "memoryDraftReview") {
-    await Promise.all([
+    tasks.push(
       publisher.publishMemoryDraftsUpdated(),
       publisher.publishMemoryUpdated(),
-    ]);
+    );
+    await Promise.all(tasks);
     return;
   }
 
   if (decision.kind === "channelPairing") {
-    await publisher.publishChannelUpdated();
+    tasks.push(publisher.publishChannelUpdated());
+    await Promise.all(tasks);
     return;
   }
 
-  await publisher.publishDecisionsUpdated();
+  await Promise.all(tasks);
 }

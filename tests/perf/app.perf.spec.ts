@@ -96,7 +96,11 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
     name: "memory_prepare_accepted_ms",
     durationMs: prepareResponse.durationMs,
   });
-  await expect(memoryCard.getByText("Semantic memory is ready.")).toBeVisible({
+  await expect(
+    memoryCard.getByText(
+      /Semantic memory is ready\.|Semantic memory prepare skipped \(fingerprint current\)\./,
+    ),
+  ).toBeVisible({
     timeout: 45_000,
   });
   await expect(

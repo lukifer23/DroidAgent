@@ -239,7 +239,7 @@ describe("MemoryPrepareService", () => {
 
     expect(mocks.prepareSemanticMemory).not.toHaveBeenCalled();
     expect(mocks.state.prepareStatus.progressLabel).toBe(
-      "Semantic memory is ready.",
+      "Semantic memory prepare skipped (fingerprint current).",
     );
     expect(finish).toHaveBeenCalledWith(
       expect.objectContaining({

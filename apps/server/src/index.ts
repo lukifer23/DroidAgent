@@ -394,15 +394,15 @@ app.post("/api/approvals/:approvalId", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const actor = await getDecisionActor(c);
-  const body = (await c.req.json()) as { resolution: "approved" | "denied" };
+  const body = DecisionResolveRequestSchema.parse(await c.req.json());
   const approvalId = c.req.param("approvalId");
-  await decisionService.resolveApprovalDecision(
+  const decision = await decisionService.resolveApprovalDecision(
     approvalId,
     body.resolution,
     actor,
   );
-  await websocketHub.publishApprovalsUpdated();
-  return c.json({ ok: true });
+  await publishDecisionEffects(websocketHub, decision);
+  return c.json(decision);
 });
 
 app.get("/api/decisions", async (c) => {
@@ -675,6 +675,7 @@ void (async () => {
     } else {
       await startupService.restore();
     }
+    await maintenanceService.reconcileStartupState();
     await memoryPrepareService.resumePendingPrepare();
     await requestPathWarmupPromise;
     void warmRequestPathCaches(false);

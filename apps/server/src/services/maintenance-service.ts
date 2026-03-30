@@ -33,6 +33,7 @@ const MAINTENANCE_STATE_PATH = path.join(
   paths.stateDir,
   "maintenance-status.json",
 );
+const MAINTENANCE_STALE_OPERATION_MS = 3 * 60_000;
 
 function appendMaintenanceLog(message: string): void {
   fs.appendFileSync(
@@ -208,6 +209,30 @@ export class MaintenanceService {
     });
   }
 
+  private isOperationStale(operation: MaintenanceOperation): boolean {
+    const updatedAtMs = Date.parse(operation.updatedAt);
+    if (!Number.isFinite(updatedAtMs)) {
+      return true;
+    }
+    return Date.now() - updatedAtMs > MAINTENANCE_STALE_OPERATION_MS;
+  }
+
+  async reconcileStartupState(): Promise<MaintenanceOperation | null> {
+    const current = await this.getCurrentOperation();
+    if (!current?.active) {
+      return null;
+    }
+    if (!this.isOperationStale(current)) {
+      return current;
+    }
+    return await this.failOperation(
+      current.id,
+      new Error(
+        "Recovered stale maintenance state after restart. Retry maintenance from the dashboard.",
+      ),
+    );
+  }
+
   async assertAllowsNewWork(kind: "chat" | "job" | "terminal"): Promise<void> {
     const current = await this.getCurrentOperation();
     if (!current?.active) {
@@ -322,6 +347,52 @@ export class MaintenanceService {
     });
   }
 
+  private async verifyCoreServicesHealthy(timeoutMs = SERVER_READY_TIMEOUT_MS): Promise<void> {
+    await waitForHealthcheck(
+      `http://127.0.0.1:${SERVER_PORT}/api/health`,
+      timeoutMs,
+    );
+    const restoreDeadline = Date.now() + timeoutMs;
+    while (Date.now() < restoreDeadline) {
+      const openclawStatus = await openclawService.status();
+      if (openclawStatus.state === "running") {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, SERVICE_READY_POLL_MS));
+    }
+    throw new Error("OpenClaw did not report healthy before verification timed out.");
+  }
+
+  async retryVerification(): Promise<MaintenanceOperation> {
+    const operation = await this.getCurrentOperation();
+    if (!operation || operation.phase !== "verifying") {
+      throw new Error("No active maintenance verification is pending.");
+    }
+    await this.verifyCoreServicesHealthy();
+    return await this.completeOperation(
+      operation.id,
+      "Maintenance verification completed and core services are healthy.",
+    );
+  }
+
+  async clearStaleState(): Promise<MaintenanceOperation | null> {
+    const current = await this.getCurrentOperation();
+    if (!current?.active) {
+      return null;
+    }
+    if (!this.isOperationStale(current)) {
+      throw new Error(
+        "Active maintenance is still fresh. Clear stale state is only available for stranded operations.",
+      );
+    }
+    return await this.failOperation(
+      current.id,
+      new Error(
+        "Cleared stale maintenance state by operator action.",
+      ),
+    );
+  }
+
   async drainLiveWork(operationId: string): Promise<void> {
     await this.markPhase(
       operationId,
@@ -417,23 +488,12 @@ export class MaintenanceService {
         "verifying",
         "Waiting for DroidAgent and OpenClaw to become healthy.",
       );
-      await waitForHealthcheck(
-        `http://127.0.0.1:${SERVER_PORT}/api/health`,
-        SERVER_READY_TIMEOUT_MS,
-      );
-      const restoreDeadline = Date.now() + SERVER_READY_TIMEOUT_MS;
-      while (Date.now() < restoreDeadline) {
-        const [openclawStatus, maintenanceStatus] = await Promise.all([
-          openclawService.status(),
-          this.getOperation(operationId),
-        ]);
-        if (
-          openclawStatus.state === "running" &&
-          maintenanceStatus.phase === "verifying"
-        ) {
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, SERVICE_READY_POLL_MS));
+      await this.verifyCoreServicesHealthy();
+      const latest = await this.getOperation(operationId);
+      if (latest.phase !== "verifying" || !latest.active) {
+        throw new Error(
+          "Maintenance verification lost operation ownership before completion.",
+        );
       }
 
       if (operation.scope === "remote") {

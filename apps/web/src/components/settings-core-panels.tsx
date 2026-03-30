@@ -10,6 +10,32 @@ import { postJson } from "../lib/api";
 import { formatHostBytes, formatTokenBudget } from "../lib/formatters";
 import type { SettingsCorePanelsProps } from "./settings-panel-types";
 
+function memoryTargetLabel(target: MemoryDraft["target"]): string {
+  if (target === "preferences") {
+    return "PREFERENCES.md";
+  }
+  if (target === "todayNote") {
+    return "Today note";
+  }
+  return "MEMORY.md";
+}
+
+function memorySourceLabel(draft: MemoryDraft): string {
+  if (draft.sourceLabel?.trim()) {
+    return draft.sourceLabel.trim();
+  }
+  if (draft.sourceKind === "chatMessage") {
+    return "Chat message";
+  }
+  if (draft.sourceKind === "fileSelection") {
+    return "File selection";
+  }
+  if (draft.sourceKind === "memoryFlush") {
+    return "Memory flush";
+  }
+  return "Manual";
+}
+
 function SettingsOverviewRail({
   overviewCards,
 }: Pick<SettingsCorePanelsProps, "overviewCards">) {
@@ -274,9 +300,14 @@ function MaintenancePanel({
   localhostMaintenance,
   runAction,
   handleRunMaintenance,
+  handleMaintenanceRecoveryAction,
 }: Pick<
   SettingsCorePanelsProps,
-  "maintenance" | "localhostMaintenance" | "runAction" | "handleRunMaintenance"
+  | "maintenance"
+  | "localhostMaintenance"
+  | "runAction"
+  | "handleRunMaintenance"
+  | "handleMaintenanceRecoveryAction"
 >) {
   return (
     <article className="panel-card">
@@ -357,6 +388,72 @@ function MaintenancePanel({
           Drain Only
         </button>
       </div>
+      <details className="message-details">
+        <summary>Recovery actions</summary>
+        <div className="button-row">
+          <button
+            className="secondary"
+            onClick={() =>
+              void runAction(async () => {
+                await handleMaintenanceRecoveryAction("retryVerify");
+              }, "Verification retry requested.")
+            }
+          >
+            Retry verify
+          </button>
+          <button
+            className="secondary"
+            onClick={() =>
+              void runAction(async () => {
+                await handleMaintenanceRecoveryAction("refreshHarnessHealth");
+              }, "Harness health refresh requested.")
+            }
+          >
+            Refresh harness health
+          </button>
+          <button
+            className="secondary"
+            onClick={() =>
+              void runAction(async () => {
+                await handleMaintenanceRecoveryAction("reconnectResync");
+              }, "Realtime resync requested.")
+            }
+          >
+            Reconnect/resync
+          </button>
+          <button
+            className="secondary"
+            onClick={() =>
+              void runAction(async () => {
+                await handleMaintenanceRecoveryAction("clearStaleMaintenanceState");
+              }, "Stale maintenance state cleared.")
+            }
+          >
+            Clear stale state
+          </button>
+          <button
+            className="secondary"
+            onClick={() =>
+              void runAction(async () => {
+                await handleMaintenanceRecoveryAction("restartRuntime");
+              }, "Runtime restart requested.")
+            }
+          >
+            Restart runtime
+          </button>
+          <button
+            className="secondary"
+            disabled={!localhostMaintenance}
+            onClick={() =>
+              void runAction(async () => {
+                await handleMaintenanceRecoveryAction("restartAppShell");
+              }, "App shell restart requested.")
+            }
+          >
+            Restart app shell
+          </button>
+        </div>
+      </details>
       <small>
         New chat, job, and terminal work is blocked while maintenance is active.
         Existing state recovers through websocket resync after the host is steady
@@ -741,11 +838,17 @@ function MemoryReviewQueuePanel({
             <article key={draft.id} className="panel-card compact">
               <strong>{draft.title ?? "Untitled draft"}</strong>
               <small>
-                {draft.target} • {draft.sourceLabel ?? draft.sourceKind} •{" "}
-                {new Date(draft.updatedAt).toLocaleString()}
+                Draft created {new Date(draft.createdAt).toLocaleString()} • target{" "}
+                {memoryTargetLabel(draft.target)}
               </small>
               <small>
-                Decision: {memoryDraftDecisionById.get(draft.id)?.id ?? "pending"}
+                Source {memorySourceLabel(draft)} •{" "}
+                {draft.sourceRef ? `ref ${draft.sourceRef}` : "no source ref"}
+                {draft.sessionId ? ` • session ${draft.sessionId}` : ""}
+              </small>
+              <small>
+                Draft status pending • decision{" "}
+                {memoryDraftDecisionById.get(draft.id)?.id ?? "pending"}
               </small>
               {edit ? (
                 <DraftEditFields
@@ -824,6 +927,7 @@ export function SettingsCorePanels(props: SettingsCorePanelsProps) {
           tailscaleStatus={props.tailscaleStatus}
         />
         <MaintenancePanel
+          handleMaintenanceRecoveryAction={props.handleMaintenanceRecoveryAction}
           handleRunMaintenance={props.handleRunMaintenance}
           localhostMaintenance={props.localhostMaintenance}
           maintenance={props.maintenance}

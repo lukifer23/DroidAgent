@@ -446,6 +446,7 @@ test("opens a suggested shell block in the terminal without executing it", async
     hasText: "Runnable shell example:",
   });
   await expect(assistantMessage).toBeVisible();
+  await assistantMessage.locator("summary", { hasText: "More" }).click();
   await assistantMessage.getByRole("button", { name: "Open in Terminal" }).click();
 
   await expect(

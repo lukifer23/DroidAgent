@@ -417,6 +417,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
             payload.type === "context.updated" ||
             payload.type === "memory.updated" ||
             payload.type === "memoryDrafts.updated" ||
+            payload.type === "decision.updated" ||
+            payload.type === "decisions.updated" ||
+            payload.type === "approval.updated" ||
+            payload.type === "approvals.updated" ||
             payload.type === "maintenance.updated"
           ) {
             syncDashboardSnapshot();

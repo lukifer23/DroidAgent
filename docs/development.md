@@ -64,3 +64,13 @@ pnpm verify:full
 3. Run `pnpm perf:report`, `pnpm perf:baseline`, and `pnpm perf:check`.
 4. Review `artifacts/perf/` and the Settings diagnostics card for regressions.
 5. Update docs when commands, routes, supported operational flows, or perf budgets change.
+
+## Boundary Review Checklist
+
+For PRs touching sessions, approvals, pairing, websocket semantics, maintenance lifecycle, or origin/canonical access:
+
+1. Confirm the change does not create a second state machine for session lifecycle, approvals, or pairing.
+2. Confirm owner-gated mutations still route through `decisionService`.
+3. Confirm browser clients still consume DroidAgent wrapper surfaces, not raw OpenClaw control semantics.
+4. Confirm websocket + dashboard convergence still has one canonical refresh path.
+5. Update `docs/surface-inventory.md` whenever a public route/event compatibility alias is added or changed.

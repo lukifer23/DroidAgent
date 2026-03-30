@@ -700,19 +700,15 @@ export class WebsocketHub {
 
       if (command.type === "approval.resolve") {
         const actor = this.socketActors.get(ws);
-        if (actor) {
-          await decisionService.resolveApprovalDecision(
-            command.payload.approvalId,
-            command.payload.resolution,
-            actor,
-          );
-        } else {
-          await harnessService.resolveApproval(
-            command.payload.approvalId,
-            command.payload.resolution,
-          );
+        if (!actor) {
+          throw new Error("Decision resolution requires an authenticated session.");
         }
-        await this.publishApprovalsUpdated();
+        const decision = await decisionService.resolveApprovalDecision(
+          command.payload.approvalId,
+          command.payload.resolution,
+          actor,
+        );
+        await publishDecisionEffects(this, decision);
         return;
       }
 

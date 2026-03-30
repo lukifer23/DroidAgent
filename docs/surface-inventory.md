@@ -64,6 +64,9 @@ This file is the canonical inventory for public surfaces and major internal data
 - `/api/channels/signal/pairing/resolve`
   - public compatibility for Signal pairing
   - resolution still flows through the shared decision ledger before forwarding to OpenClaw
+- `/api/channels/signal/pairing/approve`
+  - compatibility alias for older clients
+  - internally normalized to approved resolution through the same decision ledger
 - `approval.*`, `memoryDrafts.updated`, and `channel.updated`
   - retained during migration
   - `decision.*` is the authoritative owner-action stream

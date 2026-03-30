@@ -50,20 +50,26 @@ export function useDecisionActions(decisions: DecisionRecord[]) {
   const resolveApproval = useCallback(
     async (approvalId: string, resolution: "approved" | "denied") => {
       const decision = getDecisionByApprovalId(decisions, approvalId);
-      if (decision) {
-        await resolveDecision(decision, resolution);
-        return;
-      }
+      const decisionId = decision?.id ?? `exec:${approvalId}`;
 
       try {
-        await postJson(`/api/approvals/${encodeURIComponent(approvalId)}`, {
+        await postJson<DecisionRecord>(
+          `/api/decisions/${encodeURIComponent(decisionId)}/resolve`,
+          {
           resolution,
-        });
+          expectedUpdatedAt: null,
+          },
+        );
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) {
+          await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+        }
+        throw error;
       } finally {
         await syncDashboardFallback();
       }
     },
-    [decisions, resolveDecision, syncDashboardFallback],
+    [decisions, queryClient, syncDashboardFallback],
   );
 
   return {

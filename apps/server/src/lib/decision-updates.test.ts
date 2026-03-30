@@ -41,19 +41,19 @@ function createDecision(
 }
 
 describe("publishDecisionEffects", () => {
-  it("publishes only approval updates for exec approvals", async () => {
+  it("publishes decisions and approval updates for exec approvals", async () => {
     const publisher = createPublisher();
 
     await publishDecisionEffects(publisher, createDecision("execApproval"));
 
     expect(publisher.publishApprovalsUpdated).toHaveBeenCalledTimes(1);
+    expect(publisher.publishDecisionsUpdated).toHaveBeenCalledTimes(1);
     expect(publisher.publishMemoryDraftsUpdated).not.toHaveBeenCalled();
     expect(publisher.publishMemoryUpdated).not.toHaveBeenCalled();
     expect(publisher.publishChannelUpdated).not.toHaveBeenCalled();
-    expect(publisher.publishDecisionsUpdated).not.toHaveBeenCalled();
   });
 
-  it("publishes memory and draft updates together for memory review decisions", async () => {
+  it("publishes decisions, memory, and draft updates for memory review decisions", async () => {
     const publisher = createPublisher();
 
     await publishDecisionEffects(
@@ -63,9 +63,24 @@ describe("publishDecisionEffects", () => {
 
     expect(publisher.publishMemoryDraftsUpdated).toHaveBeenCalledTimes(1);
     expect(publisher.publishMemoryUpdated).toHaveBeenCalledTimes(1);
+    expect(publisher.publishDecisionsUpdated).toHaveBeenCalledTimes(1);
     expect(publisher.publishApprovalsUpdated).not.toHaveBeenCalled();
     expect(publisher.publishChannelUpdated).not.toHaveBeenCalled();
-    expect(publisher.publishDecisionsUpdated).not.toHaveBeenCalled();
+  });
+
+  it("publishes decisions and channel updates for pairing decisions", async () => {
+    const publisher = createPublisher();
+
+    await publishDecisionEffects(
+      publisher,
+      createDecision("channelPairing"),
+    );
+
+    expect(publisher.publishChannelUpdated).toHaveBeenCalledTimes(1);
+    expect(publisher.publishDecisionsUpdated).toHaveBeenCalledTimes(1);
+    expect(publisher.publishApprovalsUpdated).not.toHaveBeenCalled();
+    expect(publisher.publishMemoryDraftsUpdated).not.toHaveBeenCalled();
+    expect(publisher.publishMemoryUpdated).not.toHaveBeenCalled();
   });
 
   it("falls back to the generic decision update path for unknown future kinds", async () => {

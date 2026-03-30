@@ -57,6 +57,15 @@ export interface SettingsCorePanelsProps {
     scope: "app" | "runtime" | "remote",
     action: "restart" | "drain-only",
   ) => Promise<void>;
+  handleMaintenanceRecoveryAction: (
+    action:
+      | "retryVerify"
+      | "refreshHarnessHealth"
+      | "reconnectResync"
+      | "clearStaleMaintenanceState"
+      | "restartRuntime"
+      | "restartAppShell",
+  ) => Promise<void>;
   memory: DashboardState["memory"] | undefined;
   harness: DashboardState["harness"] | undefined;
   memoryPrepareRowClass: string;

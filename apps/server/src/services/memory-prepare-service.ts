@@ -144,7 +144,8 @@ export class MemoryPrepareService {
           state: "completed",
           startedAt,
           ...finished,
-          progressLabel: "Semantic memory is ready.",
+          progressLabel:
+            "Semantic memory prepare skipped (fingerprint current).",
           error: null,
         });
         metric.finish({
