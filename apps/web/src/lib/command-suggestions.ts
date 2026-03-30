@@ -25,3 +25,14 @@ export function extractRunnableCommand(
 
   return normalized.length > 0 ? normalized : null;
 }
+
+export function buildRunInChatPrompt(command: string): string {
+  const normalized = command.trim();
+  return [
+    "Run this exact workspace command now and continue using the real output. Do not describe the command instead of running it. If approval is needed, request it and wait.",
+    "",
+    "```sh",
+    normalized,
+    "```",
+  ].join("\n");
+}

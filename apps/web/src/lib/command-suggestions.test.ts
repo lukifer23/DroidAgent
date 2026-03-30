@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { extractRunnableCommand } from "./command-suggestions";
+import {
+  buildRunInChatPrompt,
+  extractRunnableCommand,
+} from "./command-suggestions";
 
 describe("extractRunnableCommand", () => {
   it("returns null for non-shell code blocks", () => {
@@ -18,5 +21,12 @@ describe("extractRunnableCommand", () => {
 
   it("returns null for empty shell blocks", () => {
     expect(extractRunnableCommand("zsh", "   \n")).toBeNull();
+  });
+
+  it("builds a deterministic run-in-chat prompt", () => {
+    expect(buildRunInChatPrompt("printf 'hi'")).toContain("```sh\nprintf 'hi'\n```");
+    expect(buildRunInChatPrompt("printf 'hi'")).toContain(
+      "Run this exact workspace command now and continue using the real output.",
+    );
   });
 });

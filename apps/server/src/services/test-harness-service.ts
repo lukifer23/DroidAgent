@@ -41,6 +41,28 @@ function cloneMessages(messages: ChatMessage[]): ChatMessage[] {
 }
 
 function buildHarnessReply(message: string, attachmentCount: number): string {
+  const runInChatMatch = message.match(
+    /Run this exact workspace command now and continue using the real output[\s\S]*?```(?:bash|console|shell|sh|zsh)\n([\s\S]*?)\n```/i,
+  );
+  if (runInChatMatch) {
+    const command = runInChatMatch[1]?.trim() ?? "";
+    const printfMatch = command.match(/printf\s+['"]([^'"]+)['"]/i);
+    const output = printfMatch?.[1] ?? `Executed: ${command}`;
+    return [
+      "I ran the exact command and continued from the real result.",
+      "",
+      "Command:",
+      "```sh",
+      command,
+      "```",
+      "",
+      "Output:",
+      "```text",
+      output,
+      "```",
+    ].join("\n");
+  }
+
   if (/shell block/i.test(message)) {
     return [
       "Runnable shell example:",
@@ -236,19 +258,39 @@ export class TestHarnessService implements HarnessAdapter {
 
     const runId = randomUUID();
     const responseText = buildHarnessReply(message, request.attachments.length);
+    const runInChatMatch = message.match(
+      /Run this exact workspace command now and continue using the real output[\s\S]*?```(?:bash|console|shell|sh|zsh)\n([\s\S]*?)\n```/i,
+    );
     const chunks = chunkText(responseText);
     const activeRun: ActiveRun = {
       timer: null,
       aborted: false
     };
     this.activeRuns.set(sessionKey, activeRun);
+    if (runInChatMatch) {
+      await relay.onState?.({
+        stage: "tool_call",
+        label: "Running suggested command",
+        detail: "The test harness is executing the suggested workspace command.",
+        toolName: "exec",
+        active: true,
+      });
+    }
+
     await relay.onState?.({
       stage: "streaming",
-      label: request.attachments.length > 0 ? "Analyzing attachments" : "Reply streaming",
+      label:
+        request.attachments.length > 0
+          ? "Analyzing attachments"
+          : runInChatMatch
+            ? "Returning command output"
+            : "Reply streaming",
       detail:
         request.attachments.length > 0
           ? `Inspecting ${request.attachments.length} attachment${request.attachments.length === 1 ? "" : "s"}.`
-          : "The test harness started replying.",
+          : runInChatMatch
+            ? "The test harness is returning the real command result back into chat."
+            : "The test harness started replying.",
       active: true,
     });
 

@@ -18,8 +18,6 @@ import type {
   DashboardState,
   HostPressureContributor,
   HostPressureRecoveryResult,
-  JobRecord,
-  JobOutputSnapshot,
   LatencySummary,
   SessionSummary,
 } from "@droidagent/shared";
@@ -33,7 +31,10 @@ import {
   useDroidAgentApp,
 } from "../app-context";
 import { api, postFormData, postJson } from "../lib/api";
-import { extractRunnableCommand } from "../lib/command-suggestions";
+import {
+  buildRunInChatPrompt,
+  extractRunnableCommand,
+} from "../lib/command-suggestions";
 import { useChatRuns } from "../lib/chat-run-store";
 import { useStreamingRuns } from "../lib/chat-stream-store";
 import { formatTokenBudget } from "../lib/formatters";
@@ -122,51 +123,6 @@ function formatHostRatio(value: number | null | undefined): string {
   return `${Math.round(value * 100)}%`;
 }
 
-function renderLogTail(value: string, maxChars = 8_000): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-
-  return `...log trimmed in browser (${value.length - maxChars} chars hidden)\n${value.slice(-maxChars)}`;
-}
-
-function buildCommandRelayPrompt(
-  job: JobRecord,
-  output: JobOutputSnapshot,
-): string {
-  const sections = [
-    "Approved workspace command finished. Use the real command result below to continue the same task and answer the operator directly.",
-    `Command: \`${job.command}\``,
-    `Exit code: ${job.exitCode ?? "unknown"}`,
-  ];
-
-  if (output.stdout.trim()) {
-    sections.push(
-      `Stdout:\n\`\`\`text\n${renderLogTail(output.stdout, 3_200)}\n\`\`\``,
-    );
-  } else {
-    sections.push("Stdout: (empty)");
-  }
-
-  if (output.stderr.trim()) {
-    sections.push(
-      `Stderr:\n\`\`\`text\n${renderLogTail(output.stderr, 2_000)}\n\`\`\``,
-    );
-  }
-
-  if (output.truncated) {
-    sections.push(
-      "Note: output was truncated for chat context. Use the result that is present instead of claiming a command failed silently.",
-    );
-  }
-
-  sections.push(
-    "Do not claim you already ran any additional command unless you actually invoke another tool or command now.",
-  );
-
-  return sections.join("\n\n");
-}
-
 function describeChatFeedback(
   feedback: ChatSessionFeedback | null | undefined,
 ): { firstToken: string; reply: string } {
@@ -193,129 +149,6 @@ function describeChatFeedback(
             ? "Done"
             : "In progress",
   };
-}
-
-function commandRelayTone(
-  commandJob: JobRecord,
-  commandRelayStatus: CommandRelayStatus,
-): "active" | "complete" | "failed" {
-  if (
-    commandJob.status === "failed" ||
-    commandJob.status === "cancelled" ||
-    commandRelayStatus === "failed"
-  ) {
-    return "failed";
-  }
-
-  if (commandRelayStatus === "complete") {
-    return "complete";
-  }
-
-  return "active";
-}
-
-function commandRelaySummary(
-  commandJob: JobRecord,
-  commandRelayStatus: CommandRelayStatus,
-): { title: string; detail: string } {
-  if (commandJob.status === "queued") {
-    return {
-      title: "Workspace command queued",
-      detail:
-        "DroidAgent queued the approved command and will feed the result back into this chat when it finishes.",
-    };
-  }
-
-  if (commandJob.status === "running") {
-    return {
-      title: "Workspace command running",
-      detail:
-        "The approved command is running in the workspace. Live output is shown here and the finished result will be handed back to DroidAgent.",
-    };
-  }
-
-  if (commandRelayStatus === "relaying") {
-    return {
-      title: "Sending command result back into DroidAgent",
-      detail:
-        "The workspace command finished. DroidAgent is posting the real command output back into the same chat so the agent can continue.",
-    };
-  }
-
-  if (commandRelayStatus === "complete") {
-    return {
-      title: "Command result returned to chat",
-      detail:
-        "The finished workspace command was handed back into DroidAgent. The next assistant reply should continue from that real output.",
-    };
-  }
-
-  if (commandJob.status === "cancelled") {
-    return {
-      title: "Workspace command cancelled",
-      detail:
-        "The approved command was cancelled before the result could be handed back into chat.",
-    };
-  }
-
-  return {
-    title: "Workspace command failed",
-    detail:
-      "The approved command failed. Review the output below before deciding whether to retry or continue manually.",
-  };
-}
-
-function CommandRelayCard({
-  commandJob,
-  commandRelayError,
-  commandRelayStatus,
-  onClear,
-  output,
-}: {
-  commandJob: JobRecord;
-  commandRelayError: string | null;
-  commandRelayStatus: CommandRelayStatus;
-  onClear: () => void;
-  output: JobOutputSnapshot | undefined;
-}) {
-  const summary = commandRelaySummary(commandJob, commandRelayStatus);
-  const tone = commandRelayTone(commandJob, commandRelayStatus);
-
-  return (
-    <article className={`run-state-card chat-inline-job-card ${tone}`}>
-      <div className="chat-inline-job-head">
-        <div>
-          <strong>{summary.title}</strong>
-          <p>{commandJob.command}</p>
-        </div>
-        <button type="button" className="secondary" onClick={onClear}>
-          Clear
-        </button>
-      </div>
-      <div className="chat-inline-job-meta">
-        <span>
-          {commandJob.status} • {commandJob.cwd}
-        </span>
-        {commandJob.lastLine ? <span>{commandJob.lastLine}</span> : null}
-      </div>
-      <div className="operator-side-inline-meta">
-        <span>{summary.detail}</span>
-        {commandRelayError ? <span>{commandRelayError}</span> : null}
-      </div>
-      {output?.stdout || output?.stderr ? (
-        <pre className="chat-inline-job-output">
-          {renderLogTail(
-            [
-              output.stdout ? `$ ${commandJob.command}\n${output.stdout}` : `$ ${commandJob.command}`,
-              output.stderr ? `stderr:\n${output.stderr}` : "",
-            ]
-              .filter(Boolean)
-              .join("\n\n"),
-          )}
-        </pre>
-      ) : null}
-    </article>
-  );
 }
 
 function PendingAssistantCard({
@@ -365,13 +198,6 @@ function PendingAssistantCard({
     </article>
   );
 }
-
-type CommandRelayStatus =
-  | "idle"
-  | "awaiting_job"
-  | "relaying"
-  | "complete"
-  | "failed";
 
 function shouldShowCopyButton(message: ChatMessage): boolean {
   if (!message.text.trim()) {
@@ -845,7 +671,6 @@ export function ChatScreen() {
     sendRealtimeCommand,
     trackChatSubmit,
     trackChatFailure,
-    trackJobStart,
     runAction,
     wsStatus,
   } = useDroidAgentApp();
@@ -860,20 +685,9 @@ export function ChatScreen() {
     [],
   );
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
-  const [commandJobId, setCommandJobId] = useState<string | null>(null);
-  const [commandRelaySessionId, setCommandRelaySessionId] = useState<
-    string | null
-  >(null);
-  const [commandRelayStatus, setCommandRelayStatus] = useState<
-    CommandRelayStatus
-  >("idle");
-  const [commandRelayError, setCommandRelayError] = useState<string | null>(
-    null,
-  );
   const [expandedImage, setExpandedImage] = useState<ExpandedImageState | null>(
     null,
   );
-  const relayedCommandJobsRef = useRef<Set<string>>(new Set());
 
   const dashboardSessions = dashboard?.sessions ?? [];
   const archivedSessionsQuery = useQuery({
@@ -885,7 +699,6 @@ export function ChatScreen() {
   const approvals = dashboard?.approvals ?? [];
   const providers = dashboard?.providers ?? [];
   const runtimes = dashboard?.runtimes ?? [];
-  const jobs = dashboard?.jobs ?? [];
   const sessions = dashboardSessions;
   const archivedSessions = archivedSessionsQuery.data ?? [];
   const activeSession =
@@ -926,7 +739,6 @@ export function ChatScreen() {
   const pendingDraftCount = memoryDrafts.filter(
     (draft) => draft.status === "pending",
   ).length;
-  const commandJob = jobs.find((job) => job.id === commandJobId) ?? null;
   const sessionOptions = useMemo(() => [...sessions], [sessions]);
   const showSessionSwitcher = sessionOptions.length > 1;
   const showTranscriptAlerts = maintenanceActive;
@@ -989,21 +801,6 @@ export function ChatScreen() {
       ]) ?? [])
     : [];
 
-  const commandJobOutputQuery = useQuery({
-    queryKey: ["jobs", commandJobId, "output"],
-    queryFn: () =>
-      api<JobOutputSnapshot>(
-        `/api/jobs/${encodeURIComponent(commandJobId ?? "")}/output`,
-      ),
-    enabled: Boolean(commandJobId),
-    refetchInterval:
-      commandJob &&
-      (commandJob.status === "queued" || commandJob.status === "running")
-        ? 1_000
-        : false,
-    staleTime: 1_000,
-  });
-
   const messages = useMemo(
     () => historyQuery.data ?? cachedMessages,
     [cachedMessages, historyQuery.data],
@@ -1048,19 +845,11 @@ export function ChatScreen() {
         });
       }
 
-      if (commandJob) {
-        metrics.push({
-          label: "Command",
-          value: commandJob.status,
-        });
-      }
-
       return metrics;
     },
     [
       activeRun?.active,
       chatFeedback,
-      commandJob,
       liveMetricMap,
       selectedRunFeedback.firstToken,
       selectedRunFeedback.reply,
@@ -1102,13 +891,6 @@ export function ChatScreen() {
   ].filter(Boolean) as string[];
 
   useEffect(() => {
-    setCommandJobId(null);
-    setCommandRelaySessionId(null);
-    setCommandRelayStatus("idle");
-    setCommandRelayError(null);
-  }, [selectedSessionKey]);
-
-  useEffect(() => {
     const container = threadRef.current;
     if (!container) {
       return;
@@ -1127,85 +909,6 @@ export function ChatScreen() {
       window.cancelAnimationFrame(handle);
     };
   }, [messages.length, selectedSessionKey, streaming?.text, activeRun?.updatedAt]);
-
-  useEffect(() => {
-    if (!commandJobId || !commandJob || !commandRelaySessionId) {
-      return;
-    }
-
-    if (
-      commandJob.status === "queued" ||
-      commandJob.status === "running" ||
-      commandRelayStatus === "relaying" ||
-      commandRelayStatus === "complete" ||
-      relayedCommandJobsRef.current.has(commandJobId)
-    ) {
-      return;
-    }
-
-    let cancelled = false;
-    setCommandRelayStatus("relaying");
-    setCommandRelayError(null);
-
-    void (async () => {
-      try {
-        trackChatSubmit(commandRelaySessionId);
-        const output = await queryClient.fetchQuery({
-          queryKey: ["jobs", commandJobId, "output"],
-          queryFn: () =>
-            api<JobOutputSnapshot>(
-              `/api/jobs/${encodeURIComponent(commandJobId)}/output`,
-            ),
-          staleTime: 0,
-        });
-
-        await postJson(`/api/sessions/${encodeURIComponent(commandRelaySessionId)}/messages`, {
-          text: buildCommandRelayPrompt(commandJob, output),
-          attachments: [],
-        });
-
-        relayedCommandJobsRef.current.add(commandJobId);
-        if (cancelled) {
-          return;
-        }
-        setCommandRelayStatus("complete");
-        await Promise.all([
-          queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-          queryClient.invalidateQueries({
-            queryKey: ["sessions", commandRelaySessionId, "messages"],
-          }),
-        ]);
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        trackChatFailure(
-          commandRelaySessionId,
-          error instanceof Error
-            ? error.message
-            : "Failed to send command output back into chat.",
-        );
-        setCommandRelayStatus("failed");
-        setCommandRelayError(
-          error instanceof Error
-            ? error.message
-            : "Failed to send command output back into chat.",
-        );
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    commandJob,
-    commandJobId,
-    commandRelaySessionId,
-    commandRelayStatus,
-    queryClient,
-    trackChatFailure,
-    trackChatSubmit,
-  ]);
 
   async function uploadFiles(files: File[]) {
     if (files.length === 0) {
@@ -1306,22 +1009,17 @@ export function ChatScreen() {
     if (pressureBlocks) {
       throw new Error(
         hostPressure?.message ??
-          "Host pressure is critical. New jobs are paused until the Mac settles.",
+          "Host pressure is critical. New agent runs are paused until the Mac settles.",
       );
     }
     if (!selectedSessionKey) {
       throw new Error("Pick a chat session before running a command.");
     }
-    const response = await postJson<{ jobId: string }>("/api/jobs", {
-      command,
-      cwd: ".",
+    await sendChatMessage({
+      text: buildRunInChatPrompt(command),
+      attachments: [],
+      clearComposer: false,
     });
-    trackJobStart(response.jobId);
-    setCommandJobId(response.jobId);
-    setCommandRelaySessionId(selectedSessionKey);
-    setCommandRelayStatus("awaiting_job");
-    setCommandRelayError(null);
-    await queryClient.invalidateQueries({ queryKey: ["jobs"] });
   }
 
   function handleOpenInTerminal(command: string) {
@@ -1395,7 +1093,6 @@ export function ChatScreen() {
     setSelectedSessionId(freshSession.id);
     setChatInput("");
     setPendingAttachments([]);
-    setCommandJobId(null);
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
       queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
@@ -1442,10 +1139,6 @@ export function ChatScreen() {
     setSelectedSessionId(replacementSession.id);
     setChatInput("");
     setPendingAttachments([]);
-    setCommandJobId(null);
-    setCommandRelaySessionId(null);
-    setCommandRelayStatus("idle");
-    setCommandRelayError(null);
 
     const archivedSession = await postJson<SessionSummary>(
       `/api/sessions/${encodeURIComponent(closingSessionId)}/archive`,
@@ -1503,9 +1196,13 @@ export function ChatScreen() {
     ]);
   }
 
-  async function handleSendChat() {
-    const nextText = chatInput.trim();
-    const nextAttachments = pendingAttachments;
+  async function sendChatMessage(params: {
+    text: string;
+    attachments: ChatAttachment[];
+    clearComposer: boolean;
+  }) {
+    const nextText = params.text.trim();
+    const nextAttachments = params.attachments;
     if ((!nextText && nextAttachments.length === 0) || !selectedSessionKey) {
       return;
     }
@@ -1544,8 +1241,10 @@ export function ChatScreen() {
     );
 
     trackChatSubmit(selectedSessionKey);
-    setChatInput("");
-    setPendingAttachments([]);
+    if (params.clearComposer) {
+      setChatInput("");
+      setPendingAttachments([]);
+    }
 
     try {
       const sentLive =
@@ -1571,7 +1270,7 @@ export function ChatScreen() {
         queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
         queryClient.invalidateQueries({
           queryKey: ["sessions", selectedSessionKey, "messages"],
-        }),
+          }),
       ]);
     } catch (error) {
       trackChatFailure(
@@ -1584,10 +1283,20 @@ export function ChatScreen() {
         ["sessions", selectedSessionKey, "messages"],
         previousMessages,
       );
-      setChatInput(previousInput);
-      setPendingAttachments(previousAttachments);
+      if (params.clearComposer) {
+        setChatInput(previousInput);
+        setPendingAttachments(previousAttachments);
+      }
       throw error;
     }
+  }
+
+  async function handleSendChat() {
+    await sendChatMessage({
+      text: chatInput,
+      attachments: pendingAttachments,
+      clearComposer: true,
+    });
   }
 
   function handleSubmit(event: FormEvent) {
@@ -1718,8 +1427,7 @@ export function ChatScreen() {
               messages.length === 0 &&
               !streaming &&
               !activeRun?.active &&
-              !chatFeedback &&
-              !commandJob ? (
+              !chatFeedback ? (
                 <article className="panel-card compact">
                   This chat is empty. Start with a prompt, attach files, or restore an archived chat from the rail.
                 </article>
@@ -1765,14 +1473,14 @@ export function ChatScreen() {
                           commandActionDisabledReason={
                             pressureBlocks
                               ? hostPressure?.message ??
-                                "Host pressure is critical. New jobs are paused."
+                                "Host pressure is critical. New agent runs are paused."
                               : null
                           }
                           commandActionsEnabled={!pressureBlocks}
                           onRunCommand={(command) => {
                             void runAction(async () => {
                               await handleRunSuggestedCommand(command);
-                            }, "Command running in chat. DroidAgent will relay the real output back into this session.");
+                            }, "Command sent back into this chat. DroidAgent will execute it inside the live harness.");
                           }}
                           onOpenInTerminal={(command) => {
                             handleOpenInTerminal(command);
@@ -1828,21 +1536,6 @@ export function ChatScreen() {
                       await handleResolveApproval(approvalId, resolution);
                     });
                   }}
-                />
-              ) : null}
-
-              {commandJob ? (
-                <CommandRelayCard
-                  commandJob={commandJob}
-                  commandRelayError={commandRelayError}
-                  commandRelayStatus={commandRelayStatus}
-                  onClear={() => {
-                    setCommandJobId(null);
-                    setCommandRelaySessionId(null);
-                    setCommandRelayStatus("idle");
-                    setCommandRelayError(null);
-                  }}
-                  output={commandJobOutputQuery.data}
                 />
               ) : null}
 
@@ -2104,9 +1797,7 @@ export function ChatScreen() {
             <h3>Ask DroidAgent</h3>
           </div>
           <small>
-            {commandJob
-              ? "Command relay active"
-              : activeRun?.active
+            {activeRun?.active
               ? "Live run"
               : maintenanceActive
                 ? "Maintenance active"
@@ -2138,11 +1829,7 @@ export function ChatScreen() {
 
           <div className="composer-footer">
             <small className="composer-status">
-              {commandJob
-                ? `${commandRelaySummary(commandJob, commandRelayStatus).title} • ${
-                    commandJob.lastLine || commandRelaySummary(commandJob, commandRelayStatus).detail
-                  }`
-                : activeRun?.active
+              {activeRun?.active
                 ? `${activeRun.label}${activeRun.detail ? ` • ${activeRun.detail}` : ""}`
                 : maintenanceActive
                   ? maintenance?.current?.message ??

@@ -309,14 +309,12 @@ test("runs a suggested shell block inside chat", async ({ page }) => {
   await expect(assistantMessage).toBeVisible();
   await assistantMessage.getByRole("button", { name: "Run in Chat" }).click();
 
-  const inlineJobCard = page.locator(".chat-inline-job-card");
-  await expect(inlineJobCard).toBeVisible();
-  await expect(inlineJobCard).toContainText("suggested-job-ok");
   await expect(
     page.locator(".message-card.assistant").filter({
       hasText: /suggested-job-ok/i,
     }).last(),
   ).toBeVisible();
+  await expect(page.locator(".chat-inline-job-card")).toHaveCount(0);
 });
 
 test("creates, closes, and restores chat sessions from the rail", async ({
@@ -389,14 +387,12 @@ test("runs a suggested shell block inside a newly created chat session", async (
   await expect(assistantMessage).toBeVisible();
   await assistantMessage.getByRole("button", { name: "Run in Chat" }).click();
 
-  const inlineJobCard = page.locator(".chat-inline-job-card");
-  await expect(inlineJobCard).toBeVisible();
-  await expect(inlineJobCard).toContainText("suggested-job-ok");
   await expect(
     page.locator(".message-card.assistant").filter({
       hasText: /suggested-job-ok/i,
     }).last(),
   ).toBeVisible();
+  await expect(page.locator(".chat-inline-job-card")).toHaveCount(0);
   await expect(sessionPicker).toHaveValue(activeSessionValue);
 });
 
