@@ -48,16 +48,7 @@ const duplicateHelperRules = [
 ];
 const genericLineLimit = 900;
 const screenLineLimit = 500;
-const oversizedAllowlist = new Map([
-  [
-    "apps/server/src/services/openclaw-service.ts",
-    "OpenClaw adapter still carries the broadest remaining extraction backlog.",
-  ],
-  [
-    "apps/web/src/screens/chat-screen.tsx",
-    "Chat operator surface still owns the largest remaining UI extraction backlog.",
-  ],
-]);
+const oversizedAllowlist = new Map([]);
 
 async function collectFiles(entryPath) {
   const stat = await fs.stat(entryPath);
