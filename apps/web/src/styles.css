@@ -357,6 +357,34 @@ small {
   justify-content: flex-end;
 }
 
+.decision-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.decision-trigger.attention {
+  border-color: rgba(221, 183, 122, 0.34);
+}
+
+.topbar-action-badge {
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 0.42rem;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 0.76rem;
+  line-height: 1;
+}
+
+.topbar-action-badge.warn {
+  background: rgba(221, 183, 122, 0.16);
+  color: var(--accent-strong);
+}
+
 .topbar-actions button,
 .topbar-actions .button-link {
   min-height: 2.18rem;
@@ -1719,7 +1747,8 @@ small {
   gap: 0.24rem;
 }
 
-.message-utility-tray summary {
+.message-utility-toggle {
+  appearance: none;
   cursor: pointer;
   width: fit-content;
   min-height: 1.34rem;
@@ -1730,14 +1759,9 @@ small {
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 600;
-  list-style: none;
 }
 
-.message-utility-tray summary::-webkit-details-marker {
-  display: none;
-}
-
-.message-utility-tray[open] summary {
+.message-utility-tray.open .message-utility-toggle {
   margin-bottom: 0.02rem;
 }
 
@@ -2840,6 +2864,10 @@ label {
   gap: 0.85rem;
 }
 
+.decision-drawer {
+  width: min(100%, 460px);
+}
+
 .drawer-header {
   display: flex;
   align-items: start;
@@ -2876,6 +2904,25 @@ label {
 .host-status-row span,
 .host-status-row small {
   color: var(--muted);
+}
+
+.decision-card {
+  gap: 0.55rem;
+}
+
+.decision-card-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.decision-card .message-details summary {
+  cursor: pointer;
+}
+
+.decision-stack-card {
+  gap: 0.8rem;
 }
 
 .host-status-row.good {

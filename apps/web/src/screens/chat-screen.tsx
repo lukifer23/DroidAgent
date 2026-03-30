@@ -16,6 +16,7 @@ import type {
   ChatMessage,
   ChatMessagePart,
   DashboardState,
+  DecisionRecord,
   HostPressureContributor,
   HostPressureRecoveryResult,
   LatencySample,
@@ -989,21 +990,50 @@ function MessageMemoryActions({
   onAddPreferences: () => void;
   onAddTodayNote: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+
+  const runAndCollapse = (action: () => void) => {
+    action();
+    setExpanded(false);
+  };
+
   return (
-    <details className="message-utility-tray">
-      <summary title="Create a memory draft from this message">Save memory</summary>
-      <div className="message-action-row compact">
-        <button type="button" className="secondary" onClick={onAddMemory}>
+    <div className={`message-utility-tray ${expanded ? "open" : ""}`.trim()}>
+      <button
+        type="button"
+        className="message-utility-toggle"
+        title="Create a memory draft from this message"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        Save memory
+      </button>
+      {expanded ? (
+        <div className="message-action-row compact">
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => runAndCollapse(onAddMemory)}
+          >
           Memory
-        </button>
-        <button type="button" className="secondary" onClick={onAddPreferences}>
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => runAndCollapse(onAddPreferences)}
+          >
           Preferences
-        </button>
-        <button type="button" className="secondary" onClick={onAddTodayNote}>
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => runAndCollapse(onAddTodayNote)}
+          >
           Today Note
-        </button>
-      </div>
-    </details>
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1089,6 +1119,7 @@ export function ChatScreen() {
   const maintenance = dashboard?.maintenance;
   const hostPressure = dashboard?.hostPressure;
   const memoryDrafts = dashboard?.memoryDrafts ?? [];
+  const decisions = dashboard?.decisions ?? [];
   const availableTools = harness?.availableTools ?? [];
   const memory = dashboard?.memory;
   const transportReady = wsStatus === "connected" && Boolean(selectedSessionKey);
@@ -1103,10 +1134,22 @@ export function ChatScreen() {
     Boolean(harness?.configured) &&
     !maintenanceActive;
   const agentReady = harnessReady && !pressureBlocks;
-  const approvalCount = approvals.length;
-  const pendingDraftCount = memoryDrafts.filter(
-    (draft) => draft.status === "pending",
+  const pendingDecisionCount = decisions.filter(
+    (decision) => decision.status === "pending",
   ).length;
+  const pendingDraftCount = decisions.filter(
+    (decision) =>
+      decision.status === "pending" &&
+      decision.kind === "memoryDraftReview" &&
+      decision.sessionId === selectedSessionKey,
+  ).length;
+  const sessionDecisions = decisions.filter(
+    (decision) =>
+      decision.status === "pending" &&
+      (decision.kind === "execApproval" ||
+        (decision.kind === "memoryDraftReview" &&
+          decision.sessionId === selectedSessionKey)),
+  );
   const sessionOptions = useMemo(() => [...sessions], [sessions]);
   const showSessionSwitcher = sessionOptions.length > 1;
   const showTranscriptAlerts = maintenanceActive;
@@ -1127,6 +1170,20 @@ export function ChatScreen() {
           ? approvalsById.get(activeRun.approvalId) ?? null
           : null) ?? (approvals.length === 1 ? approvals[0]! : null))
       : null;
+
+  const handleResolveDecision = useCallback(
+    async (decision: DecisionRecord, resolution: "approved" | "denied") => {
+      await postJson(`/api/decisions/${encodeURIComponent(decision.id)}/resolve`, {
+        resolution,
+        expectedUpdatedAt:
+          decision.kind === "memoryDraftReview"
+            ? decision.sourceUpdatedAt
+            : null,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    [queryClient],
+  );
 
   function updateDashboardSessions(
     updater: (sessions: SessionSummary[]) => SessionSummary[],
@@ -1405,23 +1462,11 @@ export function ChatScreen() {
     approvalId: string,
     resolution: "approved" | "denied",
   ) => {
-    if (
-      transportReady &&
-      sendRealtimeCommand({
-        type: "approval.resolve",
-        payload: {
-          approvalId,
-          resolution,
-        },
-      })
-    ) {
-      return;
-    }
-
     await postJson(`/api/approvals/${encodeURIComponent(approvalId)}`, {
       resolution,
     });
-  }, [sendRealtimeCommand, transportReady]);
+    await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+  }, [queryClient]);
 
   async function handleAbortRun() {
     if (!selectedSessionKey) {
@@ -1839,9 +1884,9 @@ export function ChatScreen() {
             >
               {memory?.semanticReady ? "Memory indexed" : "Memory pending"}
             </span>
-            <span className={`status-chip${approvalCount > 0 ? "" : " ready"}`}>
-              {approvalCount > 0
-                ? `${approvalCount} approval${approvalCount === 1 ? "" : "s"}`
+            <span className={`status-chip${pendingDecisionCount > 0 ? "" : " ready"}`}>
+              {pendingDecisionCount > 0
+                ? `${pendingDecisionCount} decision${pendingDecisionCount === 1 ? "" : "s"}`
                 : `${availableTools.length} tools ready`}
             </span>
           </div>
@@ -1972,7 +2017,7 @@ export function ChatScreen() {
                     })}
                   </div>
 
-                  {message.text.trim() ? (
+              {message.text.trim() ? (
                     <MessageMemoryActions
                       onAddMemory={() =>
                         void runAction(async () => {
@@ -2005,6 +2050,58 @@ export function ChatScreen() {
                   chatFeedback={liveChatFeedback}
                   onResolveApproval={handleResolveApprovalAction}
                 />
+              ) : null}
+
+              {sessionDecisions.length > 0 ? (
+                <article className="panel-card compact decision-stack-card">
+                  <strong>Session decisions</strong>
+                  <small>
+                    Pending owner actions tied to this conversation or live OpenClaw run.
+                  </small>
+                  <div className="stack-list">
+                    {sessionDecisions.map((decision) => (
+                      <article key={decision.id} className="panel-card compact">
+                        <strong>{decision.title}</strong>
+                        <small>{decision.summary}</small>
+                        <div className="button-row">
+                          <button
+                            onClick={() =>
+                              void runAction(async () => {
+                                await handleResolveDecision(decision, "approved");
+                              }, decision.kind === "memoryDraftReview"
+                                ? "Memory draft applied."
+                                : "Decision approved.")
+                            }
+                          >
+                            {decision.kind === "memoryDraftReview" ? "Apply" : "Approve"}
+                          </button>
+                          <button
+                            className="secondary"
+                            onClick={() =>
+                              void runAction(async () => {
+                                await handleResolveDecision(decision, "denied");
+                              }, decision.kind === "memoryDraftReview"
+                                ? "Memory draft dismissed."
+                                : "Decision denied.")
+                            }
+                          >
+                            {decision.kind === "memoryDraftReview" ? "Dismiss" : "Deny"}
+                          </button>
+                          {decision.kind === "memoryDraftReview" ? (
+                            <button
+                              className="secondary"
+                              onClick={() => {
+                                void navigate({ to: "/settings" });
+                              }}
+                            >
+                              Review
+                            </button>
+                          ) : null}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </article>
               ) : null}
 
               {showRecentRunSummaryCard && terminalChatFeedback ? (

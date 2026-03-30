@@ -82,9 +82,11 @@ Notable implementation guardrails in this pass:
 - client chat timing now records first-token latency once per run instead of over-counting multi-delta replies
 - terminal transcript trimming tracks byte budget incrementally and avoids full-history re-encoding on each output chunk
 - jobs output rendering tails large logs in-browser to avoid large full-text DOM updates
+- decision updates now invalidate and publish through one path so owner-gated actions do not create parallel approval, draft, and pairing refresh storms
 - websocket-driven dashboard patches are reconciled with debounced full snapshot pulls after high-impact runtime/provider/channel/context/memory mutations
-- request-path warmup primes dashboard/access/runtime/provider caches before readiness completes, and dashboard memory status uses the quick cached path on the hot request path
+- request-path warmup now waits for startup restore before priming dashboard/access/runtime/provider caches, and dashboard memory status uses the quick cached path on the hot request path
 - the memory prepare endpoint is now a fast single-flight background trigger; completion latency is measured separately from accepted latency
+- explicit memory prepare fingerprints the durable-memory source set and skips the heavy reindex path when the index is already current
 
 The Settings diagnostics view now shows p95, last sample, sample count, `ok`/`warn`/`error` counts, and sample age so old or unhealthy latency numbers are easier to spot before they mislead an operator.
 

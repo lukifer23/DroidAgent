@@ -8,10 +8,15 @@ import {
 
 import { accessService } from "./services/access-service.js";
 import { appStateService } from "./services/app-state-service.js";
+import { authService } from "./services/auth-service.js";
 import {
   dashboardService,
   type DashboardSliceKey,
 } from "./services/dashboard-service.js";
+import {
+  decisionService,
+  type DecisionActor,
+} from "./services/decision-service.js";
 import { harnessService } from "./services/harness-service.js";
 import { jobService } from "./services/job-service.js";
 import { keychainService } from "./services/keychain-service.js";
@@ -31,8 +36,17 @@ function send(ws: WebSocket, payload: unknown): void {
   ws.send(JSON.stringify(payload));
 }
 
+function parseSessionToken(rawCookie: string | undefined): string | undefined {
+  return rawCookie
+    ?.split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith("droidagent_session="))
+    ?.split("=")[1];
+}
+
 export class WebsocketHub {
   private sockets = new Set<WebSocket>();
+  private socketActors = new WeakMap<WebSocket, DecisionActor>();
   private hostPressureInterval: ReturnType<typeof setInterval> | null = null;
   private pendingChatDeltas = new Map<string, { sessionId: string; runId: string; delta: string }>();
   private pendingJobOutputs = new Map<string, { jobId: string; stream: "stdout" | "stderr"; chunk: string }>();
@@ -125,9 +139,22 @@ export class WebsocketHub {
       this.hostPressureInterval.unref?.();
     }
 
-    wss.on("connection", (ws) => {
+    wss.on("connection", (ws, request) => {
       this.sockets.add(ws);
       void this.pushDashboard(ws);
+      void (async () => {
+        const token = parseSessionToken(request.headers.cookie);
+        if (!token) {
+          return;
+        }
+        const [user, authSession] = await Promise.all([
+          authService.getCurrentUserBySessionToken(token),
+          authService.getCurrentSessionByToken(token),
+        ]);
+        if (user) {
+          this.socketActors.set(ws, { user, authSession });
+        }
+      })();
 
       ws.on("message", (raw) => {
         void this.handleMessage(ws, raw.toString());
@@ -278,12 +305,13 @@ export class WebsocketHub {
 
   async publishChannelUpdated(): Promise<void> {
     await this.publishEvents({
-      slices: ["channels", "harness"],
+      slices: ["channels", "harness", "decisions"],
       startup: true,
       events: (async () => {
-        const [channels, harness] = await Promise.all([
+        const [channels, harness, decisions] = await Promise.all([
           harnessService.listChannels(),
           harnessService.harnessStatus(),
+          decisionService.listDecisions(),
         ]);
         return [
           {
@@ -293,6 +321,10 @@ export class WebsocketHub {
           {
             type: "harness.updated",
             payload: harness,
+          },
+          {
+            type: "decisions.updated",
+            payload: decisions,
           },
         ];
       })(),
@@ -368,13 +400,17 @@ export class WebsocketHub {
 
   async publishMemoryDraftsUpdated(): Promise<void> {
     await this.publishEvents({
-      slices: ["memoryDrafts"],
-      events: [
+      slices: ["memoryDrafts", "decisions"],
+      events: (async () => [
         {
           type: "memoryDrafts.updated",
           payload: await memoryDraftService.listDrafts(),
         },
-      ],
+        {
+          type: "decisions.updated",
+          payload: await decisionService.listDecisions(),
+        },
+      ])(),
     });
   }
 
@@ -410,20 +446,54 @@ export class WebsocketHub {
   }
 
   publishApprovalUpdated(approval: Awaited<ReturnType<typeof harnessService.listApprovals>>[number]): void {
-    this.invalidateDashboard(["approvals"]);
-    this.broadcastEvent({
-      type: "approval.updated",
-      payload: approval,
+    void this.publishEvents({
+      slices: ["approvals", "decisions"],
+      events: (async () => {
+        const decision =
+          await decisionService.getDecision(
+            decisionService.createDecisionIdFromApprovalId(approval.id),
+          );
+        return [
+          {
+            type: "approval.updated" as const,
+            payload: approval,
+          },
+          ...(decision
+            ? [
+                {
+                  type: "decision.updated" as const,
+                  payload: decision,
+                },
+              ]
+            : []),
+        ];
+      })(),
     });
   }
 
   async publishApprovalsUpdated(): Promise<void> {
     await this.publishEvents({
-      slices: ["approvals"],
-      events: [
+      slices: ["approvals", "decisions"],
+      events: (async () => [
         {
           type: "approvals.updated",
           payload: await harnessService.listApprovals(),
+        },
+        {
+          type: "decisions.updated",
+          payload: await decisionService.listDecisions(),
+        },
+      ])(),
+    });
+  }
+
+  async publishDecisionsUpdated(): Promise<void> {
+    await this.publishEvents({
+      slices: ["decisions"],
+      events: [
+        {
+          type: "decisions.updated",
+          payload: await decisionService.listDecisions(),
         },
       ],
     });
@@ -674,8 +744,48 @@ export class WebsocketHub {
       }
 
       if (command.type === "approval.resolve") {
-        await harnessService.resolveApproval(command.payload.approvalId, command.payload.resolution);
+        const actor = this.socketActors.get(ws);
+        if (actor) {
+          await decisionService.resolveApprovalDecision(
+            command.payload.approvalId,
+            command.payload.resolution,
+            actor,
+          );
+        } else {
+          await harnessService.resolveApproval(
+            command.payload.approvalId,
+            command.payload.resolution,
+          );
+        }
         await this.publishApprovalsUpdated();
+        return;
+      }
+
+      if (command.type === "decision.resolve") {
+        const actor = this.socketActors.get(ws);
+        if (!actor) {
+          throw new Error("Decision resolution requires an authenticated session.");
+        }
+        const decision = await decisionService.resolveDecision(
+          command.payload.decisionId,
+          {
+            resolution: command.payload.resolution,
+            expectedUpdatedAt: command.payload.expectedUpdatedAt,
+          },
+          actor,
+        );
+        if (decision.kind === "execApproval") {
+          await this.publishApprovalsUpdated();
+        } else if (decision.kind === "memoryDraftReview") {
+          await Promise.all([
+            this.publishMemoryDraftsUpdated(),
+            this.publishMemoryUpdated(),
+          ]);
+        } else if (decision.kind === "channelPairing") {
+          await this.publishChannelUpdated();
+        } else {
+          await this.publishDecisionsUpdated();
+        }
         return;
       }
 

@@ -127,6 +127,24 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
     };
   }
 
+  if (event.type === "decision.updated") {
+    return {
+      ...current,
+      decisions: current.decisions.some((decision) => decision.id === event.payload.id)
+        ? current.decisions.map((decision) =>
+            decision.id === event.payload.id ? event.payload : decision,
+          )
+        : [event.payload, ...current.decisions],
+    };
+  }
+
+  if (event.type === "decisions.updated") {
+    return {
+      ...current,
+      decisions: event.payload,
+    };
+  }
+
   if (event.type === "approval.updated") {
     return {
       ...current,
@@ -383,6 +401,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
           payload.type === "maintenance.updated" ||
           payload.type === "sessions.updated" ||
           payload.type === "job.updated" ||
+          payload.type === "decision.updated" ||
+          payload.type === "decisions.updated" ||
           payload.type === "approval.updated" ||
           payload.type === "approvals.updated"
         ) {
@@ -410,6 +430,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
             payload.type === "launchAgent.updated" ||
             payload.type === "memory.updated" ||
             payload.type === "memoryDrafts.updated" ||
+            payload.type === "decision.updated" ||
+            payload.type === "decisions.updated" ||
             payload.type === "context.updated"
           ) {
             void queryClient.invalidateQueries({ queryKey: ["startupDiagnostics"] });

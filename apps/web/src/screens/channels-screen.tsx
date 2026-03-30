@@ -25,6 +25,10 @@ export function ChannelsScreen() {
   const canSendTestMessage = testTarget.trim().length > 0 && testMessage.trim().length > 0;
 
   const signal = dashboard?.channelConfig?.signal;
+  const pairingDecisions = (dashboard?.decisions ?? []).filter(
+    (decision) =>
+      decision.status === "pending" && decision.kind === "channelPairing",
+  );
 
   useEffect(() => {
     if (!signal?.linkUri) {
@@ -200,22 +204,23 @@ export function ChannelsScreen() {
       </article>
 
       <article className="panel-card">
-        <h3>Pending Pairings</h3>
+        <h3>Pending Signal Decisions</h3>
         <p>New Signal senders stay in pairing mode until you explicitly allow them.</p>
         <div className="stack-list">
-          {(signal?.pendingPairings ?? []).length > 0 ? (
-            signal?.pendingPairings.map((pairing) => (
-              <article key={pairing.code} className="panel-card compact">
-                <strong>{pairing.from}</strong>
-                <small>Code: {pairing.code}</small>
-                {pairing.requestedAt ? <small>Requested {new Date(pairing.requestedAt).toLocaleString()}</small> : null}
+          {pairingDecisions.length > 0 ? (
+            pairingDecisions.map((decision) => (
+              <article key={decision.id} className="panel-card compact">
+                <strong>{decision.title}</strong>
+                <small>{decision.summary}</small>
+                <small>Code: {decision.sourceRef}</small>
+                {decision.requestedAt ? <small>Requested {new Date(decision.requestedAt).toLocaleString()}</small> : null}
                 <div className="button-row">
                   <button
                     onClick={() =>
                       void runAction(async () => {
-                        await postJson("/api/channels/signal/pairing/resolve", {
-                          code: pairing.code,
-                          resolution: "approved"
+                        await postJson(`/api/decisions/${encodeURIComponent(decision.id)}/resolve`, {
+                          resolution: "approved",
+                          expectedUpdatedAt: null,
                         });
                       }, "Signal pairing approved.")
                     }
@@ -226,9 +231,9 @@ export function ChannelsScreen() {
                     className="secondary"
                     onClick={() =>
                       void runAction(async () => {
-                        await postJson("/api/channels/signal/pairing/resolve", {
-                          code: pairing.code,
-                          resolution: "denied"
+                        await postJson(`/api/decisions/${encodeURIComponent(decision.id)}/resolve`, {
+                          resolution: "denied",
+                          expectedUpdatedAt: null,
                         });
                       }, "Signal pairing denied.")
                     }

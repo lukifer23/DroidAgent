@@ -281,6 +281,7 @@ describe("DashboardStateSchema", () => {
       },
       sessions: [],
       jobs: [],
+      decisions: [],
       approvals: [],
     });
 

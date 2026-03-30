@@ -10,6 +10,7 @@ const {
   db,
   resetDb,
   openclawMocks,
+  setJsonSetting,
   performanceStart,
 } = vi.hoisted(() => {
   const draftRecords: Array<Record<string, unknown>> = [];
@@ -64,6 +65,7 @@ const {
   const performanceStart = vi.fn(() => ({
     finish: vi.fn(),
   }));
+  const setJsonSetting = vi.fn(async () => undefined);
 
   return {
     draftRecords,
@@ -78,9 +80,11 @@ const {
       openclawMocks.prepareWorkspaceScaffold.mockReset();
       openclawMocks.ensureTodayMemoryNote.mockReset();
       openclawMocks.reindexMemory.mockReset();
+      setJsonSetting.mockClear();
       performanceStart.mockClear();
     },
     openclawMocks,
+    setJsonSetting,
     performanceStart,
   };
 });
@@ -104,6 +108,12 @@ vi.mock("./openclaw-service.js", () => ({
 vi.mock("./performance-service.js", () => ({
   performanceService: {
     start: performanceStart,
+  },
+}));
+
+vi.mock("./app-state-service.js", () => ({
+  appStateService: {
+    setJsonSetting,
   },
 }));
 

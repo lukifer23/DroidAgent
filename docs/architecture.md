@@ -5,7 +5,7 @@
 - `apps/server`
   - authenticates the owner with passkeys
   - stores state in SQLite under `~/.droidagent`
-  - persists maintenance operations and memory drafts in SQLite
+  - persists maintenance operations, memory drafts, and owner decision audit records in SQLite
   - stores cloud-provider API keys in the macOS login Keychain
   - manages runtimes and OpenClaw through CLI/process supervision
   - exposes the running build/version identity to the shell and diagnostics
@@ -16,7 +16,7 @@
   - Setup, Chat, Files, Jobs, Models, Settings, plus an owner-only rescue terminal route
   - reconnect-safe streaming, install prompt, Fold-friendly layout
 - `packages/shared`
-  - common schemas for dashboard state, files, jobs, passkeys, access/bootstrap payloads, diagnostics telemetry, and WebSocket events
+  - common schemas for dashboard state, files, jobs, passkeys, owner decisions, access/bootstrap payloads, diagnostics telemetry, and WebSocket events
 
 ## Harness boundary
 
@@ -28,6 +28,7 @@
   - channel status
   - runtime-model configuration
   - harness health
+- DroidAgent adds one owner-facing decision layer above that harness surface. It does not replace OpenClaw approval, pairing, or session semantics.
 
 ## OpenClaw integration
 
@@ -35,6 +36,7 @@
 - Live chat now uses a server-side relay path into the OpenClaw Chat Completions endpoint on the local gateway.
 - DroidAgent re-emits sanitized stream events to the browser over its own WebSocket.
 - OpenClaw remains loopback-only with token auth.
+- The explicit boundary map lives in [OpenClaw Boundary](./openclaw-boundary.md).
 
 ## Maintenance lifecycle
 
@@ -73,9 +75,21 @@
 - Durable memory remains file-backed in the workspace: `MEMORY.md`, `PREFERENCES.md`, and `memory/YYYY-MM-DD.md`.
 - Recall order is biased for smaller local models: `PREFERENCES.md` first, then `MEMORY.md`, then dated notes under `memory/`, then session memory.
 - Chat messages and file selections create `pending` memory drafts first; the operator can edit target/title/content before applying them.
+- Pending memory drafts are also projected into the shared decision ledger so the owner sees one queue across exec approvals, durable-memory review, and Signal pairing.
 - Applying a draft appends to the selected file atomically, invalidates memory status, and runs incremental reindex with force fallback if needed.
 - Explicit semantic-memory prepare now runs as a persisted background operation. The REST trigger is single-flight, returns immediately, and progress/result state is stored in SQLite and surfaced through additive `MemoryStatus` fields plus websocket updates.
+- Explicit memory prepare fingerprints the durable-memory source set and skips the expensive reindex path when the index is already current and the source files have not changed.
 - First-class memory file access repairs the workspace scaffold lazily so missing `MEMORY.md` or `PREFERENCES.md` does not surface raw `ENOENT` failures in normal operator flows.
+
+## Decision model
+
+- DroidAgent normalizes owner-gated work into one decision ledger and inbox.
+- Current decision kinds are:
+  - OpenClaw exec approvals
+  - memory draft review
+  - Signal pairing
+- Decision records carry source system, source ref, requested/resolved timestamps, source session context, and owner-plus-device attribution when the owner resolves an action through DroidAgent.
+- Existing `/api/approvals`, `/api/memory/drafts/*`, and Signal pairing routes remain as compatibility paths, but they now stamp the same underlying decision model.
 
 ## File and job model
 
@@ -93,9 +107,10 @@
 - the client records route, chat, reconnect, file, and job timings locally
 - the Settings route surfaces a compact diagnostics card
 - the benchmark scripts write JSON artifacts under `artifacts/perf/`
-- the dashboard snapshot is composed from independently cached slices for setup, access, runtimes, providers, channels, harness, memory, host pressure, memory drafts, context management, maintenance, launch-agent state, sessions, jobs, and approvals
-- request-path warmup primes the main dashboard/access/runtime/provider caches before readiness completes, then resets startup-only perf samples so steady-state diagnostics are not polluted by internal prewarm work
+- the dashboard snapshot is composed from independently cached slices for setup, access, runtimes, providers, channels, harness, memory, host pressure, memory drafts, context management, maintenance, launch-agent state, sessions, jobs, decisions, and approvals
+- request-path warmup now waits for startup restore, then primes the main dashboard/access/runtime/provider caches before readiness completes so the first real dashboard request does not pay hidden restore work
 - realtime dashboard mutation fanout includes dedicated harness/memory/setup/provider/runtime/etc updates, slice-aware invalidation, and client-side snapshot reconciliation to keep partial dashboard patches from drifting during noisy update bursts
+- decision-related mutations invalidate and publish through one path so approvals, memory-draft review, and pairing do not fan out as disconnected subsystems
 
 ## UI shell and layout stability
 

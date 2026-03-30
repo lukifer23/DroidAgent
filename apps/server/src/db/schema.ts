@@ -25,7 +25,10 @@ export const authSessions = sqliteTable("auth_sessions", {
   userId: text("user_id").notNull(),
   tokenHash: text("token_hash").notNull().unique(),
   expiresAt: text("expires_at").notNull(),
-  createdAt: text("created_at").notNull()
+  createdAt: text("created_at").notNull(),
+  origin: text("origin"),
+  deviceLabel: text("device_label"),
+  userAgent: text("user_agent"),
 });
 
 export const authChallenges = sqliteTable("auth_challenges", {
@@ -73,6 +76,27 @@ export const memoryDrafts = sqliteTable("memory_drafts", {
   failedAt: text("failed_at"),
   lastError: text("last_error"),
   appliedPath: text("applied_path"),
+});
+
+export const decisionRecords = sqliteTable("decision_records", {
+  id: text("id").primaryKey(),
+  kind: text("kind").notNull(),
+  sourceSystem: text("source_system").notNull(),
+  sourceRef: text("source_ref").notNull(),
+  title: text("title").notNull(),
+  summary: text("summary").notNull(),
+  details: text("details").notNull(),
+  status: text("status").notNull(),
+  requestedAt: text("requested_at").notNull(),
+  resolvedAt: text("resolved_at"),
+  actorUserId: text("actor_user_id"),
+  actorLabel: text("actor_label"),
+  sessionId: text("session_id"),
+  actorSessionId: text("actor_session_id"),
+  deviceLabel: text("device_label"),
+  resolution: text("resolution"),
+  sourceUpdatedAt: text("source_updated_at"),
+  updatedAt: text("updated_at").notNull(),
 });
 
 export const maintenanceOperations = sqliteTable("maintenance_operations", {

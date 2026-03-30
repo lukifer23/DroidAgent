@@ -180,12 +180,12 @@ test("captures a chat message as a memory draft, edits it, and applies it", asyn
     hasText: prompt,
   });
   await expect(userMessage).toBeVisible();
-  await userMessage.locator(".message-utility-tray summary").click();
+  await userMessage.getByRole("button", { name: "Save memory" }).click();
   await clickWithDetachRetry(
     page
       .locator(".message-card.user")
       .filter({ hasText: prompt })
-      .getByRole("button", { name: "Memory" }),
+      .getByRole("button", { name: "Memory", exact: true }),
   );
 
   await page.getByRole("link", { name: "Settings" }).click();
@@ -250,12 +250,12 @@ test("rejects stale memory draft mutations with a conflict response", async ({
     hasText: prompt,
   });
   await expect(userMessage).toBeVisible();
-  await userMessage.locator(".message-utility-tray summary").click();
+  await userMessage.getByRole("button", { name: "Save memory" }).click();
   await clickWithDetachRetry(
     page
       .locator(".message-card.user")
       .filter({ hasText: prompt })
-      .getByRole("button", { name: "Memory" }),
+      .getByRole("button", { name: "Memory", exact: true }),
   );
 
   const draftsResponse = await page.request.get(

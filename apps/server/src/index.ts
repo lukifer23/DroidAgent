@@ -9,6 +9,7 @@ import { logger } from "hono/logger";
 import { WebSocketServer } from "ws";
 import {
   ChatSendRequestSchema,
+  DecisionResolveRequestSchema,
   HostPressureRecoveryRequestSchema,
   HostPressureRecoveryResultSchema,
   MaintenanceRunRequestSchema,
@@ -27,6 +28,7 @@ import {
 } from "./services/attachment-service.js";
 import { authService } from "./services/auth-service.js";
 import { dashboardService } from "./services/dashboard-service.js";
+import { decisionService } from "./services/decision-service.js";
 import { FileConflictError, fileService } from "./services/file-service.js";
 import { harnessService } from "./services/harness-service.js";
 import { jobService } from "./services/job-service.js";
@@ -175,6 +177,18 @@ async function requireUser(c: Context<{ Variables: AppVariables }>) {
     return c.json({ error: "Unauthorized" }, 401);
   }
   return null;
+}
+
+async function getDecisionActor(c: Context<{ Variables: AppVariables }>) {
+  const user = c.get("user");
+  if (!user) {
+    throw new Error("Decision actor is unavailable.");
+  }
+  const authSession = await authService.getCurrentSession(c);
+  return {
+    user,
+    authSession,
+  };
 }
 
 async function requireOwnerOrLocalBootstrap(
@@ -358,7 +372,6 @@ function withMeasuredStreamRelay(
 }
 
 app.get("/api/health", async (c) => {
-  await requestPathWarmupPromise;
   signalService.refreshStateInBackground();
   const [runtimeSummary, setup, launchAgent, channels, harness] =
     await Promise.all([
@@ -545,7 +558,6 @@ app.get("/api/setup/diagnostics", async (c) => {
 app.get("/api/dashboard", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  await requestPathWarmupPromise;
   return c.json(await dashboardService.getDashboardState());
 });
 
@@ -683,6 +695,7 @@ app.post("/api/memory/drafts", async (c) => {
   if (unauthorized) return unauthorized;
   const body = MemoryDraftCreateRequestSchema.parse(await c.req.json());
   const draft = await memoryDraftService.createDraft(body);
+  await decisionService.syncMemoryDraftDecision(draft);
   await websocketHub.publishMemoryDraftsUpdated();
   return c.json(draft, 201);
 });
@@ -694,6 +707,7 @@ app.patch("/api/memory/drafts/:draftId", async (c) => {
   if (unauthorized) return unauthorized;
   const body = MemoryDraftUpdateRequestSchema.parse(await c.req.json());
   const draft = await memoryDraftService.updateDraft(c.req.param("draftId"), body);
+  await decisionService.syncMemoryDraftDecision(draft);
   await websocketHub.publishMemoryDraftsUpdated();
   return c.json(draft);
 });
@@ -704,10 +718,12 @@ app.post("/api/memory/drafts/:draftId/apply", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const body = MemoryDraftApplyRequestSchema.parse(await c.req.json());
+  const actor = await getDecisionActor(c);
   const result = await memoryDraftService.applyDraft(
     c.req.param("draftId"),
     body,
   );
+  await decisionService.syncResolvedMemoryDraftDecision(result.draft, actor);
   await Promise.all([
     websocketHub.publishMemoryDraftsUpdated(),
     websocketHub.publishMemoryUpdated(),
@@ -721,7 +737,9 @@ app.post("/api/memory/drafts/:draftId/dismiss", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const body = MemoryDraftDismissRequestSchema.parse(await c.req.json());
+  const actor = await getDecisionActor(c);
   const draft = await memoryDraftService.dismissDraft(c.req.param("draftId"), body);
+  await decisionService.syncResolvedMemoryDraftDecision(draft.draft, actor);
   await websocketHub.publishMemoryDraftsUpdated();
   return c.json(draft);
 });
@@ -1299,11 +1317,16 @@ app.post("/api/channels/signal/pairing/resolve", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
+  const actor = await getDecisionActor(c);
   const body = (await c.req.json()) as {
     code: string;
     resolution: "approved" | "denied";
   };
-  await openclawService.resolveSignalPairing(body.code, body.resolution);
+  await decisionService.resolveChannelPairingDecision(
+    body.code,
+    body.resolution,
+    actor,
+  );
   await websocketHub.publishChannelUpdated();
   return c.json({ ok: true });
 });
@@ -1544,7 +1567,7 @@ app.post("/api/sessions/:sessionId/abort", async (c) => {
 app.get("/api/approvals", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
-  return c.json(await harnessService.listApprovals());
+  return c.json(await decisionService.listLegacyApprovals());
 });
 
 app.post("/api/approvals/:approvalId", async (c) => {
@@ -1552,11 +1575,49 @@ app.post("/api/approvals/:approvalId", async (c) => {
   if (blocked) return blocked;
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
+  const actor = await getDecisionActor(c);
   const body = (await c.req.json()) as { resolution: "approved" | "denied" };
   const approvalId = c.req.param("approvalId");
-  await harnessService.resolveApproval(approvalId, body.resolution);
+  await decisionService.resolveApprovalDecision(
+    approvalId,
+    body.resolution,
+    actor,
+  );
   await websocketHub.publishApprovalsUpdated();
   return c.json({ ok: true });
+});
+
+app.get("/api/decisions", async (c) => {
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  return c.json(await decisionService.listDecisions());
+});
+
+app.post("/api/decisions/:decisionId/resolve", async (c) => {
+  const blocked = await mutationGuard(c);
+  if (blocked) return blocked;
+  const unauthorized = await requireUser(c);
+  if (unauthorized) return unauthorized;
+  const actor = await getDecisionActor(c);
+  const body = DecisionResolveRequestSchema.parse(await c.req.json());
+  const decision = await decisionService.resolveDecision(
+    c.req.param("decisionId"),
+    body,
+    actor,
+  );
+  if (decision.kind === "execApproval") {
+    await websocketHub.publishApprovalsUpdated();
+  } else if (decision.kind === "memoryDraftReview") {
+    await Promise.all([
+      websocketHub.publishMemoryDraftsUpdated(),
+      websocketHub.publishMemoryUpdated(),
+    ]);
+  } else if (decision.kind === "channelPairing") {
+    await websocketHub.publishChannelUpdated();
+  } else {
+    await websocketHub.publishDecisionsUpdated();
+  }
+  return c.json(decision);
 });
 
 app.get("/api/files", async (c) => {
@@ -1713,6 +1774,7 @@ if (TEST_MODE && E2E_RESET_TOKEN && E2E_STATE_PATH && E2E_ROOT_DIR) {
     await db.delete(schema.authChallenges);
     await db.delete(schema.jobs);
     await db.delete(schema.memoryDrafts);
+    await db.delete(schema.decisionRecords);
     await db.delete(schema.maintenanceOperations);
     await appStateService.setJsonSetting(
       "runtimeSettings",
@@ -1783,7 +1845,7 @@ if (!TEST_MODE) {
   });
 }
 
-requestPathWarmupPromise = (async () => {
+async function warmRequestPathCaches(resetPerf = false): Promise<void> {
   try {
     await Promise.allSettled([
       accessService.getBootstrapState(),
@@ -1793,11 +1855,15 @@ requestPathWarmupPromise = (async () => {
       keychainService.listProviderSummaries(),
       dashboardService.getDashboardState(),
     ]);
-    performanceService.reset();
+    if (resetPerf) {
+      performanceService.reset();
+    }
   } catch (error) {
     console.error("Failed to warm request-path caches", error);
   }
-})();
+}
+
+requestPathWarmupPromise = warmRequestPathCaches(true);
 
 void (async () => {
   try {
@@ -1807,6 +1873,7 @@ void (async () => {
       await startupService.restore();
     }
     await memoryPrepareService.resumePendingPrepare();
+    void warmRequestPathCaches(false);
   } catch (error) {
     console.error("Failed to warm DroidAgent caches", error);
   }

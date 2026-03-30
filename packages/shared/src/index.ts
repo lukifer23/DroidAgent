@@ -472,6 +472,53 @@ export const ApprovalRecordSchema = z.object({
 });
 export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>;
 
+export const DecisionKindSchema = z.enum([
+  "execApproval",
+  "memoryDraftReview",
+  "channelPairing",
+  "ownerConfirmation",
+]);
+export type DecisionKind = z.infer<typeof DecisionKindSchema>;
+
+export const DecisionStatusSchema = z.enum(["pending", "resolved", "failed"]);
+export type DecisionStatus = z.infer<typeof DecisionStatusSchema>;
+
+export const DecisionResolutionSchema = z.enum([
+  "approved",
+  "denied",
+  "applied",
+  "dismissed",
+  "failed",
+]);
+export type DecisionResolution = z.infer<typeof DecisionResolutionSchema>;
+
+export const DecisionRecordSchema = z.object({
+  id: z.string(),
+  kind: DecisionKindSchema,
+  sourceSystem: z.enum(["openclaw", "droidagent"]),
+  sourceRef: z.string(),
+  title: z.string(),
+  summary: z.string(),
+  details: z.string(),
+  status: DecisionStatusSchema,
+  requestedAt: z.string(),
+  resolvedAt: z.string().nullable(),
+  actorUserId: z.string().nullable(),
+  actorLabel: z.string().nullable(),
+  sessionId: z.string().nullable(),
+  actorSessionId: z.string().nullable().default(null),
+  deviceLabel: z.string().nullable(),
+  resolution: DecisionResolutionSchema.nullable(),
+  sourceUpdatedAt: z.string().nullable().default(null),
+});
+export type DecisionRecord = z.infer<typeof DecisionRecordSchema>;
+
+export const DecisionResolveRequestSchema = z.object({
+  resolution: z.enum(["approved", "denied"]),
+  expectedUpdatedAt: z.string().trim().min(1).nullable().default(null),
+});
+export type DecisionResolveRequest = z.infer<typeof DecisionResolveRequestSchema>;
+
 export const WorkspaceEntrySchema = z.object({
   path: z.string(),
   name: z.string(),
@@ -1028,6 +1075,7 @@ export const DashboardStateSchema = z.object({
   launchAgent: LaunchAgentStatusSchema,
   sessions: z.array(SessionSummarySchema),
   jobs: z.array(JobRecordSchema),
+  decisions: z.array(DecisionRecordSchema),
   approvals: z.array(ApprovalRecordSchema),
 });
 export type DashboardState = z.infer<typeof DashboardStateSchema>;
@@ -1070,6 +1118,14 @@ export const ClientCommandSchema = z.discriminatedUnion("type", [
     payload: z.object({
       approvalId: z.string(),
       resolution: z.enum(["approved", "denied"]),
+    }),
+  }),
+  z.object({
+    type: z.literal("decision.resolve"),
+    payload: z.object({
+      decisionId: z.string(),
+      resolution: z.enum(["approved", "denied"]),
+      expectedUpdatedAt: z.string().nullable().default(null),
     }),
   }),
   z.object({
@@ -1162,6 +1218,14 @@ export const ServerEventSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("approvals.updated"),
     payload: z.array(ApprovalRecordSchema),
+  }),
+  z.object({
+    type: z.literal("decision.updated"),
+    payload: DecisionRecordSchema,
+  }),
+  z.object({
+    type: z.literal("decisions.updated"),
+    payload: z.array(DecisionRecordSchema),
   }),
   z.object({
     type: z.literal("sessions.updated"),

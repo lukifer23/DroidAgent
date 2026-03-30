@@ -12,8 +12,6 @@ import type {
   DashboardState,
   HostPressureStatus,
   MemoryDraft,
-  MemoryDraftApplyResult,
-  MemoryDraftDismissResult,
   MemoryDraftTarget,
   PerformanceSnapshot,
 } from "@droidagent/shared";
@@ -157,6 +155,7 @@ export function SettingsScreen() {
   const memory = dashboard?.memory;
   const hostPressure = dashboard?.hostPressure;
   const memoryDrafts = dashboard?.memoryDrafts ?? [];
+  const decisions = dashboard?.decisions ?? [];
   const harness = dashboard?.harness;
   const build = dashboard?.build;
   const contextManagement = dashboard?.contextManagement;
@@ -238,9 +237,18 @@ export function SettingsScreen() {
     harness?.activeModel?.replace(/^ollama\//, "") ?? null;
   const normalizedImageModel =
     harness?.imageModel?.replace(/^ollama\//, "") ?? null;
-  const pendingMemoryDrafts = memoryDrafts.filter(
-    (draft) => draft.status === "pending",
+  const pendingMemoryDraftDecisions = decisions.filter(
+    (decision) =>
+      decision.status === "pending" && decision.kind === "memoryDraftReview",
   );
+  const memoryDraftDecisionById = new Map(
+    pendingMemoryDraftDecisions.map((decision) => [decision.sourceRef, decision]),
+  );
+  const pendingMemoryDrafts = pendingMemoryDraftDecisions
+    .map((decision) =>
+      memoryDrafts.find((draft) => draft.id === decision.sourceRef) ?? null,
+    )
+    .filter((draft): draft is MemoryDraft => Boolean(draft));
   const localhostMaintenance = ["localhost", "127.0.0.1", "::1", "[::1]"].includes(
     window.location.hostname,
   );
@@ -370,17 +378,17 @@ export function SettingsScreen() {
   }
 
   async function handleApplyDraft(draft: MemoryDraft) {
+    const decision = memoryDraftDecisionById.get(draft.id);
+    if (!decision) {
+      throw new Error("This memory review is no longer pending.");
+    }
     try {
-      const result = await postJson<MemoryDraftApplyResult>(
-        `/api/memory/drafts/${encodeURIComponent(draft.id)}/apply`,
+      await postJson(
+        `/api/decisions/${encodeURIComponent(decision.id)}/resolve`,
         {
+          resolution: "approved",
           expectedUpdatedAt: draft.updatedAt,
         },
-      );
-      queryClient.setQueryData<DashboardState | undefined>(
-        ["dashboard"],
-        (current) =>
-          current ? upsertDashboardMemoryDraft(current, result.draft) : current,
       );
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
@@ -432,17 +440,17 @@ export function SettingsScreen() {
   }
 
   async function handleDismissDraft(draft: MemoryDraft) {
+    const decision = memoryDraftDecisionById.get(draft.id);
+    if (!decision) {
+      throw new Error("This memory review is no longer pending.");
+    }
     try {
-      const result = await postJson<MemoryDraftDismissResult>(
-        `/api/memory/drafts/${encodeURIComponent(draft.id)}/dismiss`,
+      await postJson(
+        `/api/decisions/${encodeURIComponent(decision.id)}/resolve`,
         {
+          resolution: "denied",
           expectedUpdatedAt: draft.updatedAt,
         },
-      );
-      queryClient.setQueryData<DashboardState | undefined>(
-        ["dashboard"],
-        (current) =>
-          current ? upsertDashboardMemoryDraft(current, result.draft) : current,
       );
     } catch (error) {
       if (error instanceof ApiError && error.status === 409) {
@@ -1053,10 +1061,11 @@ export function SettingsScreen() {
 
         <article className="panel-card">
           <div className="panel-heading">
-            <h3>Memory Draft Queue</h3>
+            <h3>Memory Review Queue</h3>
             <p>
-              Durable memory stays approval-gated. Review pending drafts here,
-              then apply them to the right file tier or dismiss them.
+              Durable memory stays owner-reviewed. Edit the draft here, then
+              resolve the shared decision by applying it to the right file tier
+              or dismissing it.
             </p>
           </div>
           <div className="stack-list">
@@ -1072,6 +1081,9 @@ export function SettingsScreen() {
                 <small>
                   {draft.target} • {draft.sourceLabel ?? draft.sourceKind} •{" "}
                   {new Date(draft.updatedAt).toLocaleString()}
+                </small>
+                <small>
+                  Decision: {memoryDraftDecisionById.get(draft.id)?.id ?? "pending"}
                 </small>
                 {draftEdits[draft.id] ? (
                   <div className="stack-list">

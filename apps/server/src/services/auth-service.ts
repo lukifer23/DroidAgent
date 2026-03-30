@@ -78,6 +78,49 @@ export interface AuthUser {
   displayName: string;
 }
 
+export interface CurrentAuthSession {
+  id: string;
+  userId: string;
+  expiresAt: string;
+  createdAt: string;
+  origin: string | null;
+  deviceLabel: string | null;
+  userAgent: string | null;
+}
+
+function deriveDeviceLabel(userAgent: string | null | undefined): string | null {
+  const value = userAgent?.trim();
+  if (!value) {
+    return null;
+  }
+
+  const platform = /iphone/i.test(value)
+    ? "iPhone"
+    : /ipad/i.test(value)
+      ? "iPad"
+      : /android/i.test(value)
+        ? "Android"
+        : /macintosh|mac os x/i.test(value)
+          ? "Mac"
+          : /windows/i.test(value)
+            ? "Windows"
+            : /linux/i.test(value)
+              ? "Linux"
+              : "Browser";
+
+  const browser = /edg\//i.test(value)
+    ? "Edge"
+    : /chrome\//i.test(value)
+      ? "Chrome"
+      : /firefox\//i.test(value)
+        ? "Firefox"
+        : /safari\//i.test(value)
+          ? "Safari"
+          : null;
+
+  return browser ? `${platform} ${browser}` : platform;
+}
+
 export class AuthService {
   async hasUser(): Promise<boolean> {
     const firstUser = await db.query.users.findFirst();
@@ -384,12 +427,17 @@ export class AuthService {
   async createSession(c: Context, userId: string, secure: boolean): Promise<void> {
     const sessionToken = randomBytes(32).toString("base64url");
     const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
+    const origin = this.getOriginInfo(c).origin;
+    const userAgent = c.req.header("user-agent")?.trim() ?? null;
     await db.insert(schema.authSessions).values({
       id: randomUUID(),
       userId,
       tokenHash: hashToken(sessionToken),
       expiresAt,
-      createdAt: nowIso()
+      createdAt: nowIso(),
+      origin,
+      deviceLabel: deriveDeviceLabel(userAgent),
+      userAgent,
     });
 
     setCookie(c, SESSION_COOKIE, sessionToken, {
@@ -414,6 +462,11 @@ export class AuthService {
     return await this.getCurrentUserBySessionToken(token);
   }
 
+  async getCurrentSession(c: Context): Promise<CurrentAuthSession | null> {
+    const token = getCookie(c, SESSION_COOKIE);
+    return await this.getCurrentSessionByToken(token);
+  }
+
   async getCurrentUserBySessionToken(token: string | undefined): Promise<AuthUser | null> {
     if (!token) {
       return null;
@@ -434,6 +487,31 @@ export class AuthService {
       id: user.id,
       username: user.username,
       displayName: user.displayName
+    };
+  }
+
+  async getCurrentSessionByToken(
+    token: string | undefined,
+  ): Promise<CurrentAuthSession | null> {
+    if (!token) {
+      return null;
+    }
+
+    const session = await db.query.authSessions.findFirst({
+      where: eq(schema.authSessions.tokenHash, hashToken(token))
+    });
+    if (!session || new Date(session.expiresAt).getTime() <= Date.now()) {
+      return null;
+    }
+
+    return {
+      id: session.id,
+      userId: session.userId,
+      expiresAt: session.expiresAt,
+      createdAt: session.createdAt,
+      origin: session.origin ?? null,
+      deviceLabel: session.deviceLabel ?? null,
+      userAgent: session.userAgent ?? null,
     };
   }
 

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
+import type { DecisionRecord } from "@droidagent/shared";
 
 import { useAccessQuery, useAuthQuery, useDashboardQuery } from "./app-data";
 import { useDroidAgentApp } from "./app-context";
@@ -56,6 +57,54 @@ function formatHostBytes(value: number | null | undefined): string {
   return `${Math.round(value / 1024 ** 2)} MiB`;
 }
 
+function decisionRoute(decision: DecisionRecord): string {
+  if (decision.kind === "memoryDraftReview") {
+    return "/settings";
+  }
+  if (decision.kind === "channelPairing") {
+    return "/channels";
+  }
+  return "/chat";
+}
+
+function decisionKindLabel(decision: DecisionRecord): string {
+  if (decision.kind === "memoryDraftReview") {
+    return "Memory review";
+  }
+  if (decision.kind === "channelPairing") {
+    return "Signal pairing";
+  }
+  if (decision.kind === "execApproval") {
+    return "OpenClaw approval";
+  }
+  return "Decision";
+}
+
+function decisionPrimaryActionLabel(decision: DecisionRecord): string {
+  return decision.kind === "memoryDraftReview" ? "Apply" : "Approve";
+}
+
+function decisionSecondaryActionLabel(decision: DecisionRecord): string {
+  return decision.kind === "memoryDraftReview" ? "Dismiss" : "Deny";
+}
+
+function decisionSuccessMessage(
+  decision: DecisionRecord,
+  resolution: "approved" | "denied",
+): string {
+  if (decision.kind === "memoryDraftReview") {
+    return resolution === "approved"
+      ? "Memory draft applied."
+      : "Memory draft dismissed.";
+  }
+  if (decision.kind === "channelPairing") {
+    return resolution === "approved"
+      ? "Signal pairing approved."
+      : "Signal pairing denied.";
+  }
+  return resolution === "approved" ? "Decision approved." : "Decision denied.";
+}
+
 export function AppLayout() {
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -66,11 +115,13 @@ export function AppLayout() {
     wsStatus,
     beginRouteTransition,
     finishRouteTransition,
+    runAction,
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
   const accessQuery = useAccessQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
   const [hostDrawerOpen, setHostDrawerOpen] = useState(false);
+  const [decisionDrawerOpen, setDecisionDrawerOpen] = useState(false);
   const shellRef = useRef<HTMLElement | null>(null);
   const topbarRef = useRef<HTMLElement | null>(null);
   const navRef = useRef<HTMLElement | null>(null);
@@ -85,6 +136,7 @@ export function AppLayout() {
   const providers = dashboard?.providers ?? [];
   const runtimes = dashboard?.runtimes ?? [];
   const approvals = dashboard?.approvals ?? [];
+  const decisions = dashboard?.decisions ?? [];
   const tailscaleStatus = access?.tailscaleStatus;
   const operatorReady = isOperatorReady(dashboard);
   const isSetupRoute = location.pathname === "/setup";
@@ -96,6 +148,12 @@ export function AppLayout() {
     .length;
   const passkeyCount = setup?.passkeyConfigured ? 1 : 0;
   const pendingApprovals = approvals.length;
+  const pendingDecisions = decisions.filter(
+    (decision) => decision.status === "pending",
+  );
+  const recentDecisions = decisions.filter(
+    (decision) => decision.status !== "pending",
+  );
   const navItemsForState = navItems.filter(
     (item) => !operatorReady || item.readyOnly,
   );
@@ -107,7 +165,22 @@ export function AppLayout() {
 
   useEffect(() => {
     setHostDrawerOpen(false);
+    setDecisionDrawerOpen(false);
   }, [location.pathname]);
+
+  const resolveDecision = useCallback(
+    async (decision: DecisionRecord, resolution: "approved" | "denied") => {
+      await postJson(`/api/decisions/${encodeURIComponent(decision.id)}/resolve`, {
+        resolution,
+        expectedUpdatedAt:
+          decision.kind === "memoryDraftReview"
+            ? decision.sourceUpdatedAt
+            : null,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    [queryClient],
+  );
 
   const updateViewportChrome = useCallback(() => {
     const shell = shellRef.current;
@@ -211,13 +284,13 @@ export function AppLayout() {
       tone: memory?.semanticReady ? "good" : "warn",
     },
     {
-      label: "Approvals",
-      value: pendingApprovals > 0 ? `${pendingApprovals} waiting` : "Clear",
+      label: "Decisions",
+      value: pendingDecisions.length > 0 ? `${pendingDecisions.length} waiting` : "Clear",
       detail:
-        pendingApprovals > 0
-          ? "One or more OpenClaw actions need approval."
-          : "No agent approvals are blocking progress.",
-      tone: pendingApprovals > 0 ? "warn" : "good",
+        pendingDecisions.length > 0
+          ? "One or more owner decisions need attention."
+          : "No owner decisions are waiting.",
+      tone: pendingDecisions.length > 0 ? "warn" : "good",
     },
     {
       label: "LaunchAgent",
@@ -269,6 +342,16 @@ export function AppLayout() {
           </div>
 
           <div className="topbar-actions">
+            <button
+              type="button"
+              className={`secondary decision-trigger${pendingDecisions.length > 0 ? " attention" : ""}`}
+              onClick={() => setDecisionDrawerOpen(true)}
+            >
+              Decisions
+              <span className={`topbar-action-badge${pendingDecisions.length > 0 ? " warn" : ""}`}>
+                {pendingDecisions.length}
+              </span>
+            </button>
             <button
               type="button"
               className="secondary"
@@ -398,6 +481,129 @@ export function AppLayout() {
               <Link className="button-link secondary" to="/settings">
                 Open settings
               </Link>
+            </div>
+          </aside>
+        </div>
+      ) : null}
+
+      {decisionDrawerOpen ? (
+        <div
+          className="drawer-backdrop"
+          onClick={() => setDecisionDrawerOpen(false)}
+          role="presentation"
+        >
+          <aside
+            className="host-drawer panel-card decision-drawer"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="drawer-header">
+              <div>
+                <div className="eyebrow">Decision Inbox</div>
+                <h2>Owner approvals, saves, and pairings</h2>
+              </div>
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={() => setDecisionDrawerOpen(false)}
+                aria-label="Close decision inbox"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="stack-list">
+              <article className="panel-card compact">
+                <strong>
+                  {pendingDecisions.length > 0
+                    ? `${pendingDecisions.length} pending decision${pendingDecisions.length === 1 ? "" : "s"}`
+                    : "Decision queue clear"}
+                </strong>
+                <small>
+                  DroidAgent shows one owner-facing queue across OpenClaw approvals,
+                  durable memory review, and Signal pairing.
+                </small>
+              </article>
+
+              {pendingDecisions.length === 0 ? (
+                <article className="panel-card compact">
+                  No pending decisions. New owner-gated actions will appear here.
+                </article>
+              ) : null}
+
+              {pendingDecisions.map((decision) => (
+                <article key={decision.id} className="panel-card compact decision-card">
+                  <div className="decision-card-header">
+                    <strong>{decision.title}</strong>
+                    <span className="status-chip">{decisionKindLabel(decision)}</span>
+                  </div>
+                  <small>{decision.summary}</small>
+                  {decision.details ? (
+                    <details className="message-details">
+                      <summary>Inspect details</summary>
+                      <pre>{decision.details}</pre>
+                    </details>
+                  ) : null}
+                  <small>
+                    Requested {new Date(decision.requestedAt).toLocaleString()}
+                    {decision.deviceLabel ? ` • ${decision.deviceLabel}` : ""}
+                  </small>
+                  <div className="button-row">
+                    <button
+                      onClick={() =>
+                        void runAction(async () => {
+                          await resolveDecision(decision, "approved");
+                        }, decisionSuccessMessage(decision, "approved"))
+                      }
+                    >
+                      {decisionPrimaryActionLabel(decision)}
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        void runAction(async () => {
+                          await resolveDecision(decision, "denied");
+                        }, decisionSuccessMessage(decision, "denied"))
+                      }
+                    >
+                      {decisionSecondaryActionLabel(decision)}
+                    </button>
+                    <Link
+                      className="button-link secondary"
+                      to={decisionRoute(decision)}
+                    >
+                      Open
+                    </Link>
+                  </div>
+                </article>
+              ))}
+
+              {recentDecisions.length > 0 ? (
+                <article className="panel-card">
+                  <div className="panel-heading">
+                    <h3>Recent decisions</h3>
+                    <p>Latest resolved owner actions across the control plane.</p>
+                  </div>
+                  <div className="stack-list">
+                    {recentDecisions.slice(0, 6).map((decision) => (
+                      <article key={decision.id} className="panel-card compact decision-card">
+                        <div className="decision-card-header">
+                          <strong>{decision.title}</strong>
+                          <span className="status-chip ready">
+                            {decision.resolution ?? decision.status}
+                          </span>
+                        </div>
+                        <small>{decision.summary}</small>
+                        <small>
+                          {decision.actorLabel ?? "Owner"} •{" "}
+                          {new Date(
+                            decision.resolvedAt ?? decision.requestedAt,
+                          ).toLocaleString()}
+                        </small>
+                      </article>
+                    ))}
+                  </div>
+                </article>
+              ) : null}
             </div>
           </aside>
         </div>

@@ -10,7 +10,7 @@
 - File and job operations are limited to the configured workspace root.
 - Public file APIs use workspace-relative paths instead of absolute host paths.
 - Text-file saving uses path jail checks, conflict detection, and atomic writes.
-- Durable memory writes stay approval-gated through editable drafts before anything is appended to `MEMORY.md`, `PREFERENCES.md`, or a daily note.
+- Durable memory writes stay owner-reviewed through editable drafts before anything is appended to `MEMORY.md`, `PREFERENCES.md`, or a daily note.
 - Signal is optional and remains a lower-trust ingress than the local web session.
 
 ## Origin and bootstrap guard
@@ -20,11 +20,13 @@
 - Phone bootstrap uses a one-time token tied to the canonical origin.
 - Bootstrap tokens are hashed, time-limited, and consumed on use.
 
-## Exec and approval model
+## Exec and decision model
 
 - Owner-submitted jobs run directly through DroidAgent inside the workspace jail and command policy.
 - Suggested shell blocks in chat only become jobs when the owner explicitly clicks `Run in Chat`.
 - Agent-requested exec continues through OpenClaw approvals.
+- OpenClaw exec approvals, memory-draft review, and Signal pairing are normalized into one owner-facing decision ledger inside DroidAgent.
+- Decision audit records store owner identity plus the resolving auth session and device label when the action comes through DroidAgent.
 - Dangerous primitives remain blocked (`sudo`, `su`, destructive `rm`, etc.).
 - Job execution enforces timeout and output ceilings.
 - Replayable stdout/stderr logs live under `~/.droidagent/logs/jobs`.
@@ -50,3 +52,4 @@
 - multi-user RBAC
 - Windows host parity
 - browser-direct access to OpenClaw HTTP or WebSocket control surfaces
+- replacing OpenClaw as the source of truth for sessions, routing, pairing, or exec semantics

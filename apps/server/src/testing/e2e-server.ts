@@ -160,7 +160,10 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
       user_id TEXT NOT NULL,
       token_hash TEXT NOT NULL UNIQUE,
       expires_at TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      origin TEXT,
+      device_label TEXT,
+      user_agent TEXT
     );
     CREATE TABLE IF NOT EXISTS auth_challenges (
       id TEXT PRIMARY KEY,
@@ -220,6 +223,26 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
       message TEXT,
       last_error TEXT
     );
+    CREATE TABLE IF NOT EXISTS decision_records (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      source_system TEXT NOT NULL,
+      source_ref TEXT NOT NULL,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      details TEXT NOT NULL,
+      status TEXT NOT NULL,
+      requested_at TEXT NOT NULL,
+      resolved_at TEXT,
+      actor_user_id TEXT,
+      actor_label TEXT,
+      session_id TEXT,
+      actor_session_id TEXT,
+      device_label TEXT,
+      resolution TEXT,
+      source_updated_at TEXT,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   sqlite
@@ -229,7 +252,7 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
     .run(userId, "owner", "DroidAgent Owner", now);
   sqlite
     .prepare(
-      "INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+      "INSERT INTO auth_sessions (id, user_id, token_hash, expires_at, created_at, origin, device_label, user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .run(
       sessionId,
@@ -237,6 +260,9 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
       hashToken(sessionToken),
       new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
       now,
+      "http://127.0.0.1:3000",
+      "E2E Browser",
+      "Playwright",
     );
 
   const runtimeSettings: RuntimeSettings = {

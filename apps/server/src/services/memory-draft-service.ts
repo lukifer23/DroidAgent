@@ -23,6 +23,8 @@ import {
 } from "@droidagent/shared";
 
 import { db, schema } from "../db/index.js";
+import { computeMemorySourceFingerprint } from "../lib/memory-fingerprint.js";
+import { appStateService } from "./app-state-service.js";
 import { performanceService } from "./performance-service.js";
 import { openclawService } from "./openclaw-service.js";
 
@@ -345,6 +347,12 @@ export class MemoryDraftService {
       .where(eq(schema.memoryDrafts.id, draft.id));
 
     const appliedDraft = await this.getDraft(draft.id);
+    const fingerprint = await computeMemorySourceFingerprint({
+      workspaceRoot: scaffold.workspaceRoot,
+      memoryDirectory: scaffold.memoryDirectory,
+      memoryFilePath: scaffold.memoryFilePath,
+    });
+    await appStateService.setJsonSetting("memoryPrepareFingerprint", fingerprint);
     metric.finish({
       target: appliedDraft.target,
       reindexMode,

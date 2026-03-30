@@ -80,7 +80,7 @@ pnpm perf:check
 - The same quickstart path also seeds `MEMORY.md`, `PREFERENCES.md`, `HEARTBEAT.md`, daily notes under `memory/`, and the workspace `skills/` directory.
 - First-class workspace memory files are scaffold-repaired on demand, so `memory.status`, `memory.prepare`, `memory.today-note`, and opening `MEMORY.md` or `PREFERENCES.md` do not leak raw missing-file errors on a real host.
 - `memory.prepare` is now async and single-flight. The API call returns quickly, the actual reindex continues in the background, and Settings shows queued/running/completed/failed state, progress label, error, and last duration.
-- Durable memory capture is approval-gated. Chat messages and file selections create drafts first, then Settings is the review/apply surface.
+- Durable memory capture is owner-reviewed. Chat messages and file selections create drafts first, then Settings edits the draft while the shared decision inbox stays authoritative for apply or dismiss.
 - Suggested shell blocks from assistant replies can become `Run in Chat` or `Open in Terminal`. In-chat runs stay inside the workspace job jail; terminal suggestions are inserted but never auto-executed.
 - The default local chat model is `qwen3.5:4b` with a `65k` context budget and thinking disabled.
 - When Ollama reports `vision` for the selected primary model, DroidAgent reuses that same model for image and PDF analysis inside the chat composer.
@@ -97,15 +97,16 @@ pnpm perf:check
 - The Settings route shows the full client/server diagnostics card.
 - The Settings route also shows semantic-memory readiness, embedding/index status, and the current `65k` local context budget.
 - The Settings route now also exposes memory-prepare state and timings so semantic-memory regressions are visible in the same diagnostics surface as chat, files, and jobs.
-- The Settings route also exposes editable pending memory drafts, current maintenance state, recent maintenance history, and timing sample age/count plus `ok`/`warn`/`error` sample totals so stale or degraded telemetry is obvious.
+- The Settings route also exposes editable pending memory drafts, the shared decision-backed memory review queue, current maintenance state, recent maintenance history, and timing sample age/count plus `ok`/`warn`/`error` sample totals so stale or degraded telemetry is obvious.
 - Chat timing is split into accept, first-delta wait, first-delta forward, and full relay duration so model latency and DroidAgent overhead are not conflated.
 - Perf artifacts now also track cold dashboard fetch, route switch, visible first token, memory prepare accepted/completion, and bundle sizes. Use `pnpm perf:baseline` to refresh the checked-in local baseline and `pnpm perf:check` to enforce the budgets.
 - The Settings route also shows the running build/version identity so the live host, screenshots, logs, and repo all stay on the same release line.
 - The chat route now accepts local images, PDFs, Markdown, JSON, logs, and common code/text files. DroidAgent stores them under `~/.droidagent/uploads` and passes them through the real OpenClaw tool path instead of a parallel mock transcript.
-- The chat route is the operator console: it surfaces live run state, tool summaries, approval cards, attachments, code blocks, and client-side per-run timings.
+- The chat route is the operator console: it surfaces live run state, OpenClaw approval cards, session-scoped decision context, tool summaries, attachments, code blocks, and client-side per-run timings.
 - The rescue terminal is owner-only and PTY-backed. It defaults to a workspace shell and requires explicit confirmation before opening a full host shell.
 - Use Jobs for replayable workspace commands. Use the rescue terminal only for interactive recovery work that needs a real shell.
 - Performance artifacts are written under `artifacts/perf/`.
 - Access, dashboard, runtime, provider, and startup-status reads use short-lived in-memory caches with explicit invalidation on mutations so the mobile shell stays responsive without serving long-lived stale state.
-- Request-path warmup primes the main dashboard/access/runtime/provider caches before readiness completes, which keeps the first signed-in dashboard path off the coldest setup work.
+- Request-path warmup now waits for startup restore, then primes the main dashboard/access/runtime/provider caches before readiness completes, which keeps the first signed-in dashboard path off the coldest setup work.
+- The global decision inbox is the main owner queue. Chat, Settings, and Channels are filtered views over the same decision ids instead of separate approval systems.
 - OpenClaw runs with default thinking disabled unless you explicitly re-enable it in-session, while smart context management still controls compaction, pruning, and memory flush policy.

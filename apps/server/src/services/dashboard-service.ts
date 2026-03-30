@@ -10,6 +10,7 @@ import { jobService } from "./job-service.js";
 import { keychainService } from "./keychain-service.js";
 import { launchAgentService } from "./launch-agent-service.js";
 import { maintenanceService } from "./maintenance-service.js";
+import { decisionService } from "./decision-service.js";
 import { memoryDraftService } from "./memory-draft-service.js";
 import { openclawService } from "./openclaw-service.js";
 import { performanceService } from "./performance-service.js";
@@ -34,6 +35,7 @@ export type DashboardSliceKey =
   | "launchAgent"
   | "sessions"
   | "jobs"
+  | "decisions"
   | "approvals";
 
 export class DashboardService {
@@ -85,6 +87,9 @@ export class DashboardService {
   private readonly jobsCache = new TtlCache<
     Awaited<ReturnType<typeof jobService.listJobs>>
   >(DASHBOARD_SNAPSHOT_TTL_MS);
+  private readonly decisionsCache = new TtlCache<
+    Awaited<ReturnType<typeof decisionService.listDecisions>>
+  >(DASHBOARD_SNAPSHOT_TTL_MS);
   private readonly approvalsCache = new TtlCache<
     Awaited<ReturnType<typeof harnessService.listApprovals>>
   >(DASHBOARD_SNAPSHOT_TTL_MS);
@@ -109,6 +114,7 @@ export class DashboardService {
             "launchAgent",
             "sessions",
             "jobs",
+            "decisions",
             "approvals",
           ]);
 
@@ -127,6 +133,7 @@ export class DashboardService {
     if (targets.has("launchAgent")) this.launchAgentCache.invalidate();
     if (targets.has("sessions")) this.sessionsCache.invalidate();
     if (targets.has("jobs")) this.jobsCache.invalidate();
+    if (targets.has("decisions")) this.decisionsCache.invalidate();
     if (targets.has("approvals")) this.approvalsCache.invalidate();
   }
 
@@ -200,8 +207,12 @@ export class DashboardService {
     return await this.jobsCache.get(() => jobService.listJobs());
   }
 
+  private async getDecisions() {
+    return await this.decisionsCache.get(() => decisionService.listDecisions());
+  }
+
   private async getApprovals() {
-    return await this.approvalsCache.get(() => harnessService.listApprovals());
+    return await this.approvalsCache.get(() => decisionService.listLegacyApprovals());
   }
 
   async getDashboardState() {
@@ -223,6 +234,7 @@ export class DashboardService {
           launchAgent,
           sessions,
           jobs,
+          decisions,
           approvals,
         ] = await Promise.all([
           this.getSetup(),
@@ -239,6 +251,7 @@ export class DashboardService {
           this.getLaunchAgent(),
           this.getSessions(),
           this.getJobs(),
+          this.getDecisions(),
           this.getApprovals(),
         ]);
 
@@ -265,6 +278,7 @@ export class DashboardService {
           launchAgent,
           sessions,
           jobs,
+          decisions,
           approvals,
         });
       });

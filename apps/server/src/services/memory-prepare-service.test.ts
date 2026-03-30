@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => {
         updatedAt: "2026-03-29T00:00:01.000Z",
       };
     }),
+    getJsonSetting: vi.fn(async () => null),
+    setJsonSetting: vi.fn(async () => undefined),
     getRuntimeSettings: vi.fn(async () => ({
       selectedRuntime: "ollama" as const,
       ollamaEmbeddingModel: "embeddinggemma:300m-qat-q8_0",
@@ -46,6 +48,8 @@ vi.mock("./app-state-service.js", () => ({
   appStateService: {
     getMemoryPrepareStatus: mocks.getMemoryPrepareStatus,
     updateMemoryPrepareStatus: mocks.updateMemoryPrepareStatus,
+    getJsonSetting: mocks.getJsonSetting,
+    setJsonSetting: mocks.setJsonSetting,
     getRuntimeSettings: mocks.getRuntimeSettings,
   },
 }));
@@ -127,6 +131,9 @@ describe("MemoryPrepareService", () => {
       updatedAt: "2026-03-29T00:00:00.000Z",
     };
     mocks.state.memoryStatus = makeMemoryStatus();
+    mocks.getJsonSetting.mockReset();
+    mocks.getJsonSetting.mockResolvedValue(null);
+    mocks.setJsonSetting.mockReset();
   });
 
   it("runs a single background prepare and persists completion state", async () => {

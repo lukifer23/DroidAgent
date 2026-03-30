@@ -1,5 +1,6 @@
 import { nowIso, type MemoryStatus } from "@droidagent/shared";
 
+import { computeMemorySourceFingerprint } from "../lib/memory-fingerprint.js";
 import { appStateService } from "./app-state-service.js";
 import { openclawService } from "./openclaw-service.js";
 import { performanceService } from "./performance-service.js";
@@ -124,6 +125,39 @@ export class MemoryPrepareService {
         await runtimeService.ensureOllamaModel(settings.ollamaEmbeddingModel);
       }
 
+      const currentStatus = await openclawService.memoryStatusQuick();
+      const currentFingerprint = await computeMemorySourceFingerprint({
+        workspaceRoot: currentStatus.effectiveWorkspaceRoot,
+        memoryDirectory: currentStatus.memoryDirectory,
+        memoryFilePath: currentStatus.memoryFilePath,
+      });
+      const previousFingerprint = await appStateService.getJsonSetting<string | null>(
+        "memoryPrepareFingerprint",
+        null,
+      );
+      if (
+        currentStatus.semanticReady &&
+        !currentStatus.dirty &&
+        previousFingerprint === currentFingerprint
+      ) {
+        const finished = markFinished();
+        await this.persistStatus({
+          state: "completed",
+          startedAt,
+          ...finished,
+          progressLabel: "Semantic memory is already current.",
+          error: null,
+        });
+        metric.finish({
+          outcome: "ok",
+          skipped: true,
+          semanticReady: currentStatus.semanticReady,
+          indexedFiles: currentStatus.indexedFiles,
+          indexedChunks: currentStatus.indexedChunks,
+        });
+        return currentStatus;
+      }
+
       await this.persistStatus({
         state: "running",
         startedAt,
@@ -133,6 +167,12 @@ export class MemoryPrepareService {
       const status = await openclawService.prepareSemanticMemory({
         reindex: true,
       });
+      const fingerprint = await computeMemorySourceFingerprint({
+        workspaceRoot: status.effectiveWorkspaceRoot,
+        memoryDirectory: status.memoryDirectory,
+        memoryFilePath: status.memoryFilePath,
+      });
+      await appStateService.setJsonSetting("memoryPrepareFingerprint", fingerprint);
       const finished = markFinished();
       await this.persistStatus({
         state: "completed",

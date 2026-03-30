@@ -13,6 +13,13 @@ const sqlite = new Database(paths.dbPath);
 sqlite.pragma("journal_mode = WAL");
 sqlite.pragma("foreign_keys = ON");
 
+function hasColumn(table: string, column: string): boolean {
+  const rows = sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+    name?: string;
+  }>;
+  return rows.some((row) => row.name === column);
+}
+
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
@@ -97,7 +104,40 @@ sqlite.exec(`
     message TEXT,
     last_error TEXT
   );
+  CREATE TABLE IF NOT EXISTS decision_records (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    source_system TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    details TEXT NOT NULL,
+    status TEXT NOT NULL,
+    requested_at TEXT NOT NULL,
+    resolved_at TEXT,
+    actor_user_id TEXT,
+    actor_label TEXT,
+    session_id TEXT,
+    actor_session_id TEXT,
+    device_label TEXT,
+    resolution TEXT,
+    source_updated_at TEXT,
+    updated_at TEXT NOT NULL
+  );
 `);
+
+if (!hasColumn("auth_sessions", "origin")) {
+  sqlite.exec(`ALTER TABLE auth_sessions ADD COLUMN origin TEXT;`);
+}
+if (!hasColumn("auth_sessions", "device_label")) {
+  sqlite.exec(`ALTER TABLE auth_sessions ADD COLUMN device_label TEXT;`);
+}
+if (!hasColumn("auth_sessions", "user_agent")) {
+  sqlite.exec(`ALTER TABLE auth_sessions ADD COLUMN user_agent TEXT;`);
+}
+if (!hasColumn("decision_records", "actor_session_id")) {
+  sqlite.exec(`ALTER TABLE decision_records ADD COLUMN actor_session_id TEXT;`);
+}
 
 export const db = drizzle(sqlite, { schema });
 export { schema };
