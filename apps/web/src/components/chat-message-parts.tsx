@@ -523,30 +523,23 @@ export function PendingAttachmentList({
 }
 
 export function MessageMemoryActions({
-  expanded,
-  onToggle,
   onAddMemory,
   onAddPreferences,
   onAddTodayNote,
 }: {
-  expanded: boolean;
-  onToggle: () => void;
   onAddMemory: () => void;
   onAddPreferences: () => void;
   onAddTodayNote: () => void;
 }) {
   return (
-    <div className={`message-utility-tray ${expanded ? "open" : ""}`.trim()}>
-      <button
-        type="button"
+    <details className="message-utility-tray">
+      <summary
         className="message-utility-toggle"
         title="Create a memory draft from this message"
-        aria-expanded={expanded}
-        onClick={onToggle}
       >
         Save memory
-      </button>
-      {expanded ? (
+      </summary>
+      <div className="message-utility-panel">
         <div className="message-action-row compact">
           <button
             type="button"
@@ -570,8 +563,8 @@ export function MessageMemoryActions({
             Today Note
           </button>
         </div>
-      ) : null}
-    </div>
+      </div>
+    </details>
   );
 }
 

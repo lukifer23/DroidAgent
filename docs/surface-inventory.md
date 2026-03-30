@@ -44,12 +44,17 @@ This file is the canonical inventory for public surfaces and major internal data
 | owner decision ledger + compatibility routing | `apps/server/src/services/decision-service.ts` |
 | post-resolution decision fanout | `apps/server/src/lib/decision-updates.ts` |
 | chat relay timing | `apps/server/src/lib/chat-relay-metrics.ts` |
+| canonical chat send/abort orchestration | `apps/server/src/services/chat-run-coordinator.ts` |
+| shared output flush batching for jobs/terminal | `apps/server/src/lib/buffered-output-pipeline.ts` |
+| OpenClaw status cache ownership | `apps/server/src/services/openclaw-service-caches.ts` |
 | OpenClaw config helpers | `apps/server/src/services/openclaw-config.ts` |
 | OpenClaw workspace/bootstrap constants | `apps/server/src/services/openclaw-workspace.ts` |
 | OpenClaw attachment/message parsing | `apps/server/src/services/openclaw-message-parts.ts` |
 | dashboard/decision selectors | `apps/web/src/lib/dashboard-selectors.ts` |
 | shared display formatting | `apps/web/src/lib/formatters.ts` |
 | owner decision mutations | `apps/web/src/hooks/use-decision-actions.ts` |
+| session-scoped chat state assembly | `apps/web/src/hooks/use-chat-session-state.ts` |
+| shared chat session actions | `apps/web/src/lib/chat-session-actions.ts` |
 | script-side host/process helpers | `scripts/lib/common.mjs` |
 | shared decision contracts | `packages/shared/src/decisions.ts` re-exported by `packages/shared/src/index.ts` |
 

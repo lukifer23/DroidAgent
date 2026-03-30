@@ -43,6 +43,8 @@ pnpm verify:full
   - acceptance is chat-first now: the signed-in operator shell, live chat state, durable-memory capture, suggested-command promotion, attachments, files, jobs, reconnect, and layout stability on Fold-sized viewports
 - `pnpm perf:e2e`
   - runs advisory Playwright perf scenarios and writes artifacts under `artifacts/perf/`
+- `pnpm perf:live`
+  - runs the opt-in live OpenClaw/Ollama perf lane without changing deterministic CI gates
 
 ## Perf And Diagnostics
 
@@ -62,8 +64,9 @@ pnpm verify:full
 1. Run `pnpm verify:full`.
 2. Run `pnpm perf:server` and `pnpm perf:e2e` when you are updating the baseline or checking a perf-sensitive change.
 3. Run `pnpm perf:report`, `pnpm perf:baseline`, and `pnpm perf:check`.
-4. Review `artifacts/perf/` and the Settings diagnostics card for regressions.
-5. Update docs when commands, routes, supported operational flows, or perf budgets change.
+4. Run `pnpm perf:live` when validating real OpenClaw/Ollama behavior on the live path.
+5. Review `artifacts/perf/` and the Settings diagnostics card for regressions.
+6. Update docs when commands, routes, supported operational flows, or perf budgets change.
 
 ## Boundary Review Checklist
 

@@ -31,7 +31,7 @@ import { sessionLifecycleService } from "./services/session-lifecycle-service.js
 import { hostPressureService } from "./services/host-pressure-service.js";
 import { startupService } from "./services/startup-service.js";
 import { terminalService } from "./services/terminal-service.js";
-import { createMeasuredStreamRelay } from "./lib/chat-relay-metrics.js";
+import { chatRunCoordinator } from "./services/chat-run-coordinator.js";
 import { publishDecisionEffects } from "./lib/decision-updates.js";
 
 function send(ws: WebSocket, payload: unknown): void {
@@ -85,8 +85,16 @@ export class WebsocketHub {
   }
 
   private flushPendingRealtimeEvents(): void {
+    const pendingChat = this.pendingChatDeltas.size;
+    const pendingJobs = this.pendingJobOutputs.size;
+    const pendingTerminal = this.pendingTerminalOutputs.size;
+    const flushMetric = performanceService.start("server", "ws.patch.flush", {
+      chatPatches: pendingChat,
+      jobPatches: pendingJobs,
+      terminalPatches: pendingTerminal,
+    });
     this.pendingFlushHandle = null;
-    if (this.pendingChatDeltas.size > 0) {
+    if (pendingChat > 0) {
       for (const pending of this.pendingChatDeltas.values()) {
         this.broadcastEvent({
           type: "chat.stream.delta",
@@ -95,7 +103,7 @@ export class WebsocketHub {
       }
       this.pendingChatDeltas.clear();
     }
-    if (this.pendingJobOutputs.size > 0) {
+    if (pendingJobs > 0) {
       for (const pending of this.pendingJobOutputs.values()) {
         this.broadcastEvent({
           type: "job.output",
@@ -104,7 +112,7 @@ export class WebsocketHub {
       }
       this.pendingJobOutputs.clear();
     }
-    if (this.pendingTerminalOutputs.size > 0) {
+    if (pendingTerminal > 0) {
       for (const pending of this.pendingTerminalOutputs.values()) {
         this.broadcastEvent({
           type: "terminal.output",
@@ -113,6 +121,12 @@ export class WebsocketHub {
       }
       this.pendingTerminalOutputs.clear();
     }
+    flushMetric.finish({
+      chatPatches: pendingChat,
+      jobPatches: pendingJobs,
+      terminalPatches: pendingTerminal,
+      outcome: "ok",
+    });
   }
 
   private schedulePendingFlush(): void {
@@ -572,17 +586,33 @@ export class WebsocketHub {
   }
 
   async pushChatHistory(sessionId: string): Promise<void> {
-    const messages = await harnessService.loadHistory(sessionId);
-    await sessionLifecycleService.observeSessionFromMessages(sessionId, messages);
-    this.broadcast(
-      ServerEventSchema.parse({
-        type: "chat.history",
-        payload: {
-          sessionId,
-          messages
-        }
-      })
-    );
+    const metric = performanceService.start("server", "chat.history.resync", {
+      sessionId,
+    });
+    try {
+      const messages = await harnessService.loadHistory(sessionId);
+      await sessionLifecycleService.observeSessionFromMessages(sessionId, messages);
+      this.broadcast(
+        ServerEventSchema.parse({
+          type: "chat.history",
+          payload: {
+            sessionId,
+            messages
+          }
+        })
+      );
+      metric.finish({
+        sessionId,
+        messageCount: messages.length,
+        outcome: "ok",
+      });
+    } catch (error) {
+      metric.finish({
+        sessionId,
+        outcome: "error",
+      });
+      throw error;
+    }
   }
 
   private async pushDashboard(ws: WebSocket): Promise<void> {
@@ -631,70 +661,23 @@ export class WebsocketHub {
         await maintenanceService.assertAllowsNewWork("chat");
         await hostPressureService.assertAllowsAgentRuns("chat");
         const { sessionId, text, attachments } = command.payload;
-        await sessionLifecycleService.observeSession(sessionId, {
-          restore: true,
-        });
-        let finished = false;
-        let runId = "";
-        const measuredRelay = createMeasuredStreamRelay("ws", sessionId, {
-          onState: async (state) => {
-            this.publishChatRun({
-              sessionId,
-              runId,
-              ...state,
-            });
-          },
-          onFirstDelta: async () => {
-            await this.publishPerformanceUpdated();
-          },
-          onDelta: async (delta) => {
-            this.publishChatDelta(sessionId, runId, delta);
-          },
-          onDone: async () => {
-            if (!finished) {
-              finished = true;
-            }
-            this.publishChatDone(sessionId, runId);
-            await this.pushChatHistory(sessionId);
-            await this.publishSessionsUpdated();
-            await this.publishPerformanceUpdated();
-          },
-          onError: async (message) => {
-            if (!finished) {
-              finished = true;
-            }
-            this.publishChatError(sessionId, runId, message);
-            await this.pushChatHistory(sessionId);
-            await this.publishSessionsUpdated();
-            await this.publishPerformanceUpdated();
-          },
-        });
-
-        const run = await harnessService.sendMessage(
+        await chatRunCoordinator.send({
+          publisher: this,
+          transport: "ws",
           sessionId,
-          {
+          request: {
             text,
             attachments,
           },
-          measuredRelay.relay,
-        );
-        runId = run.runId;
-        measuredRelay.markAccepted();
-        this.publishChatRun({
-          sessionId,
-          runId,
-          stage: "accepted",
-          label: "Run accepted",
-          detail: "OpenClaw accepted the request and is starting the live run.",
-          active: true,
         });
         return;
       }
 
       if (command.type === "chat.abort") {
-        await harnessService.abortMessage(command.payload.sessionId);
-        await this.pushChatHistory(command.payload.sessionId);
-        await this.publishSessionsUpdated();
+        await chatRunCoordinator.abort({
+          publisher: this,
+          sessionId: command.payload.sessionId,
+        });
         return;
       }
 

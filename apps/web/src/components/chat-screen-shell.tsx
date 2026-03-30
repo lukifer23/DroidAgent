@@ -88,8 +88,6 @@ export interface ChatScreenShellProps {
     expectedUpdatedAt?: string,
   ) => Promise<void>;
   navigate: NavigateFn;
-  expandedMemoryMessageId: string | null;
-  onToggleMessageMemory: (messageId: string | null) => void;
   onCreateMemoryDraft: (
     target: "memory" | "preferences" | "todayNote",
     message: ChatMessage,
@@ -148,7 +146,6 @@ function TranscriptWindow(props: ChatScreenShellProps) {
     approvals,
     approvalsById,
     currentRunBreakdown,
-    expandedMemoryMessageId,
     historyError,
     historyLoading,
     historyFetching,
@@ -163,7 +160,6 @@ function TranscriptWindow(props: ChatScreenShellProps) {
     onOpenInTerminal,
     onResolveApprovalAction,
     onRunCommandFromMessage,
-    onToggleMessageMemory,
     pressureBlocks,
     runAction,
     sessionDecisions,
@@ -283,29 +279,20 @@ function TranscriptWindow(props: ChatScreenShellProps) {
 
               {message.text.trim() ? (
                 <MessageMemoryActions
-                  expanded={expandedMemoryMessageId === message.id}
                   onAddMemory={() =>
                     void runAction(async () => {
-                      onToggleMessageMemory(null);
                       await onCreateMemoryDraft("memory", message);
                     }, "Draft added to durable memory.")
                   }
                   onAddPreferences={() =>
                     void runAction(async () => {
-                      onToggleMessageMemory(null);
                       await onCreateMemoryDraft("preferences", message);
                     }, "Draft added to preferences.")
                   }
                   onAddTodayNote={() =>
                     void runAction(async () => {
-                      onToggleMessageMemory(null);
                       await onCreateMemoryDraft("todayNote", message);
                     }, "Draft added to today's note.")
-                  }
-                  onToggle={() =>
-                    onToggleMessageMemory(
-                      expandedMemoryMessageId === message.id ? null : message.id,
-                    )
                   }
                 />
               ) : null}

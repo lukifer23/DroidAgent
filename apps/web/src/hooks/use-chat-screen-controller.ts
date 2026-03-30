@@ -37,15 +37,18 @@ import { useDecisionActions } from "./use-decision-actions";
 import { api, postFormData, postJson } from "../lib/api";
 import { buildRunInChatPrompt } from "../lib/command-suggestions";
 import { TERMINAL_PREFILL_STORAGE_KEY } from "../lib/constants";
-import { useChatRuns } from "../lib/chat-run-store";
 import {
   buildOptimisticChatMessage,
-  updateArchivedSessionCache,
-  updateDashboardSessionCache,
 } from "../lib/chat-screen-utils";
-import { useStreamingRuns } from "../lib/chat-stream-store";
 import { getPendingDecisions, getSessionDecisions } from "../lib/dashboard-selectors";
 import { formatLatency, formatTokenBudget, roleLabel } from "../lib/formatters";
+import { clientPerformance } from "../lib/client-performance";
+import {
+  closeCurrentSession,
+  restoreSession,
+  startFreshSession,
+} from "../lib/chat-session-actions";
+import { useChatSessionState } from "./use-chat-session-state";
 
 export function useChatScreenController(): ChatScreenShellProps {
   const queryClient = useQueryClient();
@@ -67,8 +70,6 @@ export function useChatScreenController(): ChatScreenShellProps {
   const chatFeedbackSnapshot = useChatFeedbackSnapshot();
   const dashboard = dashboardQuery.data;
   const clientPerformanceSnapshot = useClientPerformanceSnapshot();
-  const streamingRuns = useStreamingRuns();
-  const runStates = useChatRuns();
   const [chatInput, setChatInput] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>(
     [],
@@ -77,9 +78,6 @@ export function useChatScreenController(): ChatScreenShellProps {
   const [expandedImage, setExpandedImage] = useState<ExpandedImageState | null>(
     null,
   );
-  const [expandedMemoryMessageId, setExpandedMemoryMessageId] = useState<
-    string | null
-  >(null);
 
   const dashboardSessions = dashboard?.sessions ?? [];
   const archivedSessionsQuery = useQuery({
@@ -98,16 +96,17 @@ export function useChatScreenController(): ChatScreenShellProps {
     sessions[0] ??
     null;
   const selectedSessionKey = activeSession?.id ?? selectedSessionId;
-  const activeRun = selectedSessionKey ? runStates[selectedSessionKey] : null;
-  const liveChatFeedback = selectedSessionKey
-    ? chatFeedbackSnapshot.liveBySessionId[selectedSessionKey] ?? null
-    : null;
-  const recentChatFeedback = selectedSessionKey
-    ? chatFeedbackSnapshot.recentBySessionId[selectedSessionKey] ?? null
-    : null;
-  const streaming = selectedSessionKey
-    ? streamingRuns[selectedSessionKey]
-    : undefined;
+  const sessionState = useChatSessionState({
+    selectedSessionKey,
+    queryClient,
+    enabled: Boolean(authQuery.data?.user),
+    liveBySessionId: chatFeedbackSnapshot.liveBySessionId,
+    recentBySessionId: chatFeedbackSnapshot.recentBySessionId,
+  });
+  const activeRun = sessionState.activeRun;
+  const liveChatFeedback = sessionState.liveChatFeedback;
+  const recentChatFeedback = sessionState.recentChatFeedback;
+  const streaming = sessionState.streaming;
   const activeProvider = providers.find((provider) => provider.enabled);
   const openclawRuntime = runtimes.find(
     (runtime) => runtime.id === "openclaw",
@@ -155,31 +154,8 @@ export function useChatScreenController(): ChatScreenShellProps {
       : null;
   const { resolveDecision, resolveApproval } = useDecisionActions(decisions);
 
-  useEffect(() => {
-    setExpandedMemoryMessageId(null);
-  }, [selectedSessionKey]);
-
-  const historyQuery = useQuery({
-    queryKey: ["sessions", selectedSessionKey, "messages"],
-    queryFn: () =>
-      api<ChatMessage[]>(
-        `/api/sessions/${encodeURIComponent(selectedSessionKey)}/messages`,
-      ),
-    enabled: Boolean(authQuery.data?.user && selectedSessionKey),
-    staleTime: 15_000,
-  });
-  const cachedMessages = selectedSessionKey
-    ? (queryClient.getQueryData<ChatMessage[]>([
-        "sessions",
-        selectedSessionKey,
-        "messages",
-      ]) ?? [])
-    : [];
-
-  const messages = useMemo(
-    () => historyQuery.data ?? cachedMessages,
-    [cachedMessages, historyQuery.data],
-  );
+  const historyQuery = sessionState.historyQuery;
+  const messages = sessionState.messages;
   const terminalChatFeedback =
     recentChatFeedback ??
     (isTerminalChatFeedback(liveChatFeedback) ? liveChatFeedback : null);
@@ -500,6 +476,9 @@ export function useChatScreenController(): ChatScreenShellProps {
         "messages",
       ])
     ) {
+      const switchMetric = clientPerformance.start("client.chat.session_switch", {
+        sessionId,
+      });
       await queryClient.prefetchQuery({
         queryKey: ["sessions", sessionId, "messages"],
         queryFn: () =>
@@ -507,6 +486,10 @@ export function useChatScreenController(): ChatScreenShellProps {
             `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
           ),
         staleTime: 15_000,
+      });
+      switchMetric.finish({
+        sessionId,
+        outcome: "ok",
       });
     }
     setSelectedSessionId(sessionId);
@@ -540,128 +523,39 @@ export function useChatScreenController(): ChatScreenShellProps {
   }
 
   async function handleStartFreshSession() {
-    const freshSession = await postJson<SessionSummary>("/api/sessions", {});
-    updateDashboardSessionCache(queryClient, (currentSessions) => {
-      const next = [
-        freshSession,
-        ...currentSessions.filter((session) => session.id !== freshSession.id),
-      ];
-      return next;
+    await startFreshSession({
+      queryClient,
+      wsStatus,
+      setSelectedSessionId,
+      setChatInput,
+      setPendingAttachments,
     });
-    queryClient.setQueryData<ChatMessage[]>(
-      ["sessions", freshSession.id, "messages"],
-      [],
-    );
-    setSelectedSessionId(freshSession.id);
-    setChatInput("");
-    setPendingAttachments([]);
-    await queryClient.prefetchQuery({
-      queryKey: ["sessions", freshSession.id, "messages"],
-      queryFn: () =>
-        api<ChatMessage[]>(
-          `/api/sessions/${encodeURIComponent(freshSession.id)}/messages`,
-        ),
-      staleTime: 15_000,
-    });
-    if (wsStatus !== "connected") {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
-      ]);
-    }
   }
 
   async function handleCloseCurrentSession() {
     if (!selectedSessionKey) {
       return;
     }
-    const closingSessionId = selectedSessionKey;
-    const siblingSession =
-      sessionOptions.find((session) => session.id !== closingSessionId) ?? null;
-    let replacementSession = siblingSession;
-
-    if (!replacementSession) {
-      replacementSession = await postJson<SessionSummary>("/api/sessions", {});
-      queryClient.setQueryData<ChatMessage[]>(
-        ["sessions", replacementSession.id, "messages"],
-        [],
-      );
-      updateDashboardSessionCache(queryClient, (currentSessions) => [
-        replacementSession!,
-        ...currentSessions.filter(
-          (session) =>
-            session.id !== closingSessionId &&
-            session.id !== replacementSession!.id,
-        ),
-      ]);
-    } else {
-      updateDashboardSessionCache(queryClient, (currentSessions) =>
-        currentSessions.filter((session) => session.id !== closingSessionId),
-      );
-    }
-
-    setSelectedSessionId(replacementSession.id);
-    setChatInput("");
-    setPendingAttachments([]);
-
-    const archivedSession = await postJson<SessionSummary>(
-      `/api/sessions/${encodeURIComponent(closingSessionId)}/archive`,
-      {},
-    );
-    updateDashboardSessionCache(queryClient, (currentSessions) =>
-      currentSessions.filter((session) => session.id !== closingSessionId),
-    );
-    updateArchivedSessionCache(queryClient, (currentSessions) => [
-      archivedSession,
-      ...currentSessions.filter((session) => session.id !== closingSessionId),
-    ]);
-    queryClient.removeQueries({
-      queryKey: ["sessions", closingSessionId, "messages"],
-      exact: true,
+    await closeCurrentSession({
+      queryClient,
+      wsStatus,
+      selectedSessionId: selectedSessionKey,
+      sessionOptions,
+      setSelectedSessionId,
+      setChatInput,
+      setPendingAttachments,
     });
-    await queryClient.prefetchQuery({
-      queryKey: ["sessions", replacementSession.id, "messages"],
-      queryFn: () =>
-        api<ChatMessage[]>(
-          `/api/sessions/${encodeURIComponent(replacementSession.id)}/messages`,
-        ),
-      staleTime: 15_000,
-    });
-    if (wsStatus !== "connected") {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
-      ]);
-    }
   }
 
   async function handleRestoreSession(sessionId: string) {
-    const restored = await postJson<SessionSummary>(
-      `/api/sessions/${encodeURIComponent(sessionId)}/restore`,
-      {},
-    );
-    updateDashboardSessionCache(queryClient, (currentSessions) => [
-      restored,
-      ...currentSessions.filter((session) => session.id !== restored.id),
-    ]);
-    updateArchivedSessionCache(queryClient, (currentSessions) =>
-      currentSessions.filter((session) => session.id !== restored.id),
-    );
-    setSelectedSessionId(restored.id);
-    await queryClient.prefetchQuery({
-      queryKey: ["sessions", restored.id, "messages"],
-      queryFn: () =>
-        api<ChatMessage[]>(
-          `/api/sessions/${encodeURIComponent(restored.id)}/messages`,
-        ),
-      staleTime: 15_000,
+    await restoreSession({
+      queryClient,
+      wsStatus,
+      sessionId,
+      setSelectedSessionId,
+      setChatInput,
+      setPendingAttachments,
     });
-    if (wsStatus !== "connected") {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-        queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
-      ]);
-    }
   }
 
   async function sendChatMessage(params: {
@@ -836,8 +730,6 @@ export function useChatScreenController(): ChatScreenShellProps {
     runAction,
     resolveDecision: handleResolveDecision,
     navigate,
-    expandedMemoryMessageId,
-    onToggleMessageMemory: setExpandedMemoryMessageId,
     onCreateMemoryDraft: handleCreateMemoryDraft,
     onRunCommandFromMessage: handleRunCommandFromMessage,
     onOpenInTerminal: handleOpenInTerminal,

@@ -135,29 +135,21 @@ export class SessionLifecycleService {
     return merged;
   }
 
-  private async observeSessionWithRegistry(
-    registry: PersistedSessionRecord[],
-    sessionId: string,
-    options?: {
-      title?: string;
-      restore?: boolean;
-      messages?: ChatMessage[];
-    },
-  ): Promise<SessionSummary> {
-    const current = registry.find((record) => record.id === sessionId);
-    const lastMessage = options?.messages?.at(-1) ?? null;
-    const updatedAt = lastMessage?.createdAt ?? current?.updatedAt ?? nowIso();
-    const nextTitle = options?.title ?? current?.title;
-    const nextRecord = this.createRecord(sessionId, {
-      ...(current ?? {}),
-      ...(nextTitle ? { title: nextTitle } : {}),
-      updatedAt,
-      lastMessagePreview: lastMessage?.text ?? current?.lastMessagePreview ?? "",
-      archivedAt: options?.restore ? null : current?.archivedAt ?? null,
-    });
-    const next = [nextRecord, ...registry.filter((record) => record.id !== sessionId)];
-    await this.saveRegistry(next);
-    return toSummary(nextRecord);
+  private async updateRegistry(
+    updater: (registry: PersistedSessionRecord[]) => PersistedSessionRecord[],
+    options?: { syncHarness?: boolean },
+  ): Promise<PersistedSessionRecord[]> {
+    const registry = options?.syncHarness === false
+      ? await this.loadRegistry()
+      : await this.syncRegistry();
+    const next = updater(registry).sort(compareSessions);
+    const changed =
+      next.length !== registry.length ||
+      next.some((record, index) => !recordsEqual(record, registry[index]!));
+    if (changed) {
+      await this.saveRegistry(next);
+    }
+    return next;
   }
 
   private nextWebSessionTitle(records: PersistedSessionRecord[]): string {
@@ -191,30 +183,32 @@ export class SessionLifecycleService {
   }
 
   async archiveSession(sessionId: string): Promise<SessionSummary> {
-    const registry = await this.syncRegistry();
     const now = nowIso();
-    const current = registry.find((record) => record.id === sessionId);
-    const nextRecord = this.createRecord(sessionId, {
-      ...(current ?? {}),
-      updatedAt: now,
-      archivedAt: now,
+    const next = await this.updateRegistry((registry) => {
+      const current = registry.find((record) => record.id === sessionId);
+      const nextRecord = this.createRecord(sessionId, {
+        ...(current ?? {}),
+        updatedAt: now,
+        archivedAt: now,
+      });
+      return [nextRecord, ...registry.filter((record) => record.id !== sessionId)];
     });
-    const next = [nextRecord, ...registry.filter((record) => record.id !== sessionId)];
-    await this.saveRegistry(next);
+    const nextRecord = next.find((record) => record.id === sessionId)!;
     return toSummary(nextRecord);
   }
 
   async restoreSession(sessionId: string): Promise<SessionSummary> {
-    const registry = await this.syncRegistry();
     const now = nowIso();
-    const current = registry.find((record) => record.id === sessionId);
-    const nextRecord = this.createRecord(sessionId, {
-      ...(current ?? {}),
-      updatedAt: now,
-      archivedAt: null,
+    const next = await this.updateRegistry((registry) => {
+      const current = registry.find((record) => record.id === sessionId);
+      const nextRecord = this.createRecord(sessionId, {
+        ...(current ?? {}),
+        updatedAt: now,
+        archivedAt: null,
+      });
+      return [nextRecord, ...registry.filter((record) => record.id !== sessionId)];
     });
-    const next = [nextRecord, ...registry.filter((record) => record.id !== sessionId)];
-    await this.saveRegistry(next);
+    const nextRecord = next.find((record) => record.id === sessionId)!;
     return toSummary(nextRecord);
   }
 
@@ -226,16 +220,28 @@ export class SessionLifecycleService {
       messages?: ChatMessage[];
     },
   ): Promise<SessionSummary> {
-    const registry = await this.syncRegistry();
-    return await this.observeSessionWithRegistry(registry, sessionId, options);
+    const next = await this.updateRegistry((registry) => {
+      const current = registry.find((record) => record.id === sessionId);
+      const lastMessage = options?.messages?.at(-1) ?? null;
+      const updatedAt = lastMessage?.createdAt ?? current?.updatedAt ?? nowIso();
+      const nextTitle = options?.title ?? current?.title;
+      const nextRecord = this.createRecord(sessionId, {
+        ...(current ?? {}),
+        ...(nextTitle ? { title: nextTitle } : {}),
+        updatedAt,
+        lastMessagePreview: lastMessage?.text ?? current?.lastMessagePreview ?? "",
+        archivedAt: options?.restore ? null : current?.archivedAt ?? null,
+      });
+      return [nextRecord, ...registry.filter((record) => record.id !== sessionId)];
+    });
+    return toSummary(next.find((record) => record.id === sessionId)!);
   }
 
   async observeSessionFromMessages(
     sessionId: string,
     messages: ChatMessage[],
   ): Promise<SessionSummary> {
-    const registry = await this.loadRegistry();
-    return await this.observeSessionWithRegistry(registry, sessionId, {
+    return await this.observeSession(sessionId, {
       messages,
       restore: true,
     });

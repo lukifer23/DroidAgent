@@ -91,7 +91,40 @@ export function FilesScreen() {
       setDirty(false);
       setConflict(null);
       queryClient.setQueryData(["file", loadedFile.path], saved);
-      await queryClient.invalidateQueries({ queryKey: ["files", directoryPath] });
+      const parentPath =
+        saved.path.includes("/") ? saved.path.slice(0, saved.path.lastIndexOf("/")) : ".";
+      if (parentPath === directoryPath) {
+        queryClient.setQueryData<WorkspaceEntry[]>(
+          ["files", directoryPath],
+          (current) => {
+            if (!current) {
+              return current;
+            }
+            const savedName = saved.path.includes("/")
+              ? saved.path.slice(saved.path.lastIndexOf("/") + 1)
+              : saved.path;
+            const nextEntry: WorkspaceEntry = {
+              path: saved.path,
+              name: savedName,
+              kind: "file",
+              size: saved.size,
+              modifiedAt: saved.modifiedAt,
+            };
+            const found = current.some((entry) => entry.path === saved.path);
+            const next = found
+              ? current.map((entry) =>
+                  entry.path === saved.path ? nextEntry : entry,
+                )
+              : [...current, nextEntry];
+            return next.sort(
+              (left, right) =>
+                Number(right.kind === "directory") -
+                  Number(left.kind === "directory") ||
+                left.name.localeCompare(right.name),
+            );
+          },
+        );
+      }
       return true;
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && error.payload) {

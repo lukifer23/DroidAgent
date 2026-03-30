@@ -15,12 +15,14 @@ import {
 } from "@droidagent/shared";
 
 import { baseEnv, paths } from "../env.js";
+import { BufferedOutputPipeline } from "../lib/buffered-output-pipeline.js";
 import { resolveCwdWithinWorkspace } from "../lib/job-policy.js";
 import { appStateService } from "./app-state-service.js";
 import { performanceService } from "./performance-service.js";
 
 const TERMINAL_TRANSCRIPT_MAX_BYTES = 256 * 1024;
 const TERMINAL_IDLE_TIMEOUT_MS = 1000 * 60 * 15;
+const TERMINAL_OUTPUT_FLUSH_DELAY_MS = 24;
 const DEFAULT_TERMINAL_COLS = 120;
 const DEFAULT_TERMINAL_ROWS = 34;
 const AUDIT_LOG_PATH = path.join(paths.terminalLogsDir, "terminal-audit.log");
@@ -48,7 +50,7 @@ type TerminalSessionRecord = {
   firstOutputMetric: ReturnType<typeof performanceService.start>;
   idleTimer: ReturnType<typeof setTimeout> | null;
   listeners: IDisposable[];
-  writeQueue: Promise<void>;
+  outputPipeline: BufferedOutputPipeline<"output">;
 };
 
 function transcriptPathFor(sessionId: string): string {
@@ -97,6 +99,10 @@ export class TerminalService extends EventEmitter<{
     super();
   }
 
+  hasActiveSession(): boolean {
+    return Boolean(this.activeSession && !this.activeSession.closed);
+  }
+
   private cloneSummary(summary: TerminalSessionSummary): TerminalSessionSummary {
     return TerminalSessionSummarySchema.parse({
       ...summary,
@@ -142,6 +148,7 @@ export class TerminalService extends EventEmitter<{
         outcome: "no-output",
       });
     }
+    await session.outputPipeline.close();
     if (session.idleTimer) {
       clearTimeout(session.idleTimer);
       session.idleTimer = null;
@@ -192,15 +199,8 @@ export class TerminalService extends EventEmitter<{
     session.summary.transcriptBytes += Buffer.byteLength(data, "utf8");
     session.transcript.append(data);
     this.scheduleIdleTimeout(session, false);
-    this.emit("output", {
-      sessionId: session.summary.id,
-      data,
-    });
-    session.writeQueue = session.writeQueue
-      .then(async () => {
-        await fs.appendFile(session.transcriptPath, data, "utf8");
-      })
-      .catch(() => {});
+    session.outputPipeline.push("output", data);
+    void session.outputPipeline.flush();
   }
 
   async getSnapshot(): Promise<TerminalSnapshot> {
@@ -311,7 +311,17 @@ export class TerminalService extends EventEmitter<{
       }),
       idleTimer: null,
       listeners: [],
-      writeQueue: Promise.resolve(),
+      outputPipeline: new BufferedOutputPipeline<"output">({
+        flushDelayMs: TERMINAL_OUTPUT_FLUSH_DELAY_MS,
+        onFlush: async (chunks) => {
+          const data = chunks.map((entry) => entry.chunk).join("");
+          await fs.appendFile(transcriptPath, data, "utf8");
+          this.emit("output", {
+            sessionId,
+            data,
+          });
+        },
+      }),
     };
 
     session.listeners.push(

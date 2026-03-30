@@ -50,6 +50,7 @@ pnpm verify:full
 pnpm hygiene:check
 pnpm perf:server
 pnpm perf:e2e
+pnpm perf:live
 pnpm perf:report
 pnpm perf:baseline
 pnpm perf:check
@@ -100,7 +101,9 @@ pnpm perf:check
 - The Settings route now also exposes memory-prepare state and timings so semantic-memory regressions are visible in the same diagnostics surface as chat, files, and jobs.
 - The Settings route also exposes editable pending memory drafts, the shared decision-backed memory review queue, current maintenance state, recent maintenance history, and timing sample age/count plus `ok`/`warn`/`error` sample totals so stale or degraded telemetry is obvious.
 - Chat timing is split into accept, first-delta wait, first-delta forward, and full relay duration so model latency and DroidAgent overhead are not conflated.
+- Diagnostics now also include websocket patch flush latency, chat history resync latency, and session-switch latency so live-path churn is visible.
 - Perf artifacts now also track cold dashboard fetch, route switch, visible first token, memory prepare accepted/completion, and bundle sizes. Use `pnpm perf:baseline` to refresh the checked-in local baseline and `pnpm perf:check` to enforce the budgets.
+- `pnpm perf:live` is the opt-in live OpenClaw/Ollama validation lane and should be treated as additive reporting rather than the deterministic gate.
 - The Settings route also shows the running build/version identity so the live host, screenshots, logs, and repo all stay on the same release line.
 - The chat route now accepts local images, PDFs, Markdown, JSON, logs, and common code/text files. DroidAgent stores them under `~/.droidagent/uploads` and passes them through the real OpenClaw tool path instead of a parallel mock transcript.
 - The chat route is the operator console: it surfaces live run state, OpenClaw approval cards, session-scoped decision context, tool summaries, attachments, code blocks, and client-side per-run timings.

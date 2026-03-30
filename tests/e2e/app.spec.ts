@@ -29,6 +29,18 @@ async function clickWithDetachRetry(locator: Locator): Promise<void> {
   throw lastError;
 }
 
+async function clickMemoryActionTrigger(userMessage: Locator): Promise<void> {
+  const toggleByRole = userMessage.getByRole("button", { name: "Save memory" });
+  if (await toggleByRole.count()) {
+    await clickWithDetachRetry(toggleByRole);
+    return;
+  }
+
+  const toggleByClass = userMessage.locator(".message-utility-toggle").first();
+  await expect(toggleByClass).toBeVisible();
+  await clickWithDetachRetry(toggleByClass);
+}
+
 test("shows the passkey auth screen before sign-in", async ({
   page,
   baseURL,
@@ -180,9 +192,7 @@ test("captures a chat message as a memory draft, edits it, and applies it", asyn
     hasText: prompt,
   });
   await expect(userMessage).toBeVisible();
-  await clickWithDetachRetry(
-    userMessage.getByRole("button", { name: "Save memory" }),
-  );
+  await clickMemoryActionTrigger(userMessage);
   const draftMemoryButton = page
     .locator(".message-card.user")
     .filter({ hasText: prompt })
@@ -252,9 +262,7 @@ test("rejects stale memory draft mutations with a conflict response", async ({
     hasText: prompt,
   });
   await expect(userMessage).toBeVisible();
-  await clickWithDetachRetry(
-    userMessage.getByRole("button", { name: "Save memory" }),
-  );
+  await clickMemoryActionTrigger(userMessage);
   const staleDraftMemoryButton = page
     .locator(".message-card.user")
     .filter({ hasText: prompt })

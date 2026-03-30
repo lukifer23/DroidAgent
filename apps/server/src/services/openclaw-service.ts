@@ -8,7 +8,6 @@ import {
   ChannelStatusSchema,
   SignalHealthCheckSchema,
   SignalPendingPairingSchema,
-  type MemoryStatus,
   type ChannelConfigSummary,
   type ChannelStatus,
 } from "@droidagent/shared";
@@ -22,11 +21,11 @@ import {
 } from "../env.js";
 import { CommandError, runCommand } from "../lib/process.js";
 import { ollamaModelSupportsVision } from "../lib/ollama.js";
-import { TtlCache } from "../lib/ttl-cache.js";
 import {
   DEFAULT_OLLAMA_VISION_MODEL,
   appStateService,
 } from "./app-state-service.js";
+import { createOpenClawServiceCaches } from "./openclaw-service-caches.js";
 import { keychainService } from "./keychain-service.js";
 import {
   configValueEquals,
@@ -77,18 +76,19 @@ export class OpenClawService {
     string,
     { controller: AbortController; runId: string }
   >();
-  private readonly channelStatusesCache = new TtlCache<{
-    statuses: ChannelStatus[];
-    config: ChannelConfigSummary;
-  }>(CHANNEL_STATUS_TTL_MS);
-  readonly memoryStatusCache = new TtlCache<MemoryStatus>(MEMORY_STATUS_TTL_MS);
+  private readonly statusCaches = createOpenClawServiceCaches({
+    channelStatusTtlMs: CHANNEL_STATUS_TTL_MS,
+    memoryStatusTtlMs: MEMORY_STATUS_TTL_MS,
+  });
+  private readonly channelStatusesCache = this.statusCaches.channelStatusesCache;
+  readonly memoryStatusCache = this.statusCaches.memoryStatusCache;
 
   invalidateChannelStatusCache(): void {
-    this.channelStatusesCache.invalidate();
+    this.statusCaches.invalidateChannelStatusCache();
   }
 
   invalidateMemoryStatusCache(): void {
-    this.memoryStatusCache.invalidate();
+    this.statusCaches.invalidateMemoryStatusCache();
   }
 
   private ensureGatewayLogStream(): fs.WriteStream {

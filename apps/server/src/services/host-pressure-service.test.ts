@@ -13,8 +13,8 @@ const mocks = vi.hoisted(() => {
     freemem: vi.fn(() => 8 * ONE_GIB),
   };
   const runCommand = vi.fn();
-  const listJobs = vi.fn();
-  const getSnapshot = vi.fn();
+  const getActiveJobCount = vi.fn();
+  const hasActiveSession = vi.fn();
   const performanceFinish = vi.fn();
   const performanceStart = vi.fn(() => ({
     finish: performanceFinish,
@@ -23,8 +23,8 @@ const mocks = vi.hoisted(() => {
   return {
     os,
     runCommand,
-    listJobs,
-    getSnapshot,
+    getActiveJobCount,
+    hasActiveSession,
     performanceFinish,
     performanceStart,
   };
@@ -50,13 +50,13 @@ vi.mock("../lib/process.js", () => ({
 
 vi.mock("./job-service.js", () => ({
   jobService: {
-    listJobs: mocks.listJobs,
+    getActiveJobCount: mocks.getActiveJobCount,
   },
 }));
 
 vi.mock("./terminal-service.js", () => ({
   terminalService: {
-    getSnapshot: mocks.getSnapshot,
+    hasActiveSession: mocks.hasActiveSession,
   },
 }));
 
@@ -82,12 +82,12 @@ describe("HostPressureService", () => {
     mocks.os.totalmem.mockReturnValue(16 * ONE_GIB);
     mocks.os.freemem.mockReturnValue(8 * ONE_GIB);
     mocks.runCommand.mockReset();
-    mocks.listJobs.mockReset();
-    mocks.getSnapshot.mockReset();
+    mocks.getActiveJobCount.mockReset();
+    mocks.hasActiveSession.mockReset();
     mocks.performanceFinish.mockReset();
     mocks.performanceStart.mockClear();
-    mocks.listJobs.mockResolvedValue([]);
-    mocks.getSnapshot.mockResolvedValue({ session: null });
+    mocks.getActiveJobCount.mockReturnValue(0);
+    mocks.hasActiveSession.mockReturnValue(false);
   });
 
   it("marks the host critical and blocks new runs when RAM, swap, and load are saturated", async () => {
@@ -117,16 +117,8 @@ Pages occupied by compressor:            40000.
         stderr: "",
         exitCode: 0,
       });
-    mocks.listJobs.mockResolvedValue([
-      { status: "running" },
-      { status: "queued" },
-    ]);
-    mocks.getSnapshot.mockResolvedValue({
-      session: {
-        id: "term-1",
-        status: "running",
-      },
-    });
+    mocks.getActiveJobCount.mockReturnValue(2);
+    mocks.hasActiveSession.mockReturnValue(true);
 
     const status = await service.getStatus(true);
 

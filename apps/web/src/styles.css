@@ -1747,6 +1747,14 @@ small {
   gap: 0.24rem;
 }
 
+.message-utility-tray > summary {
+  list-style: none;
+}
+
+.message-utility-tray > summary::-webkit-details-marker {
+  display: none;
+}
+
 .message-utility-toggle {
   appearance: none;
   cursor: pointer;
@@ -1761,8 +1769,12 @@ small {
   font-weight: 600;
 }
 
-.message-utility-tray.open .message-utility-toggle {
-  margin-bottom: 0.02rem;
+.message-utility-tray[open] .message-utility-toggle {
+  margin-bottom: 0.04rem;
+}
+
+.message-utility-panel {
+  display: grid;
 }
 
 .operator-chat-overview .status-chip,

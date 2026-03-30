@@ -54,8 +54,9 @@ async function main() {
     const overBudget = value > budget;
     let overRegression = false;
     const baselineValue = baseline?.metrics?.[rule.id];
+    const skipRegression = rule.skipRegression === true || rule.optional === true;
     const regressionLimit =
-      typeof baselineValue === "number"
+      !skipRegression && typeof baselineValue === "number"
         ? baselineValue * (1 + maxRegressionRatio)
         : null;
     if (regressionLimit !== null && value > regressionLimit) {

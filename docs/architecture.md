@@ -102,18 +102,21 @@ The canonical public route, websocket, script, and data-path inventory lives in 
 - stdout/stderr are streamed live, short-window batched, and persisted under `~/.droidagent/logs/jobs`
 - the rescue terminal is a separate PTY-backed owner shell with its own transcript and audit log path under `~/.droidagent/logs/terminal`
 - both server and browser terminal transcripts now use byte-bounded UTF-8-safe tail buffers instead of repeated full-history concat/trim loops
+- jobs and rescue terminal output now use a shared buffered pipeline pattern so append ordering and websocket batching behavior stay consistent
 
 ## Diagnostics and performance
 
 - the server records rolling in-memory timing samples for HTTP requests, dashboard snapshots, chat relay timing, file operations, and job execution
 - memory draft apply timing and memory reindex timing are recorded server-side; timing summaries now also surface last-sample age plus `ok`/`warn`/`error` sample counts
 - the client records route, chat, reconnect, file, and job timings locally
+- websocket patch flush latency, chat history resync latency, and session-switch latency are now captured as additive diagnostics
 - the Settings route surfaces a compact diagnostics card
 - the benchmark scripts write JSON artifacts under `artifacts/perf/`
 - the dashboard snapshot is composed from independently cached slices for setup, access, runtimes, providers, channels, harness, memory, host pressure, memory drafts, context management, maintenance, launch-agent state, sessions, jobs, decisions, and approvals
 - request-path warmup now waits for startup restore, then primes the main dashboard/access/runtime/provider caches before readiness completes so the first real dashboard request does not pay hidden restore work
 - realtime dashboard mutation fanout includes dedicated harness/memory/setup/provider/runtime/etc updates, slice-aware invalidation, and client-side snapshot reconciliation to keep partial dashboard patches from drifting during noisy update bursts
 - decision-related mutations invalidate and publish through one path so approvals, memory-draft review, and pairing do not fan out as disconnected subsystems
+- HTTP and websocket chat send/abort now converge through one coordinator lifecycle path for transport parity
 
 ## UI shell and layout stability
 

@@ -62,7 +62,7 @@ import {
 import { websocketHub } from "./websocket-hub.js";
 import { SERVER_PORT, TEST_MODE, ensureAppDirs, paths } from "./env.js";
 import { performanceService } from "./services/performance-service.js";
-import { createMeasuredStreamRelay } from "./lib/chat-relay-metrics.js";
+import { chatRunCoordinator } from "./services/chat-run-coordinator.js";
 import { publishDecisionEffects } from "./lib/decision-updates.js";
 import { registerAccessRoutes } from "./http/access-routes.js";
 import { registerAuthRoutes } from "./http/auth-routes.js";
@@ -328,44 +328,11 @@ app.post("/api/sessions/:sessionId/messages", async (c) => {
   await hostPressureService.assertAllowsAgentRuns("chat");
   const body = ChatSendRequestSchema.parse(await c.req.json());
   const sessionId = c.req.param("sessionId");
-  await sessionLifecycleService.observeSession(sessionId, {
-    restore: true,
-  });
-  let runId = "";
-  const measuredRelay = createMeasuredStreamRelay("http", sessionId, {
-    onDelta: async (delta) => {
-      websocketHub.publishChatDelta(sessionId, runId, delta);
-    },
-    onState: async (state) => {
-      websocketHub.publishChatRun({
-        sessionId,
-        runId,
-        ...state,
-      });
-    },
-    onDone: async () => {
-      websocketHub.publishChatDone(sessionId, runId);
-      await websocketHub.pushChatHistory(sessionId);
-      await websocketHub.publishSessionsUpdated();
-      await websocketHub.publishPerformanceUpdated();
-    },
-    onError: async (message) => {
-      websocketHub.publishChatError(sessionId, runId, message);
-      await websocketHub.pushChatHistory(sessionId);
-      await websocketHub.publishSessionsUpdated();
-      await websocketHub.publishPerformanceUpdated();
-    },
-  });
-  const run = await harnessService.sendMessage(sessionId, body, measuredRelay.relay);
-  runId = run.runId;
-  measuredRelay.markAccepted();
-  websocketHub.publishChatRun({
+  const run = await chatRunCoordinator.send({
+    publisher: websocketHub,
+    transport: "http",
     sessionId,
-    runId,
-    stage: "accepted",
-    label: "Run accepted",
-    detail: "OpenClaw accepted the request and is starting the live run.",
-    active: true,
+    request: body,
   });
   return c.json({ ok: true, runId: run.runId }, 202);
 });
@@ -376,9 +343,10 @@ app.post("/api/sessions/:sessionId/abort", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
   const sessionId = c.req.param("sessionId");
-  await harnessService.abortMessage(sessionId);
-  await websocketHub.pushChatHistory(sessionId);
-  await websocketHub.publishSessionsUpdated();
+  await chatRunCoordinator.abort({
+    publisher: websocketHub,
+    sessionId,
+  });
   return c.json({ ok: true });
 });
 

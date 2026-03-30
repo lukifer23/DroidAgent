@@ -10,6 +10,7 @@ const artifactDir = path.resolve(process.cwd(), "artifacts", "perf");
 
 test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) => {
   const projectName = testInfo.project.name;
+  const liveMode = process.env.DROIDAGENT_PERF_LIVE === "1";
   const metrics = [];
 
   await signInSeededOwner(page.context());
@@ -118,7 +119,9 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
     ),
   ).toBeVisible();
 
-  const prompt = `perf-${projectName}`;
+  const prompt = liveMode
+    ? `live-perf-${projectName}-${Date.now()}`
+    : `perf-${projectName}`;
   const sendButton = page.getByRole("button", { name: "Send" });
   await page
     .getByPlaceholder(
@@ -128,9 +131,11 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   await expect(sendButton).toBeEnabled();
   const sendStart = performance.now();
   await sendButton.click();
-  const responseLocator = page.getByText(`Test harness reply: ${prompt}`, {
-    exact: true,
-  }).last();
+  const responseLocator = liveMode
+    ? page.locator(".message-card.assistant .message-markdown").last()
+    : page.getByText(`Test harness reply: ${prompt}`, {
+        exact: true,
+      }).last();
   const streamingResponseLocator = page
     .locator(".message-card.assistant.streaming .message-markdown")
     .last();

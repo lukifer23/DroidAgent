@@ -586,16 +586,8 @@ export class HostPressureService {
         return status;
       }
 
-      const [jobs, terminalSnapshot] = await Promise.all([
-        jobService.listJobs(),
-        terminalService.getSnapshot(),
-      ]);
-      const activeJobs = jobs.filter(
-        (job) => job.status === "queued" || job.status === "running",
-      ).length;
-      const activeTerminalSession = Boolean(
-        terminalSnapshot.session && terminalSnapshot.session.status === "running",
-      );
+      const activeJobs = jobService.getActiveJobCount();
+      const activeTerminalSession = terminalService.hasActiveSession();
       const load = normalizedLoadSample();
 
       let memory: MemorySample;

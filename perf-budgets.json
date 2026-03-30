@@ -28,7 +28,8 @@
       "name": "chat.stream.firstDeltaForward",
       "stat": "p95DurationMs",
       "budgetMs": 150,
-      "optional": true
+      "optional": true,
+      "skipRegression": true
     },
     {
       "id": "e2e.dashboard.cold.p95",

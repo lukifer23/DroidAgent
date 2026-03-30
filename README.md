@@ -26,6 +26,7 @@ pnpm verify:full
 pnpm hygiene:check
 pnpm perf:server
 pnpm perf:e2e
+pnpm perf:live
 pnpm perf:report
 pnpm perf:baseline
 pnpm perf:check
@@ -112,6 +113,7 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - Route chunk prefetch is intentionally narrow now: only `Files` and `Settings` are prefetched after auth, while Chat/Terminal hot surfaces trim heavy paint effects and markdown loads lazily only when needed.
 - Server diagnostics now split chat accept, first-delta wait, first-delta forward, full relay, memory draft apply, and memory reindex timings so operator latency surfaces stay honest.
 - Performance artifacts are now actively budgeted. `pnpm perf:baseline` refreshes the baseline snapshot and `pnpm perf:check` enforces `perf-budgets.json` against the latest artifacts and baseline thresholds.
+- Performance validation now has a dual track: deterministic harness metrics remain the CI regression gate (`perf:server`, `perf:e2e`, `perf:check`), while `perf:live` is opt-in reporting for real OpenClaw/Ollama behavior.
 - File APIs are workspace-relative and text-only.
 - Chat attachments support local images, PDFs, Markdown, JSON, logs, and common code/text files through the real OpenClaw tool path.
 - The chat route is the primary operator surface: live run state, OpenClaw approval cards, unified decision context, tool summaries, attachments, markdown/code rendering, editable durable-memory capture actions, suggested command promotion, and per-run client timings are all surfaced there.

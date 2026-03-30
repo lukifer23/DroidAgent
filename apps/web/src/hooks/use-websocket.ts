@@ -10,6 +10,46 @@ const INITIAL_DELAY_MS = 500;
 const MAX_DELAY_MS = 30000;
 const SNAPSHOT_URL = "/api/dashboard";
 const DASHBOARD_SYNC_DEBOUNCE_MS = 180;
+const DASHBOARD_PATCH_EVENT_TYPES = new Set<ServerEvent["type"]>([
+  "setup.updated",
+  "access.updated",
+  "runtime.updated",
+  "providers.updated",
+  "channel.updated",
+  "launchAgent.updated",
+  "memory.updated",
+  "memoryDrafts.updated",
+  "context.updated",
+  "harness.updated",
+  "maintenance.updated",
+  "sessions.updated",
+  "job.updated",
+  "decision.updated",
+  "decisions.updated",
+  "approval.updated",
+  "approvals.updated",
+]);
+const DASHBOARD_RESYNC_EVENT_TYPES = new Set<ServerEvent["type"]>([
+  "runtime.updated",
+  "providers.updated",
+  "channel.updated",
+  "context.updated",
+  "memory.updated",
+  "memoryDrafts.updated",
+  "decision.updated",
+  "decisions.updated",
+  "approval.updated",
+  "approvals.updated",
+  "maintenance.updated",
+]);
+
+function shouldPatchDashboard(event: ServerEvent): boolean {
+  return DASHBOARD_PATCH_EVENT_TYPES.has(event.type);
+}
+
+function shouldResyncDashboard(event: ServerEvent): boolean {
+  return DASHBOARD_RESYNC_EVENT_TYPES.has(event.type);
+}
 
 export interface UseWebSocketOptions {
   enabled: boolean;
@@ -205,7 +245,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
   }, [queryClient]);
 
   const flushPendingRealtimeState = useCallback(() => {
+    const flushMetric = clientPerformance.start("client.ws.patch_flush");
     flushHandleRef.current = null;
+    const pendingRunCount = Object.keys(pendingStreamRunsRef.current).length;
+    const pendingJobCount = pendingJobOutputRef.current.size;
 
     const pendingRuns = pendingStreamRunsRef.current;
     const hasRuns = Object.keys(pendingRuns).length > 0;
@@ -242,6 +285,11 @@ export function useWebSocket(options: UseWebSocketOptions) {
       }
       pendingJobOutputRef.current.clear();
     }
+    flushMetric.finish({
+      runPatches: pendingRunCount,
+      jobPatches: pendingJobCount,
+      outcome: "ok",
+    });
   }, [queryClient]);
 
   const clearDeferredStreamClear = useCallback((sessionId: string) => {
@@ -324,9 +372,17 @@ export function useWebSocket(options: UseWebSocketOptions) {
           queryClient.setQueryData(["access"], payload.payload);
         }
         if (payload.type === "chat.history") {
+          const historyMetric = clientPerformance.start("client.chat.history_resync", {
+            sessionId: payload.payload.sessionId,
+          });
           clearDeferredStreamClear(payload.payload.sessionId);
           chatStreamStore.clear(payload.payload.sessionId);
           queryClient.setQueryData(["sessions", payload.payload.sessionId, "messages"], payload.payload.messages);
+          historyMetric.finish({
+            sessionId: payload.payload.sessionId,
+            messageCount: payload.payload.messages.length,
+            outcome: "ok",
+          });
         }
         if (payload.type === "chat.stream.delta") {
           clearDeferredStreamClear(payload.payload.sessionId);
@@ -387,42 +443,12 @@ export function useWebSocket(options: UseWebSocketOptions) {
           pendingJobOutputRef.current.set(payload.payload.jobId, existing);
           scheduleFlush();
         }
-        if (
-          payload.type === "setup.updated" ||
-          payload.type === "access.updated" ||
-          payload.type === "runtime.updated" ||
-          payload.type === "providers.updated" ||
-          payload.type === "channel.updated" ||
-          payload.type === "launchAgent.updated" ||
-          payload.type === "memory.updated" ||
-          payload.type === "memoryDrafts.updated" ||
-          payload.type === "context.updated" ||
-          payload.type === "harness.updated" ||
-          payload.type === "maintenance.updated" ||
-          payload.type === "sessions.updated" ||
-          payload.type === "job.updated" ||
-          payload.type === "decision.updated" ||
-          payload.type === "decisions.updated" ||
-          payload.type === "approval.updated" ||
-          payload.type === "approvals.updated"
-        ) {
+        if (shouldPatchDashboard(payload)) {
           queryClient.setQueryData<DashboardState | undefined>(["dashboard"], (current) => updateDashboardState(current, payload));
           if (payload.type === "sessions.updated") {
             void queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] });
           }
-          if (
-            payload.type === "runtime.updated" ||
-            payload.type === "providers.updated" ||
-            payload.type === "channel.updated" ||
-            payload.type === "context.updated" ||
-            payload.type === "memory.updated" ||
-            payload.type === "memoryDrafts.updated" ||
-            payload.type === "decision.updated" ||
-            payload.type === "decisions.updated" ||
-            payload.type === "approval.updated" ||
-            payload.type === "approvals.updated" ||
-            payload.type === "maintenance.updated"
-          ) {
+          if (shouldResyncDashboard(payload)) {
             syncDashboardSnapshot();
           }
           if (

@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { JobOutputSnapshotSchema, JobRecordSchema, nowIso, type JobRecord } from "@droidagent/shared";
 
 import { baseEnv, paths } from "../env.js";
+import { BufferedOutputPipeline } from "../lib/buffered-output-pipeline.js";
 import { JOB_MAX_OUTPUT_BYTES, JOB_TIMEOUT_MS, resolveCwdWithinWorkspace, validateCommand } from "../lib/job-policy.js";
 import { appStateService } from "./app-state-service.js";
 import { performanceService } from "./performance-service.js";
@@ -81,6 +82,10 @@ export class JobService extends EventEmitter<{
       timeoutId: ReturnType<typeof setTimeout>;
     }
   >();
+
+  getActiveJobCount(): number {
+    return this.activeJobs.size;
+  }
 
   private async toJobRecord(record: MutableJobRecord): Promise<JobRecord> {
     const [stdoutBytes, stderrBytes] = await Promise.all([fileSize(stdoutPath(record.id)), fileSize(stderrPath(record.id))]);
@@ -193,67 +198,6 @@ export class JobService extends EventEmitter<{
     const firstOutputMetric = performanceService.start("server", "job.firstOutput", {
       jobId: record.id
     });
-    const pendingOutput = {
-      stdout: "",
-      stderr: "",
-      flushHandle: null as ReturnType<typeof setTimeout> | null,
-      flushPromise: Promise.resolve(),
-    };
-
-    const flushPendingOutput = async () => {
-      if (pendingOutput.flushHandle) {
-        clearTimeout(pendingOutput.flushHandle);
-        pendingOutput.flushHandle = null;
-      }
-
-      const stdoutChunk = pendingOutput.stdout;
-      const stderrChunk = pendingOutput.stderr;
-      if (!stdoutChunk && !stderrChunk) {
-        return;
-      }
-      pendingOutput.stdout = "";
-      pendingOutput.stderr = "";
-      pendingOutput.flushPromise = pendingOutput.flushPromise
-        .then(async () => {
-          await Promise.all([
-            stdoutChunk
-              ? fs.appendFile(stdoutPath(record.id), stdoutChunk, "utf8")
-              : Promise.resolve(),
-            stderrChunk
-              ? fs.appendFile(stderrPath(record.id), stderrChunk, "utf8")
-              : Promise.resolve(),
-          ]);
-          if (stdoutChunk) {
-            await updateLastLine(stdoutChunk);
-            this.emit("output", {
-              jobId: record.id,
-              stream: "stdout",
-              chunk: stdoutChunk,
-            });
-          }
-          if (stderrChunk) {
-            await updateLastLine(stderrChunk);
-            this.emit("output", {
-              jobId: record.id,
-              stream: "stderr",
-              chunk: stderrChunk,
-            });
-          }
-        })
-        .catch(() => {});
-      await pendingOutput.flushPromise;
-    };
-
-    const scheduleOutputFlush = () => {
-      if (pendingOutput.flushHandle) {
-        return;
-      }
-      pendingOutput.flushHandle = setTimeout(() => {
-        pendingOutput.flushHandle = null;
-        void flushPendingOutput();
-      }, OUTPUT_FLUSH_DELAY_MS);
-      pendingOutput.flushHandle.unref?.();
-    };
 
     const markTruncated = async () => {
       if (truncated) {
@@ -262,8 +206,7 @@ export class JobService extends EventEmitter<{
       truncated = true;
       await fs.writeFile(truncatedMarkerPath(record.id), "1", "utf8");
       const note = "\n[output truncated]\n";
-      pendingOutput.stderr += note;
-      scheduleOutputFlush();
+      outputPipeline.push("stderr", note);
     };
 
     const updateLastLine = async (chunk: string) => {
@@ -310,12 +253,7 @@ export class JobService extends EventEmitter<{
       }
 
       outputBytes += Buffer.byteLength(allowedChunk, "utf8");
-      if (stream === "stdout") {
-        pendingOutput.stdout += allowedChunk;
-      } else {
-        pendingOutput.stderr += allowedChunk;
-      }
-      scheduleOutputFlush();
+      outputPipeline.push(stream, allowedChunk);
 
       if (bytes > remaining) {
         await markTruncated();
@@ -332,7 +270,7 @@ export class JobService extends EventEmitter<{
         clearTimeout(active.timeoutId);
         this.activeJobs.delete(record.id);
       }
-      await flushPendingOutput();
+      await outputPipeline.close();
       if (!firstOutputRecorded) {
         firstOutputRecorded = true;
         firstOutputMetric.finish({
@@ -366,6 +304,29 @@ export class JobService extends EventEmitter<{
       child,
       finalize,
       timeoutId,
+    });
+
+    const outputPipeline = new BufferedOutputPipeline<"stdout" | "stderr">({
+      flushDelayMs: OUTPUT_FLUSH_DELAY_MS,
+      onFlush: async (chunks) => {
+        await Promise.all(
+          chunks.map(({ channel, chunk }) =>
+            fs.appendFile(
+              channel === "stdout" ? stdoutPath(record.id) : stderrPath(record.id),
+              chunk,
+              "utf8",
+            ),
+          ),
+        );
+        for (const { channel, chunk } of chunks) {
+          await updateLastLine(chunk);
+          this.emit("output", {
+            jobId: record.id,
+            stream: channel,
+            chunk,
+          });
+        }
+      },
     });
 
     child.stdout.setEncoding("utf8");

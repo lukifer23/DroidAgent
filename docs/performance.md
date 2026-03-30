@@ -11,6 +11,7 @@ The benchmark commands use isolated seeded ports so `perf:server`, `perf:e2e`, a
 ```bash
 pnpm perf:server
 pnpm perf:e2e
+pnpm perf:live
 pnpm perf:report
 pnpm perf:baseline
 pnpm perf:check
@@ -23,12 +24,17 @@ pnpm hygiene:check
 - `pnpm perf:e2e`
   - runs Playwright UX timing scenarios
   - writes one artifact per Playwright project under `artifacts/perf/`
+- `pnpm perf:live`
+  - runs the same server + E2E perf probes with `DROIDAGENT_PERF_LIVE=1`
+  - intended for opt-in OpenClaw/Ollama validation; not used as the deterministic CI regression gate
+  - additive reporting lane; keep deterministic budgets as the required gate
 - `pnpm perf:report`
   - prints the latest server and E2E summaries
 - `pnpm perf:baseline`
   - snapshots current perf artifacts into `artifacts/perf/baseline.json`
 - `pnpm perf:check`
   - enforces `perf-budgets.json` and baseline regression threshold
+  - supports `skipRegression: true` on intentionally noisy/optional metrics
 - `pnpm hygiene:check`
   - blocks duplicate canonical helpers, oversized new production files, orphaned scripts, and missing architecture-boundary inventory docs before bloat slips into the hot path
 
@@ -43,6 +49,8 @@ Server-side:
 - `chat.stream.acceptedToFirstDelta`
 - `chat.stream.firstDeltaForward`
 - `chat.stream.acceptedToCompleteRelay`
+- `ws.patch.flush`
+- `chat.history.resync`
 - `file.read`
 - `file.write`
 - `job.start`
@@ -63,6 +71,9 @@ Client-side:
 - `client.chat.submit_to_done`
 - `client.ws.reconnect_to_socket`
 - `client.ws.reconnect_to_resync`
+- `client.ws.patch_flush`
+- `client.chat.history_resync`
+- `client.chat.session_switch`
 - `client.file.open`
 - `client.file.save`
 - `client.memory.prepare`
