@@ -54,16 +54,8 @@ const oversizedAllowlist = new Map([
     "OpenClaw adapter still carries the broadest remaining extraction backlog.",
   ],
   [
-    "apps/server/src/index.ts",
-    "Server route registration is still mid-split and remains the canonical entry surface.",
-  ],
-  [
     "apps/web/src/screens/chat-screen.tsx",
     "Chat operator surface still owns the largest remaining UI extraction backlog.",
-  ],
-  [
-    "apps/web/src/screens/settings-screen.tsx",
-    "Settings still aggregates diagnostics and admin surfaces pending further extraction.",
   ],
 ]);
 
