@@ -163,7 +163,7 @@ export class DashboardService {
   }
 
   private async getMemory() {
-    return await this.memoryCache.get(() => openclawService.memoryStatus());
+    return await this.memoryCache.get(() => openclawService.memoryStatusQuick());
   }
 
   private async getHostPressure() {

@@ -47,6 +47,10 @@ pnpm verify:full
 - Client timings are captured in-browser and surfaced in the Settings diagnostics card
 - `pnpm perf:server`
   - measures `/api/access` and `/api/dashboard`
+- `pnpm perf:baseline`
+  - refreshes `artifacts/perf/baseline.json` from the latest artifacts
+- `pnpm perf:check`
+  - enforces `perf-budgets.json` and baseline regression thresholds
 - `pnpm perf:report`
   - prints the latest server and E2E perf artifacts
 
@@ -54,5 +58,6 @@ pnpm verify:full
 
 1. Run `pnpm verify:full`.
 2. Run `pnpm perf:server` and `pnpm perf:e2e` when you are updating the baseline or checking a perf-sensitive change.
-3. Review `artifacts/perf/` and the Settings diagnostics card for regressions.
-4. Update docs when commands, routes, or supported operational flows change.
+3. Run `pnpm perf:report`, `pnpm perf:baseline`, and `pnpm perf:check`.
+4. Review `artifacts/perf/` and the Settings diagnostics card for regressions.
+5. Update docs when commands, routes, supported operational flows, or perf budgets change.

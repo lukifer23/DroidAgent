@@ -26,6 +26,8 @@ pnpm verify:full
 pnpm perf:server
 pnpm perf:e2e
 pnpm perf:report
+pnpm perf:baseline
+pnpm perf:check
 ```
 
 Quick local start:
@@ -95,18 +97,22 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 ## Notes
 
 - UI/UX overhaul now uses a modular style layer (`styles.css` + `styles/system.css` + `styles/motion.css`) with unified viewport-height calculations for Chat and Terminal shells to reduce layout jumps on navigation and mobile browser chrome changes.
-- Realtime dashboard synchronization now includes explicit harness updates and debounced full-snapshot reconciliation to keep UI state truthful after runtime/provider/channel/context/memory mutations.
+- Realtime dashboard synchronization now includes explicit harness updates, slice-aware cache invalidation, and debounced full-snapshot reconciliation to keep UI state truthful after runtime/provider/channel/context/memory mutations.
 - First-class workspace memory files are scaffold-repaired on demand, and draft apply/dismiss mutations are revision-checked so fast mobile interactions do not silently race each other.
 - Chat, Files, Jobs, Settings, and Terminal surfaces now include stronger loading/empty/error behavior and safer fallbacks when websocket transport is degraded.
 - Maintenance state is persisted in SQLite, mirrored to `~/.droidagent/state/maintenance-status.json` for local scripts, and surfaced in Settings plus the live chat shell so restarts are explicit instead of silent.
-- Browser-side heavy paths are hardened: streaming chat render path avoids unnecessary markdown parsing in simple deltas, terminal transcript trimming avoids full-buffer re-encode loops, and large job logs are browser-tailed.
+- Browser-side heavy paths are hardened: streaming chat render path avoids unnecessary markdown parsing in simple deltas, chat subscribes to live perf snapshots without polling on the hot route, terminal transcript trimming avoids full-buffer re-encode loops, and large job logs are browser-tailed.
+- `/api/memory/prepare` is now a fast background trigger instead of a blocking reindex request. Settings surfaces queued/running/completed/failed state, progress label, error, and last duration while websocket updates keep the shell current.
+- Server request-path warmup now primes the main dashboard/access caches before the readiness path completes, and the dashboard hot path uses quick memory status instead of forcing a live OpenClaw memory probe on first load.
+- Route chunk prefetch is intentionally narrow now: only `Files` and `Settings` are prefetched after auth, while Chat/Terminal hot surfaces trim heavy paint effects and markdown loads lazily only when needed.
 - Server diagnostics now split chat accept, first-delta wait, first-delta forward, full relay, memory draft apply, and memory reindex timings so operator latency surfaces stay honest.
+- Performance artifacts are now actively budgeted. `pnpm perf:baseline` refreshes the baseline snapshot and `pnpm perf:check` enforces `perf-budgets.json` against the latest artifacts and baseline thresholds.
 - File APIs are workspace-relative and text-only.
 - Chat attachments support local images, PDFs, Markdown, JSON, logs, and common code/text files through the real OpenClaw tool path.
 - The chat route is the primary operator surface: live run state, approvals, tool summaries, attachments, markdown/code rendering, editable durable-memory capture actions, suggested command promotion, and per-run client timings are all surfaced there.
 - Owner jobs run inside the configured workspace jail and persist replayable stdout and stderr logs.
 - The rescue terminal is a real PTY surface, separate from Jobs. It defaults to a workspace-scoped shell and exposes a deliberate host-shell escalation path for recovery work.
 - Browser acceptance now runs against a real server-backed Playwright harness; route interception and fake websocket replacement are no longer the primary test path.
-- Performance reporting is advisory in this pass. `verify:full` enforces correctness; the perf scripts produce artifacts under `artifacts/perf/`.
+- `verify:full` enforces correctness; the perf scripts produce artifacts under `artifacts/perf/`, and `pnpm perf:check` enforces the current perf budgets when you run the perf workflow.
 - The current live acceptance target is `web/PWA + owner passkey + Tailscale remote + Ollama local runtime`.
 - Version/build identity is surfaced by the running server so the Mac shell, the phone shell, diagnostics, and the repo all report the same release line.

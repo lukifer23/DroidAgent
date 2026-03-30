@@ -211,6 +211,7 @@ pre {
 }
 
 .app-shell.chat-route-shell,
+.app-shell.files-route-shell,
 .app-shell.terminal-route-shell {
   max-width: 1380px;
 }
@@ -538,6 +539,13 @@ small {
   will-change: transform, opacity;
 }
 
+.app-shell.chat-route-shell .route-frame,
+.app-shell.files-route-shell .route-frame,
+.app-shell.terminal-route-shell .route-frame {
+  animation: none;
+  contain: content;
+}
+
 .setup-grid {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
@@ -552,6 +560,14 @@ small {
     background-color var(--motion-base) var(--motion-ease),
     opacity var(--motion-base) var(--motion-ease),
     box-shadow var(--motion-base) var(--motion-ease);
+}
+
+.app-shell.chat-route-shell .panel-card,
+.app-shell.files-route-shell .panel-card,
+.app-shell.terminal-route-shell .panel-card {
+  animation: none;
+  backdrop-filter: none;
+  box-shadow: var(--shadow-soft);
 }
 
 .active-card {
@@ -1914,6 +1930,13 @@ small {
     transform var(--motion-fast) var(--motion-ease),
     border-color var(--motion-base) var(--motion-ease),
     opacity var(--motion-base) var(--motion-ease);
+}
+
+.app-shell.chat-route-shell .message-card {
+  contain: content;
+  transition:
+    border-color var(--motion-base) var(--motion-ease),
+    opacity var(--motion-fast) var(--motion-ease);
 }
 
 .message-card.user {

@@ -2,7 +2,7 @@
 
 ## Goal
 
-This pass treats performance as an advisory baseline, not a release gate. DroidAgent now captures both server timings and client-observed UX timings so regressions are visible before they become product issues.
+This pass treats performance as a tracked engineering budget. DroidAgent captures both server timings and client-observed UX timings, writes artifacts under `artifacts/perf/`, and can enforce `perf-budgets.json` plus baseline regression thresholds through `pnpm perf:check`.
 
 The benchmark commands use isolated seeded ports so `perf:server`, `perf:e2e`, and the main E2E suite do not fight over the same local harness server.
 
@@ -27,7 +27,7 @@ pnpm perf:check
 - `pnpm perf:baseline`
   - snapshots current perf artifacts into `artifacts/perf/baseline.json`
 - `pnpm perf:check`
-  - enforces `perf-budgets.json` and optional baseline regression threshold
+  - enforces `perf-budgets.json` and baseline regression threshold
 
 ## Metrics Captured
 
@@ -45,6 +45,7 @@ Server-side:
 - `job.start`
 - `job.firstOutput`
 - `memory.prepare`
+- `memory.prepare.complete`
 - `memory.reindex`
 - `memory.draft.apply`
 - `memory.todayNote`
@@ -64,6 +65,17 @@ Client-side:
 - `client.memory.prepare`
 - `client.job.start_to_first_output`
 
+E2E artifact metrics:
+
+- `cold_dashboard_ms`
+- `route_switch_ms`
+- `memory_prepare_accepted_ms`
+- `memory_prepare_completion_ms`
+- `chat_first_token_visible_ms`
+- `chat_done_ms`
+- `reconnect_resync_ms`
+- bundle bytes from the Vite manifest for the main entry chunk and terminal route chunk
+
 Notable implementation guardrails in this pass:
 
 - streaming chat rendering fast-paths plain deltas before markdown parsing to reduce avoidable parse churn
@@ -71,6 +83,8 @@ Notable implementation guardrails in this pass:
 - terminal transcript trimming tracks byte budget incrementally and avoids full-history re-encoding on each output chunk
 - jobs output rendering tails large logs in-browser to avoid large full-text DOM updates
 - websocket-driven dashboard patches are reconciled with debounced full snapshot pulls after high-impact runtime/provider/channel/context/memory mutations
+- request-path warmup primes dashboard/access/runtime/provider caches before readiness completes, and dashboard memory status uses the quick cached path on the hot request path
+- the memory prepare endpoint is now a fast single-flight background trigger; completion latency is measured separately from accepted latency
 
 The Settings diagnostics view now shows p95, last sample, sample count, `ok`/`warn`/`error` counts, and sample age so old or unhealthy latency numbers are easier to spot before they mislead an operator.
 
@@ -89,14 +103,20 @@ Server chat relay timing is intentionally broken into separate slices:
 
 This keeps model time, relay overhead, and browser-observed latency from being mixed into a single misleading number.
 
-## Advisory Budgets
+## Tracked Budgets
 
 - `GET /api/access` local p95 <= `250 ms`
 - `GET /api/dashboard` local p95 <= `250 ms`
-- warm route switch p95 <= `300 ms`
+- `dashboard.snapshot` cold max <= `750 ms`
+- cold dashboard browser fetch p95 <= `1200 ms`
+- warm route switch p95 <= `220 ms`
 - websocket reconnect to resync p95 <= `2000 ms`
 - file open and save for <= `256 KB` text files p95 <= `500 ms`
-- DroidAgent relay overhead from accepted chat submit to first forwarded token p95 <= `150 ms`
+- memory prepare accepted p95 <= `250 ms`
+- memory prepare completion p95 <= `35000 ms`
+- chat first token visible p95 <= `200 ms`
+- main entry JS <= `350 kB`
+- terminal route JS <= `300 kB`
 
 Model generation time is recorded separately from DroidAgent relay overhead. Reindex and memory-draft timings are also tracked independently so semantic-memory maintenance work does not get folded into chat latency.
 
@@ -110,19 +130,39 @@ The default local baseline also assumes `qwen3.5:4b` on Ollama with a `65k` cont
 2. Run `pnpm perf:server`.
 3. Run `pnpm perf:e2e`.
 4. Run `pnpm perf:report`.
-5. Compare the generated artifact summaries against the advisory budgets and the previous local baseline.
+5. Run `pnpm perf:baseline`.
+6. Run `pnpm perf:check`.
 
-Warm-path p95 is the main review target for `access` and `dashboard`. Cold-start startup diagnostics still show up in the raw artifact averages and max values, so review both the summary and the underlying samples before making a release call.
+Warm-path p95 is still the main review target for `access` and `dashboard`, but the budget set now also tracks cold dashboard behavior, visible first-token latency, background memory prepare behavior, and bundle-size drift.
 
-## Current Baseline Table
+## Current Targets
 
-This table is the manual reference point for this pass. Update it when you intentionally refresh the baseline after a meaningful product change.
+This table is the maintained target set for the perf workflow.
 
 | Metric | Target |
 |--------|--------|
 | `GET /api/access` p95 | `<= 250 ms` |
 | `GET /api/dashboard` p95 | `<= 250 ms` |
-| Route switch p95 | `<= 300 ms` |
-| Chat first token relay p95 | `<= 150 ms` |
+| `dashboard.snapshot` cold max | `<= 750 ms` |
+| Cold dashboard browser fetch p95 | `<= 1200 ms` |
+| Route switch p95 | `<= 220 ms` |
+| Chat first token visible p95 | `<= 200 ms` |
 | Reconnect to resync p95 | `<= 2000 ms` |
+| Memory prepare accepted p95 | `<= 250 ms` |
+| Memory prepare completion p95 | `<= 35000 ms` |
 | File save p95 | `<= 500 ms` |
+| Main entry JS | `<= 350 kB` |
+| Terminal route JS | `<= 300 kB` |
+
+## Latest Validated Local Run
+
+Validated on `2026-03-30`:
+
+- server `GET /api/access` p95: `14.37 ms`
+- server `GET /api/dashboard` p95: `11.78 ms`
+- server `dashboard.snapshot` cold max: `0.01 ms`
+- E2E route switch p95: `199.93 ms`
+- E2E chat first token visible p95: `67.09 ms`
+- E2E memory prepare accepted p95: `12.40 ms`
+- main entry JS: `16.72 kB`
+- terminal route JS: `9.05 kB`

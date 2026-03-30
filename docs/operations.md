@@ -50,6 +50,8 @@ pnpm verify:full
 pnpm perf:server
 pnpm perf:e2e
 pnpm perf:report
+pnpm perf:baseline
+pnpm perf:check
 ```
 
 ## LaunchAgent
@@ -77,6 +79,7 @@ pnpm perf:report
 - The Host drawer and Settings are the maintenance entry points. The rescue terminal stays outside the primary bottom nav so the operator flow stays focused on Chat, Files, Jobs, Models, and Settings.
 - The same quickstart path also seeds `MEMORY.md`, `PREFERENCES.md`, `HEARTBEAT.md`, daily notes under `memory/`, and the workspace `skills/` directory.
 - First-class workspace memory files are scaffold-repaired on demand, so `memory.status`, `memory.prepare`, `memory.today-note`, and opening `MEMORY.md` or `PREFERENCES.md` do not leak raw missing-file errors on a real host.
+- `memory.prepare` is now async and single-flight. The API call returns quickly, the actual reindex continues in the background, and Settings shows queued/running/completed/failed state, progress label, error, and last duration.
 - Durable memory capture is approval-gated. Chat messages and file selections create drafts first, then Settings is the review/apply surface.
 - Suggested shell blocks from assistant replies can become `Run in Chat` or `Open in Terminal`. In-chat runs stay inside the workspace job jail; terminal suggestions are inserted but never auto-executed.
 - The default local chat model is `qwen3.5:4b` with a `65k` context budget and thinking disabled.
@@ -93,9 +96,10 @@ pnpm perf:report
 - Server timings are exposed at `GET /api/diagnostics/performance` for the signed-in owner.
 - The Settings route shows the full client/server diagnostics card.
 - The Settings route also shows semantic-memory readiness, embedding/index status, and the current `65k` local context budget.
-- The Settings route now also exposes memory-prep timings so semantic-memory regressions are visible in the same diagnostics surface as chat, files, and jobs.
+- The Settings route now also exposes memory-prepare state and timings so semantic-memory regressions are visible in the same diagnostics surface as chat, files, and jobs.
 - The Settings route also exposes editable pending memory drafts, current maintenance state, recent maintenance history, and timing sample age/count plus `ok`/`warn`/`error` sample totals so stale or degraded telemetry is obvious.
 - Chat timing is split into accept, first-delta wait, first-delta forward, and full relay duration so model latency and DroidAgent overhead are not conflated.
+- Perf artifacts now also track cold dashboard fetch, route switch, visible first token, memory prepare accepted/completion, and bundle sizes. Use `pnpm perf:baseline` to refresh the checked-in local baseline and `pnpm perf:check` to enforce the budgets.
 - The Settings route also shows the running build/version identity so the live host, screenshots, logs, and repo all stay on the same release line.
 - The chat route now accepts local images, PDFs, Markdown, JSON, logs, and common code/text files. DroidAgent stores them under `~/.droidagent/uploads` and passes them through the real OpenClaw tool path instead of a parallel mock transcript.
 - The chat route is the operator console: it surfaces live run state, tool summaries, approval cards, attachments, code blocks, and client-side per-run timings.
@@ -103,4 +107,5 @@ pnpm perf:report
 - Use Jobs for replayable workspace commands. Use the rescue terminal only for interactive recovery work that needs a real shell.
 - Performance artifacts are written under `artifacts/perf/`.
 - Access, dashboard, runtime, provider, and startup-status reads use short-lived in-memory caches with explicit invalidation on mutations so the mobile shell stays responsive without serving long-lived stale state.
+- Request-path warmup primes the main dashboard/access/runtime/provider caches before readiness completes, which keeps the first signed-in dashboard path off the coldest setup work.
 - OpenClaw runs with default thinking disabled unless you explicitly re-enable it in-session, while smart context management still controls compaction, pruning, and memory flush policy.

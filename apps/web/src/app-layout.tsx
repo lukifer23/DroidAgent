@@ -89,6 +89,7 @@ export function AppLayout() {
   const operatorReady = isOperatorReady(dashboard);
   const isSetupRoute = location.pathname === "/setup";
   const isChatRoute = location.pathname === "/chat";
+  const isFilesRoute = location.pathname === "/files";
   const isTerminalRoute = location.pathname === "/terminal";
   const activeProvider = providers.find((provider) => provider.enabled);
   const runtimeCount = runtimes.filter((runtime) => runtime.state === "running")
@@ -246,7 +247,7 @@ export function AppLayout() {
   return (
     <main
       ref={shellRef}
-      className={`app-shell${isChatRoute ? " chat-route-shell" : ""}${isTerminalRoute ? " terminal-route-shell" : ""}`}
+      className={`app-shell${isChatRoute ? " chat-route-shell" : ""}${isFilesRoute ? " files-route-shell" : ""}${isTerminalRoute ? " terminal-route-shell" : ""}`}
     >
       <header
         ref={topbarRef}

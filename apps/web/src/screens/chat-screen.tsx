@@ -24,7 +24,11 @@ import type {
   SessionSummary,
 } from "@droidagent/shared";
 
-import { useAuthQuery, useDashboardQuery, usePerformanceQuery } from "../app-data";
+import {
+  useAuthQuery,
+  useDashboardQuery,
+  usePerformanceSubscription,
+} from "../app-data";
 import {
   type ChatSessionFeedback,
   useChatFeedbackSnapshot,
@@ -1035,7 +1039,7 @@ export function ChatScreen() {
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
-  const performanceQuery = usePerformanceQuery(Boolean(authQuery.data?.user));
+  const performanceQuery = usePerformanceSubscription();
   const chatFeedbackSnapshot = useChatFeedbackSnapshot();
   const dashboard = dashboardQuery.data;
   const clientPerformanceSnapshot = useClientPerformanceSnapshot();

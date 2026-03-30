@@ -31,7 +31,7 @@
 
 ## OpenClaw integration
 
-- Lifecycle, config, model registration, approvals, channels, and pairing continue through the OpenClaw CLI/Gateway.
+- Lifecycle, config/bootstrap, chat relay/session handling, memory state, approvals, channels, and pairing continue through the OpenClaw CLI/Gateway behind the harness surface.
 - Live chat now uses a server-side relay path into the OpenClaw Chat Completions endpoint on the local gateway.
 - DroidAgent re-emits sanitized stream events to the browser over its own WebSocket.
 - OpenClaw remains loopback-only with token auth.
@@ -74,6 +74,7 @@
 - Recall order is biased for smaller local models: `PREFERENCES.md` first, then `MEMORY.md`, then dated notes under `memory/`, then session memory.
 - Chat messages and file selections create `pending` memory drafts first; the operator can edit target/title/content before applying them.
 - Applying a draft appends to the selected file atomically, invalidates memory status, and runs incremental reindex with force fallback if needed.
+- Explicit semantic-memory prepare now runs as a persisted background operation. The REST trigger is single-flight, returns immediately, and progress/result state is stored in SQLite and surfaced through additive `MemoryStatus` fields plus websocket updates.
 - First-class memory file access repairs the workspace scaffold lazily so missing `MEMORY.md` or `PREFERENCES.md` does not surface raw `ENOENT` failures in normal operator flows.
 
 ## File and job model
@@ -81,8 +82,9 @@
 - files are addressed by workspace-relative path, never absolute host path
 - text files can be loaded and saved through the PWA with conflict checks and atomic writes
 - jobs are owner-submitted shell commands inside the configured workspace jail
-- stdout/stderr are streamed live and persisted under `~/.droidagent/logs/jobs`
+- stdout/stderr are streamed live, short-window batched, and persisted under `~/.droidagent/logs/jobs`
 - the rescue terminal is a separate PTY-backed owner shell with its own transcript and audit log path under `~/.droidagent/logs/terminal`
+- both server and browser terminal transcripts now use byte-bounded UTF-8-safe tail buffers instead of repeated full-history concat/trim loops
 
 ## Diagnostics and performance
 
@@ -91,13 +93,17 @@
 - the client records route, chat, reconnect, file, and job timings locally
 - the Settings route surfaces a compact diagnostics card
 - the benchmark scripts write JSON artifacts under `artifacts/perf/`
-- realtime dashboard mutation fanout includes a dedicated harness update event and client-side snapshot reconciliation to keep partial dashboard patches from drifting during noisy update bursts
+- the dashboard snapshot is composed from independently cached slices for setup, access, runtimes, providers, channels, harness, memory, host pressure, memory drafts, context management, maintenance, launch-agent state, sessions, jobs, and approvals
+- request-path warmup primes the main dashboard/access/runtime/provider caches before readiness completes, then resets startup-only perf samples so steady-state diagnostics are not polluted by internal prewarm work
+- realtime dashboard mutation fanout includes dedicated harness/memory/setup/provider/runtime/etc updates, slice-aware invalidation, and client-side snapshot reconciliation to keep partial dashboard patches from drifting during noisy update bursts
 
 ## UI shell and layout stability
 
 - the routed PWA shell keeps a shared topbar and bottom-nav chrome while route content remains mounted across navigation to avoid avoidable subtree remount jitter
-- viewport CSS vars (`--app-topbar-h`, `--app-bottom-nav-h`, `--app-viewport-h`) are measured from live chrome and updated via `ResizeObserver` plus `visualViewport` listeners, with rAF scheduling to avoid resize thrash
+- viewport CSS vars (`--app-topbar-h`, `--app-bottom-nav-h`, `--app-viewport-h`) are measured through a shared hook and updated via `ResizeObserver` plus `visualViewport` listeners, with rAF scheduling to avoid resize thrash
 - Chat and Terminal shells now share unified viewport-height formulas so sticky composers, PTY surfaces, and status stacks stay aligned on Fold-sized and phone-sized viewports
+- route chunk prefetch is intentionally narrow after auth: `Files` and `Settings` are prefetched during idle, while `Terminal`, `Models`, and `Channels` stay lazy
+- hot route surfaces trim expensive blur/animation work, and markdown rendering is lazy-loaded only when a message actually needs rich markdown semantics
 - style concerns are layered: base palette/components in `styles.css`, cross-screen shell primitives in `styles/system.css`, and motion/accessibility handling in `styles/motion.css`
 
 ## Optional Signal path

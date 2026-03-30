@@ -26,13 +26,17 @@ export function useAccessQuery() {
   });
 }
 
-export function useDashboardQuery(enabled: boolean) {
+export function useDashboardQuery<TData = DashboardState>(
+  enabled: boolean,
+  select?: (data: DashboardState) => TData,
+) {
   return useQuery({
     queryKey: ["dashboard"],
     queryFn: () => api<DashboardState>("/api/dashboard"),
     enabled,
     staleTime: 15_000,
-    refetchOnWindowFocus: false
+    refetchOnWindowFocus: false,
+    ...(select ? { select } : {}),
   });
 }
 
@@ -64,5 +68,15 @@ export function usePerformanceQuery(enabled: boolean) {
     staleTime: 4_000,
     refetchInterval: 5000,
     refetchOnWindowFocus: false
+  });
+}
+
+export function usePerformanceSubscription() {
+  return useQuery({
+    queryKey: ["performance"],
+    queryFn: () => api<PerformanceSnapshot>("/api/diagnostics/performance"),
+    enabled: false,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
   });
 }

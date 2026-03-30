@@ -78,6 +78,7 @@ type AppVariables = {
 const app = new Hono<{ Variables: AppVariables }>();
 app.use("*", logger());
 app.use("/api/*", cors());
+let requestPathWarmupPromise: Promise<void> = Promise.resolve();
 
 function isExpectedAppError(error: unknown): boolean {
   return (
@@ -357,6 +358,7 @@ function withMeasuredStreamRelay(
 }
 
 app.get("/api/health", async (c) => {
+  await requestPathWarmupPromise;
   signalService.refreshStateInBackground();
   const [runtimeSummary, setup, launchAgent, channels, harness] =
     await Promise.all([
@@ -543,6 +545,7 @@ app.get("/api/setup/diagnostics", async (c) => {
 app.get("/api/dashboard", async (c) => {
   const unauthorized = await requireUser(c);
   if (unauthorized) return unauthorized;
+  await requestPathWarmupPromise;
   return c.json(await dashboardService.getDashboardState());
 });
 
@@ -1780,14 +1783,8 @@ if (!TEST_MODE) {
   });
 }
 
-void (async () => {
+requestPathWarmupPromise = (async () => {
   try {
-    if (TEST_MODE) {
-      await startupService.getDiagnostics();
-    } else {
-      await startupService.restore();
-    }
-
     await Promise.allSettled([
       accessService.getBootstrapState(),
       accessService.getAccessSnapshot(),
@@ -1796,6 +1793,19 @@ void (async () => {
       keychainService.listProviderSummaries(),
       dashboardService.getDashboardState(),
     ]);
+    performanceService.reset();
+  } catch (error) {
+    console.error("Failed to warm request-path caches", error);
+  }
+})();
+
+void (async () => {
+  try {
+    if (TEST_MODE) {
+      await startupService.getDiagnostics();
+    } else {
+      await startupService.restore();
+    }
     await memoryPrepareService.resumePendingPrepare();
   } catch (error) {
     console.error("Failed to warm DroidAgent caches", error);

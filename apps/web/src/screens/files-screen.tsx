@@ -12,7 +12,10 @@ export function FilesScreen() {
   const queryClient = useQueryClient();
   const { runAction, setErrorMessage, setNotice } = useDroidAgentApp();
   const authQuery = useAuthQuery();
-  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user), (data) => ({
+    memory: data.memory,
+    workspaceRoot: data.setup.workspaceRoot,
+  }));
   const dashboard = dashboardQuery.data;
   const [directoryPath, setDirectoryPath] = useState(".");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -27,7 +30,7 @@ export function FilesScreen() {
   const filesQuery = useQuery({
     queryKey: ["files", directoryPath],
     queryFn: () => api<WorkspaceEntry[]>(`/api/files?path=${encodeURIComponent(directoryPath)}`),
-    enabled: Boolean(authQuery.data?.user && dashboard?.setup?.workspaceRoot)
+    enabled: Boolean(authQuery.data?.user && dashboard?.workspaceRoot)
   });
 
   const fileQuery = useQuery({
