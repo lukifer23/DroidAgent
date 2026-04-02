@@ -532,39 +532,32 @@ export function MessageMemoryActions({
   onAddTodayNote: () => void;
 }) {
   return (
-    <details className="message-utility-tray">
-      <summary
-        className="message-utility-toggle"
-        title="Create a memory draft from this message"
-      >
-        Save memory
-      </summary>
-      <div className="message-utility-panel">
-        <div className="message-action-row compact">
-          <button
-            type="button"
-            className="secondary"
-            onClick={onAddMemory}
-          >
-            Memory
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={onAddPreferences}
-          >
-            Preferences
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            onClick={onAddTodayNote}
-          >
-            Today Note
-          </button>
-        </div>
+    <div className="message-utility-tray">
+      <span className="message-utility-label">Save memory</span>
+      <div className="message-action-row compact">
+        <button
+          type="button"
+          className="secondary"
+          onClick={onAddMemory}
+        >
+          Memory
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={onAddPreferences}
+        >
+          Preferences
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          onClick={onAddTodayNote}
+        >
+          Today Note
+        </button>
       </div>
-    </details>
+    </div>
   );
 }
 

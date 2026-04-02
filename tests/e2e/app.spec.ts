@@ -41,6 +41,33 @@ async function clickMemoryActionTrigger(userMessage: Locator): Promise<void> {
   await clickWithDetachRetry(toggleByClass);
 }
 
+async function addMessageToMemoryDraft(userMessage: Locator): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const directMemoryAction = userMessage
+      .locator(".message-action-row")
+      .getByRole("button", { name: "Memory", exact: true })
+      .first();
+    if (await directMemoryAction.count()) {
+      await clickWithDetachRetry(directMemoryAction);
+      return;
+    }
+
+    await clickMemoryActionTrigger(userMessage);
+    const memoryAction = userMessage
+      .locator(".message-action-row")
+      .getByRole("button", { name: "Memory", exact: true })
+      .first();
+    try {
+      await expect(memoryAction).toBeVisible({ timeout: 3000 });
+      await clickWithDetachRetry(memoryAction);
+      return;
+    } catch {
+      // Retry after re-opening the tray if the row re-rendered.
+    }
+  }
+  throw new Error("Memory draft action was not reachable from the message actions.");
+}
+
 test("shows the passkey auth screen before sign-in", async ({
   page,
   baseURL,
@@ -192,13 +219,7 @@ test("captures a chat message as a memory draft, edits it, and applies it", asyn
     hasText: prompt,
   });
   await expect(userMessage).toBeVisible();
-  await clickMemoryActionTrigger(userMessage);
-  const draftMemoryButton = page
-    .locator(".message-card.user")
-    .filter({ hasText: prompt })
-    .getByRole("button", { name: "Memory", exact: true });
-  await expect(draftMemoryButton).toBeVisible();
-  await clickWithDetachRetry(draftMemoryButton);
+  await addMessageToMemoryDraft(userMessage);
 
   await page.getByRole("link", { name: "Settings" }).click();
   const draftCard = page.locator(".panel-card.compact").filter({
@@ -262,13 +283,7 @@ test("rejects stale memory draft mutations with a conflict response", async ({
     hasText: prompt,
   });
   await expect(userMessage).toBeVisible();
-  await clickMemoryActionTrigger(userMessage);
-  const staleDraftMemoryButton = page
-    .locator(".message-card.user")
-    .filter({ hasText: prompt })
-    .getByRole("button", { name: "Memory", exact: true });
-  await expect(staleDraftMemoryButton).toBeVisible();
-  await clickWithDetachRetry(staleDraftMemoryButton);
+  await addMessageToMemoryDraft(userMessage);
 
   const draftsResponse = await page.request.get(
     new URL("/api/memory/drafts", state.baseUrl).toString(),

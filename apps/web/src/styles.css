@@ -1747,34 +1747,17 @@ small {
   gap: 0.24rem;
 }
 
-.message-utility-tray > summary {
-  list-style: none;
-}
-
-.message-utility-tray > summary::-webkit-details-marker {
-  display: none;
-}
-
-.message-utility-toggle {
-  appearance: none;
-  cursor: pointer;
+.message-utility-label {
+  display: inline-flex;
   width: fit-content;
-  min-height: 1.34rem;
-  padding: 0.12rem 0.34rem;
+  min-height: 1.2rem;
+  padding: 0.06rem 0.3rem;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.02);
   color: var(--muted);
-  font-size: 0.68rem;
-  font-weight: 600;
-}
-
-.message-utility-tray[open] .message-utility-toggle {
-  margin-bottom: 0.04rem;
-}
-
-.message-utility-panel {
-  display: grid;
+  font-size: 0.64rem;
+  font-weight: 500;
 }
 
 .operator-chat-overview .status-chip,
