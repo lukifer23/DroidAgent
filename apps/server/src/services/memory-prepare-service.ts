@@ -33,11 +33,47 @@ export class MemoryPrepareService {
     this.emitUpdate();
   }
 
-  async triggerPrepare(params: { resume?: boolean } = {}): Promise<{
+  private trackJoinedPrepare(params: {
+    resume?: boolean;
+    source?: "operator" | "resume" | "prewarm";
+  }): void {
+    if (!this.activePrepare) {
+      return;
+    }
+
+    const metric = performanceService.start("server", "memory.prepare.complete", {
+      resume: params.resume === true,
+      source: params.source ?? (params.resume ? "resume" : "operator"),
+      joined: true,
+    });
+
+    void this.activePrepare
+      .then((status) => {
+        metric.finish({
+          outcome: "ok",
+          joined: true,
+          semanticReady: status.semanticReady,
+          indexedFiles: status.indexedFiles,
+          indexedChunks: status.indexedChunks,
+        });
+      })
+      .catch(() => {
+        metric.finish({
+          outcome: "error",
+          joined: true,
+        });
+      });
+  }
+
+  async triggerPrepare(params: {
+    resume?: boolean;
+    source?: "operator" | "resume" | "prewarm";
+  } = {}): Promise<{
     status: MemoryStatus;
     started: boolean;
   }> {
     if (this.activePrepare) {
+      this.trackJoinedPrepare(params);
       return {
         status: await openclawService.memoryStatusQuick(),
         started: false,
@@ -69,17 +105,19 @@ export class MemoryPrepareService {
     if (current.state !== "queued" && current.state !== "running") {
       return;
     }
-    await this.triggerPrepare({ resume: true });
+    await this.triggerPrepare({ resume: true, source: "resume" });
   }
 
   private async runPrepare(params: {
     resume?: boolean;
+    source?: "operator" | "resume" | "prewarm";
   }): Promise<MemoryStatus> {
     const current = await appStateService.getMemoryPrepareStatus();
     const startedAt =
       params.resume && current.startedAt ? current.startedAt : nowIso();
     const metric = performanceService.start("server", "memory.prepare.complete", {
       resume: params.resume === true,
+      source: params.source ?? (params.resume ? "resume" : "operator"),
     });
     const markFinished = () => {
       const finishedAt = nowIso();
@@ -140,6 +178,13 @@ export class MemoryPrepareService {
         previousFingerprint === currentFingerprint
       ) {
         const finished = markFinished();
+        metric.finish({
+          outcome: "ok",
+          skipped: true,
+          semanticReady: currentStatus.semanticReady,
+          indexedFiles: currentStatus.indexedFiles,
+          indexedChunks: currentStatus.indexedChunks,
+        });
         await this.persistStatus({
           state: "completed",
           startedAt,
@@ -147,13 +192,6 @@ export class MemoryPrepareService {
           progressLabel:
             "Semantic memory prepare skipped (fingerprint current).",
           error: null,
-        });
-        metric.finish({
-          outcome: "ok",
-          skipped: true,
-          semanticReady: currentStatus.semanticReady,
-          indexedFiles: currentStatus.indexedFiles,
-          indexedChunks: currentStatus.indexedChunks,
         });
         return currentStatus;
       }
@@ -174,6 +212,12 @@ export class MemoryPrepareService {
       });
       await appStateService.setJsonSetting("memoryPrepareFingerprint", fingerprint);
       const finished = markFinished();
+      metric.finish({
+        outcome: "ok",
+        semanticReady: status.semanticReady,
+        indexedFiles: status.indexedFiles,
+        indexedChunks: status.indexedChunks,
+      });
       await this.persistStatus({
         state: "completed",
         startedAt,
@@ -183,15 +227,12 @@ export class MemoryPrepareService {
           : "Semantic memory prepare completed.",
         error: null,
       });
-      metric.finish({
-        outcome: "ok",
-        semanticReady: status.semanticReady,
-        indexedFiles: status.indexedFiles,
-        indexedChunks: status.indexedChunks,
-      });
       return status;
     } catch (error) {
       const finished = markFinished();
+      metric.finish({
+        outcome: "error",
+      });
       await this.persistStatus({
         state: "failed",
         startedAt,
@@ -201,9 +242,6 @@ export class MemoryPrepareService {
           error instanceof Error
             ? error.message
             : "Semantic memory prepare failed.",
-      });
-      metric.finish({
-        outcome: "error",
       });
       return await openclawService.memoryStatus();
     }

@@ -2,14 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ClientCommand, DashboardState, JobOutputSnapshot, ServerEvent } from "@droidagent/shared";
 
-import { chatStreamStore } from "../lib/chat-stream-store";
-import { chatRunStore } from "../lib/chat-run-store";
 import { clientPerformance } from "../lib/client-performance";
+import { chatSessionStore } from "../lib/chat-session-store";
+import { terminalStore } from "../lib/terminal-store";
 
 const INITIAL_DELAY_MS = 500;
 const MAX_DELAY_MS = 30000;
 const SNAPSHOT_URL = "/api/dashboard";
 const DASHBOARD_SYNC_DEBOUNCE_MS = 180;
+const UTF8_ENCODER = new TextEncoder();
 const DASHBOARD_PATCH_EVENT_TYPES = new Set<ServerEvent["type"]>([
   "setup.updated",
   "access.updated",
@@ -18,6 +19,7 @@ const DASHBOARD_PATCH_EVENT_TYPES = new Set<ServerEvent["type"]>([
   "channel.updated",
   "launchAgent.updated",
   "memory.updated",
+  "hostPressure.updated",
   "memoryDrafts.updated",
   "context.updated",
   "harness.updated",
@@ -42,6 +44,19 @@ const DASHBOARD_RESYNC_EVENT_TYPES = new Set<ServerEvent["type"]>([
   "approvals.updated",
   "maintenance.updated",
 ]);
+const STARTUP_DIAGNOSTIC_EVENT_TYPES = new Set<ServerEvent["type"]>([
+  "setup.updated",
+  "access.updated",
+  "runtime.updated",
+  "providers.updated",
+  "channel.updated",
+  "launchAgent.updated",
+  "memory.updated",
+  "memoryDrafts.updated",
+  "decision.updated",
+  "decisions.updated",
+  "context.updated",
+]);
 
 function shouldPatchDashboard(event: ServerEvent): boolean {
   return DASHBOARD_PATCH_EVENT_TYPES.has(event.type);
@@ -49,6 +64,10 @@ function shouldPatchDashboard(event: ServerEvent): boolean {
 
 function shouldResyncDashboard(event: ServerEvent): boolean {
   return DASHBOARD_RESYNC_EVENT_TYPES.has(event.type);
+}
+
+function shouldRefreshStartupDiagnostics(event: ServerEvent): boolean {
+  return STARTUP_DIAGNOSTIC_EVENT_TYPES.has(event.type);
 }
 
 export interface UseWebSocketOptions {
@@ -214,10 +233,6 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const onMessageRef = useRef(onMessage);
   const reconnectStartedAtRef = useRef<number | null>(null);
   const flushHandleRef = useRef<number | ReturnType<typeof setTimeout> | null>(null);
-  const pendingStreamRunsRef = useRef<Record<string, { runId: string; text: string }>>({});
-  const pendingStreamClearTimeoutsRef = useRef<
-    Map<string, ReturnType<typeof setTimeout>>
-  >(new Map());
   const pendingJobOutputRef = useRef<Map<string, { stdout: string; stderr: string; stdoutBytes: number; stderrBytes: number }>>(
     new Map()
   );
@@ -247,18 +262,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const flushPendingRealtimeState = useCallback(() => {
     const flushMetric = clientPerformance.start("client.ws.patch_flush");
     flushHandleRef.current = null;
-    const pendingRunCount = Object.keys(pendingStreamRunsRef.current).length;
     const pendingJobCount = pendingJobOutputRef.current.size;
-
-    const pendingRuns = pendingStreamRunsRef.current;
-    const hasRuns = Object.keys(pendingRuns).length > 0;
-    if (hasRuns) {
-      chatStreamStore.setRuns({
-        ...chatStreamStore.getSnapshot(),
-        ...pendingRuns
-      });
-      pendingStreamRunsRef.current = {};
-    }
 
     if (pendingJobOutputRef.current.size > 0) {
       for (const [jobId, pending] of pendingJobOutputRef.current.entries()) {
@@ -286,36 +290,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
       pendingJobOutputRef.current.clear();
     }
     flushMetric.finish({
-      runPatches: pendingRunCount,
       jobPatches: pendingJobCount,
       outcome: "ok",
     });
   }, [queryClient]);
-
-  const clearDeferredStreamClear = useCallback((sessionId: string) => {
-    const timeoutId = pendingStreamClearTimeoutsRef.current.get(sessionId);
-    if (!timeoutId) {
-      return;
-    }
-    clearTimeout(timeoutId);
-    pendingStreamClearTimeoutsRef.current.delete(sessionId);
-  }, []);
-
-  const scheduleDeferredStreamClear = useCallback(
-    (sessionId: string, runId: string) => {
-      clearDeferredStreamClear(sessionId);
-      const timeoutId = setTimeout(() => {
-        pendingStreamClearTimeoutsRef.current.delete(sessionId);
-        const activeRun = chatStreamStore.getSnapshot()[sessionId];
-        if (activeRun?.runId !== runId) {
-          return;
-        }
-        chatStreamStore.clear(sessionId);
-      }, 4_000);
-      pendingStreamClearTimeoutsRef.current.set(sessionId, timeoutId);
-    },
-    [clearDeferredStreamClear],
-  );
 
   const scheduleFlush = useCallback(() => {
     if (flushHandleRef.current !== null) {
@@ -372,61 +350,23 @@ export function useWebSocket(options: UseWebSocketOptions) {
           queryClient.setQueryData(["access"], payload.payload);
         }
         if (payload.type === "chat.history") {
-          const historyMetric = clientPerformance.start("client.chat.history_resync", {
-            sessionId: payload.payload.sessionId,
-          });
-          clearDeferredStreamClear(payload.payload.sessionId);
-          chatStreamStore.clear(payload.payload.sessionId);
           queryClient.setQueryData(["sessions", payload.payload.sessionId, "messages"], payload.payload.messages);
-          historyMetric.finish({
-            sessionId: payload.payload.sessionId,
-            messageCount: payload.payload.messages.length,
-            outcome: "ok",
-          });
+          chatSessionStore.handleHistoryEvent(payload.payload);
         }
         if (payload.type === "chat.stream.delta") {
-          clearDeferredStreamClear(payload.payload.sessionId);
-          const existing = pendingStreamRunsRef.current[payload.payload.sessionId] ?? chatStreamStore.getSnapshot()[payload.payload.sessionId];
-          const nextRun = {
-            runId: payload.payload.runId,
-            text: `${existing?.runId === payload.payload.runId ? existing.text : ""}${payload.payload.delta}`
-          };
-          if (!existing || existing.runId !== payload.payload.runId) {
-            chatStreamStore.setRuns({
-              ...chatStreamStore.getSnapshot(),
-              [payload.payload.sessionId]: nextRun
-            });
-            delete pendingStreamRunsRef.current[payload.payload.sessionId];
-          } else {
-            pendingStreamRunsRef.current[payload.payload.sessionId] = nextRun;
-            scheduleFlush();
-          }
+          chatSessionStore.handleStreamDelta(payload.payload);
         }
-        if (payload.type === "chat.stream.done" || payload.type === "chat.stream.error") {
-          if (flushHandleRef.current !== null) {
-            flushPendingRealtimeState();
-          }
-          delete pendingStreamRunsRef.current[payload.payload.sessionId];
-          scheduleDeferredStreamClear(
-            payload.payload.sessionId,
-            payload.payload.runId,
-          );
+        if (payload.type === "chat.stream.done") {
+          chatSessionStore.handleStreamDone(payload.payload);
+        }
+        if (payload.type === "chat.stream.error") {
+          chatSessionStore.handleStreamError(payload.payload);
         }
         if (payload.type === "chat.run") {
-          chatRunStore.setRun(payload.payload);
-          if (!payload.payload.active) {
-            if (
-              payload.payload.stage === "completed" ||
-              payload.payload.stage === "failed"
-            ) {
-              window.setTimeout(() => {
-                chatRunStore.clear(payload.payload.sessionId);
-              }, 4000);
-            }
-          }
+          chatSessionStore.handleRunEvent(payload.payload);
         }
         if (payload.type === "job.output") {
-          const chunkBytes = new TextEncoder().encode(payload.payload.chunk).length;
+          const chunkBytes = UTF8_ENCODER.encode(payload.payload.chunk).length;
           const existing = pendingJobOutputRef.current.get(payload.payload.jobId) ?? {
             stdout: "",
             stderr: "",
@@ -443,6 +383,15 @@ export function useWebSocket(options: UseWebSocketOptions) {
           pendingJobOutputRef.current.set(payload.payload.jobId, existing);
           scheduleFlush();
         }
+        if (payload.type === "terminal.updated") {
+          terminalStore.updateSession(payload.payload);
+        }
+        if (payload.type === "terminal.output") {
+          terminalStore.appendOutput(payload.payload.sessionId, payload.payload.data);
+        }
+        if (payload.type === "terminal.closed") {
+          terminalStore.close(payload.payload.sessionId, payload.payload.reason);
+        }
         if (shouldPatchDashboard(payload)) {
           queryClient.setQueryData<DashboardState | undefined>(["dashboard"], (current) => updateDashboardState(current, payload));
           if (payload.type === "sessions.updated") {
@@ -451,19 +400,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
           if (shouldResyncDashboard(payload)) {
             syncDashboardSnapshot();
           }
-          if (
-            payload.type === "setup.updated" ||
-            payload.type === "access.updated" ||
-            payload.type === "runtime.updated" ||
-            payload.type === "providers.updated" ||
-            payload.type === "channel.updated" ||
-            payload.type === "launchAgent.updated" ||
-            payload.type === "memory.updated" ||
-            payload.type === "memoryDrafts.updated" ||
-            payload.type === "decision.updated" ||
-            payload.type === "decisions.updated" ||
-            payload.type === "context.updated"
-          ) {
+          if (shouldRefreshStartupDiagnostics(payload)) {
             void queryClient.invalidateQueries({ queryKey: ["startupDiagnostics"] });
           }
         }
@@ -521,11 +458,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
       ws.close();
     };
   }, [
-    clearDeferredStreamClear,
     enabled,
     flushPendingRealtimeState,
     queryClient,
-    scheduleDeferredStreamClear,
     syncDashboardSnapshot,
   ]);
 
@@ -548,10 +483,6 @@ export function useWebSocket(options: UseWebSocketOptions) {
         }
         flushHandleRef.current = null;
       }
-      for (const timeoutId of pendingStreamClearTimeoutsRef.current.values()) {
-        clearTimeout(timeoutId);
-      }
-      pendingStreamClearTimeoutsRef.current.clear();
       if (wsRef.current) {
         wsRef.current.close();
         wsRef.current = null;

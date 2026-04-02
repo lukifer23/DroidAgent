@@ -98,9 +98,12 @@ Notable implementation guardrails in this pass:
 - jobs output rendering tails large logs in-browser to avoid large full-text DOM updates
 - decision updates now invalidate and publish through one path so owner-gated actions do not create parallel approval, draft, and pairing refresh storms
 - websocket-driven dashboard patches are reconciled with debounced full snapshot pulls after high-impact runtime/provider/channel/context/memory mutations
+- server-side mutation fanout now coalesces dashboard slice invalidation and websocket emits through one shared queue, which reduces repeated slice loads and keeps mutation bursts ordered
 - request-path warmup now waits for startup restore before priming dashboard/access/runtime/provider caches, and dashboard memory status uses the quick cached path on the hot request path
 - the memory prepare endpoint is now a fast single-flight background trigger; completion latency is measured separately from accepted latency
 - explicit memory prepare fingerprints the durable-memory source set and skips the heavy reindex path when the index is already current
+- `memory.prepare` and `memory.prepare.complete` samples now stamp `source` context (`operator`, `resume`, `prewarm`), and an operator request that joins an in-flight prepare emits its own joined completion sample so perf artifacts do not accidentally report stale bootstrap timings as interactive latency
+- browser chat/session timing is now sourced from one canonical per-session store, which keeps first-token and completion timings aligned with the same run/stream lifecycle the UI renders
 
 The Settings diagnostics view now shows p95, last sample, sample count, `ok`/`warn`/`error` counts, and sample age so old or unhealthy latency numbers are easier to spot before they mislead an operator.
 
@@ -172,13 +175,14 @@ This table is the maintained target set for the perf workflow.
 
 ## Latest Validated Local Run
 
-Validated on `2026-03-30`:
+Validated on `2026-04-02`:
 
-- server `GET /api/access` p95: `14.37 ms`
-- server `GET /api/dashboard` p95: `11.78 ms`
+- server `GET /api/access` p95: `2.10 ms`
+- server `GET /api/dashboard` p95: `2.06 ms`
 - server `dashboard.snapshot` cold max: `0.01 ms`
-- E2E route switch p95: `199.93 ms`
-- E2E chat first token visible p95: `67.09 ms`
-- E2E memory prepare accepted p95: `12.40 ms`
-- main entry JS: `16.72 kB`
-- terminal route JS: `9.05 kB`
+- E2E route switch p95: `198.30 ms`
+- E2E chat first token visible p95: `63.00 ms`
+- E2E memory prepare accepted p95: `6.80 ms`
+- E2E memory prepare completion p95: `15.01 ms`
+- main entry JS: `16.73 kB`
+- terminal route JS: `9.69 kB`

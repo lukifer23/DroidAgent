@@ -22,7 +22,6 @@ import {
   usePerformanceSubscription,
 } from "../app-data";
 import {
-  useChatFeedbackSnapshot,
   useClientPerformanceSnapshot,
   useDroidAgentApp,
 } from "../app-context";
@@ -40,6 +39,11 @@ import { TERMINAL_PREFILL_STORAGE_KEY } from "../lib/constants";
 import {
   buildOptimisticChatMessage,
 } from "../lib/chat-screen-utils";
+import {
+  prefetchSessionMessages,
+  setCachedSessionMessages,
+} from "../lib/chat-session-cache";
+import { chatSessionStore } from "../lib/chat-session-store";
 import { getPendingDecisions, getSessionDecisions } from "../lib/dashboard-selectors";
 import { formatLatency, formatTokenBudget, roleLabel } from "../lib/formatters";
 import { clientPerformance } from "../lib/client-performance";
@@ -67,7 +71,6 @@ export function useChatScreenController(): ChatScreenShellProps {
   const authQuery = useAuthQuery();
   const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
   const performanceQuery = usePerformanceSubscription();
-  const chatFeedbackSnapshot = useChatFeedbackSnapshot();
   const dashboard = dashboardQuery.data;
   const clientPerformanceSnapshot = useClientPerformanceSnapshot();
   const [chatInput, setChatInput] = useState("");
@@ -98,10 +101,7 @@ export function useChatScreenController(): ChatScreenShellProps {
   const selectedSessionKey = activeSession?.id ?? selectedSessionId;
   const sessionState = useChatSessionState({
     selectedSessionKey,
-    queryClient,
     enabled: Boolean(authQuery.data?.user),
-    liveBySessionId: chatFeedbackSnapshot.liveBySessionId,
-    recentBySessionId: chatFeedbackSnapshot.recentBySessionId,
   });
   const activeRun = sessionState.activeRun;
   const liveChatFeedback = sessionState.liveChatFeedback;
@@ -329,9 +329,15 @@ export function useChatScreenController(): ChatScreenShellProps {
         : "attachments ready"
       : "attachments unavailable",
   ].filter(Boolean))] as string[];
-  const sessionSecondaryStatus = historyQuery.isFetching
-    ? "Syncing history"
-    : "History synced";
+  const sessionSecondaryStatus = sessionState.switching
+    ? "Opening chat"
+    : sessionState.historyStatus === "loading"
+      ? "Loading history"
+      : sessionState.historyStatus === "resyncing" || historyQuery.isFetching
+        ? "Syncing history"
+        : sessionState.historyStatus === "error"
+          ? "History failed"
+          : "History synced";
   const showRailRunCard = Boolean(activeRun?.active);
 
   useEffect(() => {
@@ -469,30 +475,29 @@ export function useChatScreenController(): ChatScreenShellProps {
     if (!sessionId || sessionId === selectedSessionKey) {
       return;
     }
-    if (
-      !queryClient.getQueryData<ChatMessage[]>([
-        "sessions",
-        sessionId,
-        "messages",
-      ])
-    ) {
+    const nextSession = chatSessionStore.getSessionSnapshot(sessionId);
+    if (nextSession.historyStatus !== "ready") {
+      chatSessionStore.markSessionSwitching(sessionId, true);
       const switchMetric = clientPerformance.start("client.chat.session_switch", {
         sessionId,
       });
-      await queryClient.prefetchQuery({
-        queryKey: ["sessions", sessionId, "messages"],
-        queryFn: () =>
-          api<ChatMessage[]>(
-            `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
-          ),
-        staleTime: 15_000,
-      });
-      switchMetric.finish({
-        sessionId,
-        outcome: "ok",
-      });
+      try {
+        await prefetchSessionMessages(queryClient, sessionId);
+        switchMetric.finish({
+          sessionId,
+          outcome: "ok",
+        });
+      } catch (error) {
+        chatSessionStore.markSessionSwitching(sessionId, false);
+        switchMetric.finish({
+          sessionId,
+          outcome: "error",
+        });
+        throw error;
+      }
     }
     setSelectedSessionId(sessionId);
+    chatSessionStore.markSessionSwitching(sessionId, false);
   }
 
   async function handleRecoverHostPressure(params?: {
@@ -578,10 +583,13 @@ export function useChatScreenController(): ChatScreenShellProps {
       attachments: nextAttachments,
     });
 
-    queryClient.setQueryData<ChatMessage[]>(
-      ["sessions", selectedSessionKey, "messages"],
-      [...messages, optimisticMessage],
+    const optimisticMessages = [...messages, optimisticMessage];
+    setCachedSessionMessages(
+      queryClient,
+      selectedSessionKey,
+      optimisticMessages,
     );
+    chatSessionStore.appendOptimisticMessage(selectedSessionKey, optimisticMessage);
 
     trackChatSubmit(selectedSessionKey);
     if (params.clearComposer) {
@@ -624,10 +632,8 @@ export function useChatScreenController(): ChatScreenShellProps {
           ? error.message
           : "Failed to send the message to DroidAgent.",
       );
-      queryClient.setQueryData<ChatMessage[]>(
-        ["sessions", selectedSessionKey, "messages"],
-        previousMessages,
-      );
+      setCachedSessionMessages(queryClient, selectedSessionKey, previousMessages);
+      chatSessionStore.primeMessages(selectedSessionKey, previousMessages);
       if (params.clearComposer) {
         setChatInput(previousInput);
         setPendingAttachments(previousAttachments);
@@ -715,9 +721,13 @@ export function useChatScreenController(): ChatScreenShellProps {
     showTranscriptAlerts,
     maintenanceMessage: maintenance?.current?.message,
     maintenancePhase: maintenance?.current?.phase ?? null,
-    historyLoading: historyQuery.isLoading,
-    historyError: historyQuery.isError,
-    historyFetching: historyQuery.isFetching,
+    historyLoading:
+      sessionState.historyStatus === "loading" && messages.length === 0,
+    historyError: sessionState.historyStatus === "error",
+    historyFetching:
+      sessionState.historyStatus === "loading" ||
+      sessionState.historyStatus === "resyncing" ||
+      historyQuery.isFetching,
     activeRun: activeRun ?? null,
     liveChatFeedback,
     terminalChatFeedback,

@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { chatRunStore } from "./chat-run-store";
 
 describe("chatRunStore", () => {
-  it("does not emit when the incoming run state is unchanged", () => {
+  it("does not emit when the incoming run state is unchanged", async () => {
     const sessionId = "test-run-session";
     const events: number[] = [];
     const unsubscribe = chatRunStore.subscribe(() => {
@@ -27,7 +27,9 @@ describe("chatRunStore", () => {
       chatRunStore.setRun(run);
       chatRunStore.setRun(run);
 
-      expect(events).toHaveLength(1);
+      await vi.waitFor(() => {
+        expect(events).toHaveLength(1);
+      });
     } finally {
       unsubscribe();
       chatRunStore.clear(sessionId);

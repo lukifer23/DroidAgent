@@ -33,6 +33,14 @@ import { startupService } from "./services/startup-service.js";
 import { terminalService } from "./services/terminal-service.js";
 import { chatRunCoordinator } from "./services/chat-run-coordinator.js";
 import { publishDecisionEffects } from "./lib/decision-updates.js";
+import {
+  RealtimeMutationQueue,
+  type RealtimeMutationLoad,
+} from "./lib/realtime-mutation-queue.js";
+
+type MutationBuild = (
+  load: RealtimeMutationLoad,
+) => Promise<ServerEvent | ServerEvent[]>;
 
 function send(ws: WebSocket, payload: unknown): void {
   ws.send(JSON.stringify(payload));
@@ -54,6 +62,19 @@ export class WebsocketHub {
   private pendingJobOutputs = new Map<string, { jobId: string; stream: "stdout" | "stderr"; chunk: string }>();
   private pendingTerminalOutputs = new Map<string, { sessionId: string; data: string }>();
   private pendingFlushHandle: ReturnType<typeof setImmediate> | null = null;
+  private pendingRealtimeBytes = 0;
+  private readonly maxPendingRealtimeBytes = 256 * 1024;
+  private readonly mutationQueue = new RealtimeMutationQueue<
+    ServerEvent,
+    DashboardSliceKey
+  >({
+    invalidate: (slices, options) => {
+      this.invalidateDashboard(slices, options);
+    },
+    emit: async (event) => {
+      this.broadcastEvent(event);
+    },
+  });
 
   private invalidateDashboard(
     slices: DashboardSliceKey[] = [],
@@ -69,19 +90,308 @@ export class WebsocketHub {
     this.broadcast(ServerEventSchema.parse(event));
   }
 
-  private async publishEvents(options: {
+  private queueMutation(options: {
     slices?: DashboardSliceKey[];
     startup?: boolean;
-    events: ServerEvent[] | Promise<ServerEvent[]>;
+    build: MutationBuild;
   }): Promise<void> {
-    this.invalidateDashboard(
-      options.slices ?? [],
-      options.startup === undefined ? {} : { startup: options.startup },
-    );
-    const events = await options.events;
-    for (const event of events) {
-      this.broadcastEvent(event);
+    return this.mutationQueue.enqueue({
+      ...(options.slices ? { slices: options.slices } : {}),
+      ...(options.startup === undefined ? {} : { startup: options.startup }),
+      build: options.build,
+    });
+  }
+
+  async publishUpdates(
+    ...kinds: Array<
+      | "setup"
+      | "access"
+      | "runtime"
+      | "providers"
+      | "channel"
+      | "launchAgent"
+      | "context"
+      | "memory"
+      | "hostPressure"
+      | "memoryDrafts"
+      | "maintenance"
+      | "sessions"
+      | "approvals"
+      | "decisions"
+      | "dashboard"
+    >
+  ): Promise<void> {
+    await Promise.all(kinds.map((kind) => this.publishUpdate(kind)));
+  }
+
+  private publishUpdate(
+    kind:
+      | "setup"
+      | "access"
+      | "runtime"
+      | "providers"
+      | "channel"
+      | "launchAgent"
+      | "context"
+      | "memory"
+      | "hostPressure"
+      | "memoryDrafts"
+      | "maintenance"
+      | "sessions"
+      | "approvals"
+      | "decisions"
+      | "dashboard",
+  ): Promise<void> {
+    if (kind === "dashboard") {
+      return this.queueMutation({
+        startup: true,
+        build: async (load) => ({
+          type: "dashboard.state",
+          payload: await load("dashboard.state", () =>
+            dashboardService.getDashboardState(),
+          ),
+        }),
+      });
     }
+
+    if (kind === "setup") {
+      return this.queueMutation({
+        slices: ["setup"],
+        startup: true,
+        build: async (load) => ({
+          type: "setup.updated",
+          payload: await load("setup.updated", () => appStateService.getSetupState()),
+        }),
+      });
+    }
+
+    if (kind === "access") {
+      return this.queueMutation({
+        slices: ["access"],
+        startup: true,
+        build: async (load) => ({
+          type: "access.updated",
+          payload: await load("access.updated", () =>
+            accessService.getBootstrapState(),
+          ),
+        }),
+      });
+    }
+
+    if (kind === "runtime") {
+      return this.queueMutation({
+        slices: ["runtimes", "harness"],
+        startup: true,
+        build: async (load) => [
+          {
+            type: "runtime.updated",
+            payload: await load("runtime.updated", () =>
+              runtimeService.getRuntimeStatuses(),
+            ),
+          },
+          {
+            type: "harness.updated",
+            payload: await load("harness.updated", () =>
+              harnessService.harnessStatus(),
+            ),
+          },
+        ],
+      });
+    }
+
+    if (kind === "providers") {
+      return this.queueMutation({
+        slices: ["providers", "harness"],
+        startup: true,
+        build: async (load) => [
+          {
+            type: "providers.updated",
+            payload: {
+              providers: await load("providers.updated.providers", () =>
+                runtimeService.listProviderProfiles(),
+              ),
+              cloudProviders: await load("providers.updated.cloud", () =>
+                keychainService.listProviderSummaries(),
+              ),
+            },
+          },
+          {
+            type: "harness.updated",
+            payload: await load("harness.updated", () =>
+              harnessService.harnessStatus(),
+            ),
+          },
+        ],
+      });
+    }
+
+    if (kind === "channel") {
+      return this.queueMutation({
+        slices: ["channels", "harness", "decisions"],
+        startup: true,
+        build: async (load) => [
+          {
+            type: "channel.updated",
+            payload: await load("channel.updated", () =>
+              harnessService.listChannels(),
+            ),
+          },
+          {
+            type: "harness.updated",
+            payload: await load("harness.updated", () =>
+              harnessService.harnessStatus(),
+            ),
+          },
+          {
+            type: "decisions.updated",
+            payload: await load("decisions.updated", () =>
+              decisionService.listDecisions(),
+            ),
+          },
+        ],
+      });
+    }
+
+    if (kind === "launchAgent") {
+      return this.queueMutation({
+        slices: ["launchAgent"],
+        startup: true,
+        build: async (load) => ({
+          type: "launchAgent.updated",
+          payload: await load("launchAgent.updated", () =>
+            launchAgentService.status(),
+          ),
+        }),
+      });
+    }
+
+    if (kind === "context") {
+      return this.queueMutation({
+        slices: ["contextManagement", "harness"],
+        startup: true,
+        build: async (load) => [
+          {
+            type: "context.updated",
+            payload: await load("context.updated", () =>
+              openclawService.contextManagementStatus(),
+            ),
+          },
+          {
+            type: "harness.updated",
+            payload: await load("harness.updated", () =>
+              harnessService.harnessStatus(),
+            ),
+          },
+        ],
+      });
+    }
+
+    if (kind === "memory") {
+      return this.queueMutation({
+        slices: ["memory", "harness"],
+        startup: true,
+        build: async (load) => [
+          {
+            type: "memory.updated",
+            payload: await load("memory.updated", () =>
+              openclawService.memoryStatus(),
+            ),
+          },
+          {
+            type: "harness.updated",
+            payload: await load("harness.updated", () =>
+              harnessService.harnessStatus(),
+            ),
+          },
+        ],
+      });
+    }
+
+    if (kind === "hostPressure") {
+      return this.queueMutation({
+        slices: ["hostPressure"],
+        build: async (load) => ({
+          type: "hostPressure.updated",
+          payload: await load("hostPressure.updated", () =>
+            hostPressureService.getStatus(true),
+          ),
+        }),
+      });
+    }
+
+    if (kind === "memoryDrafts") {
+      return this.queueMutation({
+        slices: ["memoryDrafts", "decisions"],
+        build: async (load) => [
+          {
+            type: "memoryDrafts.updated",
+            payload: await load("memoryDrafts.updated", () =>
+              memoryDraftService.listDrafts(),
+            ),
+          },
+          {
+            type: "decisions.updated",
+            payload: await load("decisions.updated", () =>
+              decisionService.listDecisions(),
+            ),
+          },
+        ],
+      });
+    }
+
+    if (kind === "maintenance") {
+      return this.queueMutation({
+        slices: ["maintenance"],
+        build: async (load) => ({
+          type: "maintenance.updated",
+          payload: await load("maintenance.updated", () =>
+            maintenanceService.getStatus(),
+          ),
+        }),
+      });
+    }
+
+    if (kind === "sessions") {
+      return this.queueMutation({
+        slices: ["sessions"],
+        build: async (load) => ({
+          type: "sessions.updated",
+          payload: await load("sessions.updated", () =>
+            sessionLifecycleService.listActiveSessions(),
+          ),
+        }),
+      });
+    }
+
+    if (kind === "approvals") {
+      return this.queueMutation({
+        slices: ["approvals", "decisions"],
+        build: async (load) => [
+          {
+            type: "approvals.updated",
+            payload: await load("approvals.updated", () =>
+              harnessService.listApprovals(),
+            ),
+          },
+          {
+            type: "decisions.updated",
+            payload: await load("decisions.updated", () =>
+              decisionService.listDecisions(),
+            ),
+          },
+        ],
+      });
+    }
+
+    return this.queueMutation({
+      slices: ["decisions"],
+      build: async (load) => ({
+        type: "decisions.updated",
+        payload: await load("decisions.updated", () =>
+          decisionService.listDecisions(),
+        ),
+      }),
+    });
   }
 
   private flushPendingRealtimeEvents(): void {
@@ -121,6 +431,7 @@ export class WebsocketHub {
       }
       this.pendingTerminalOutputs.clear();
     }
+    this.pendingRealtimeBytes = 0;
     flushMetric.finish({
       chatPatches: pendingChat,
       jobPatches: pendingJobs,
@@ -183,11 +494,16 @@ export class WebsocketHub {
     jobService.on("output", (event) => {
       const key = `${event.jobId}:${event.stream}`;
       const existing = this.pendingJobOutputs.get(key);
+      this.pendingRealtimeBytes += Buffer.byteLength(event.chunk, "utf8");
       this.pendingJobOutputs.set(key, {
         jobId: event.jobId,
         stream: event.stream,
         chunk: `${existing?.chunk ?? ""}${event.chunk}`,
       });
+      if (this.pendingRealtimeBytes >= this.maxPendingRealtimeBytes) {
+        this.flushPendingRealtimeEvents();
+        return;
+      }
       this.schedulePendingFlush();
     });
 
@@ -210,10 +526,15 @@ export class WebsocketHub {
 
     terminalService.on("output", (event) => {
       const existing = this.pendingTerminalOutputs.get(event.sessionId);
+      this.pendingRealtimeBytes += Buffer.byteLength(event.data, "utf8");
       this.pendingTerminalOutputs.set(event.sessionId, {
         sessionId: event.sessionId,
         data: `${existing?.data ?? ""}${event.data}`,
       });
+      if (this.pendingRealtimeBytes >= this.maxPendingRealtimeBytes) {
+        this.flushPendingRealtimeEvents();
+        return;
+      }
       this.schedulePendingFlush();
     });
 
@@ -231,215 +552,54 @@ export class WebsocketHub {
   }
 
   async refreshAll(): Promise<void> {
-    await this.publishEvents({
-      slices: [],
-      startup: true,
-      events: (async () => [
-        {
-          type: "dashboard.state",
-          payload: await dashboardService.getDashboardState(),
-        },
-      ])(),
-    });
+    await this.publishUpdates("dashboard");
   }
 
   async publishSetupUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["setup"],
-      startup: true,
-      events: [
-        {
-          type: "setup.updated",
-          payload: await appStateService.getSetupState(),
-        },
-      ],
-    });
+    await this.publishUpdates("setup");
   }
 
   async publishAccessUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["access"],
-      startup: true,
-      events: [
-        {
-          type: "access.updated",
-          payload: await accessService.getBootstrapState(),
-        },
-      ],
-    });
+    await this.publishUpdates("access");
   }
 
   async publishRuntimeUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["runtimes", "harness"],
-      startup: true,
-      events: (async () => {
-        const [runtimes, harness] = await Promise.all([
-          runtimeService.getRuntimeStatuses(),
-          harnessService.harnessStatus(),
-        ]);
-        return [
-          {
-            type: "runtime.updated",
-            payload: runtimes,
-          },
-          {
-            type: "harness.updated",
-            payload: harness,
-          },
-        ];
-      })(),
-    });
+    await this.publishUpdates("runtime");
   }
 
   async publishProvidersUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["providers", "harness"],
-      startup: true,
-      events: (async () => {
-        const [providers, cloudProviders, harness] = await Promise.all([
-          runtimeService.listProviderProfiles(),
-          keychainService.listProviderSummaries(),
-          harnessService.harnessStatus(),
-        ]);
-        return [
-          {
-            type: "providers.updated",
-            payload: {
-              providers,
-              cloudProviders,
-            },
-          },
-          {
-            type: "harness.updated",
-            payload: harness,
-          },
-        ];
-      })(),
-    });
+    await this.publishUpdates("providers");
   }
 
   async publishChannelUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["channels", "harness", "decisions"],
-      startup: true,
-      events: (async () => {
-        const [channels, harness, decisions] = await Promise.all([
-          harnessService.listChannels(),
-          harnessService.harnessStatus(),
-          decisionService.listDecisions(),
-        ]);
-        return [
-          {
-            type: "channel.updated",
-            payload: channels,
-          },
-          {
-            type: "harness.updated",
-            payload: harness,
-          },
-          {
-            type: "decisions.updated",
-            payload: decisions,
-          },
-        ];
-      })(),
-    });
+    await this.publishUpdates("channel");
   }
 
   async publishLaunchAgentUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["launchAgent"],
-      startup: true,
-      events: [
-        {
-          type: "launchAgent.updated",
-          payload: await launchAgentService.status(),
-        },
-      ],
-    });
+    await this.publishUpdates("launchAgent");
   }
 
   async publishContextUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["contextManagement", "harness"],
-      startup: true,
-      events: (async () => {
-        const [context, harness] = await Promise.all([
-          openclawService.contextManagementStatus(),
-          harnessService.harnessStatus(),
-        ]);
-        return [
-          {
-            type: "context.updated",
-            payload: context,
-          },
-          {
-            type: "harness.updated",
-            payload: harness,
-          },
-        ];
-      })(),
-    });
+    await this.publishUpdates("context");
   }
 
   async publishMemoryUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["memory", "harness"],
-      startup: true,
-      events: (async () => {
-        const [memory, harness] = await Promise.all([
-          openclawService.memoryStatus(),
-          harnessService.harnessStatus(),
-        ]);
-        return [
-          {
-            type: "memory.updated",
-            payload: memory,
-          },
-          {
-            type: "harness.updated",
-            payload: harness,
-          },
-        ];
-      })(),
-    });
+    await this.publishUpdates("memory");
   }
 
   async publishHostPressureUpdated(force = false): Promise<void> {
-    this.invalidateDashboard(["hostPressure"]);
-    this.broadcastEvent({
-      type: "hostPressure.updated",
-      payload: await hostPressureService.getStatus(force),
-    });
+    if (force) {
+      hostPressureService.invalidate();
+    }
+    await this.publishUpdates("hostPressure");
   }
 
   async publishMemoryDraftsUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["memoryDrafts", "decisions"],
-      events: (async () => [
-        {
-          type: "memoryDrafts.updated",
-          payload: await memoryDraftService.listDrafts(),
-        },
-        {
-          type: "decisions.updated",
-          payload: await decisionService.listDecisions(),
-        },
-      ])(),
-    });
+    await this.publishUpdates("memoryDrafts");
   }
 
   async publishMaintenanceUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["maintenance"],
-      events: [
-        {
-          type: "maintenance.updated",
-          payload: await maintenanceService.getStatus(),
-        },
-      ],
-    });
+    await this.publishUpdates("maintenance");
   }
 
   async publishPerformanceUpdated(): Promise<void> {
@@ -450,25 +610,20 @@ export class WebsocketHub {
   }
 
   async publishSessionsUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["sessions"],
-      events: [
-        {
-          type: "sessions.updated",
-          payload: await sessionLifecycleService.listActiveSessions(),
-        },
-      ],
-    });
+    await this.publishUpdates("sessions");
   }
 
   publishApprovalUpdated(approval: Awaited<ReturnType<typeof harnessService.listApprovals>>[number]): void {
-    void this.publishEvents({
+    void this.queueMutation({
       slices: ["approvals", "decisions"],
-      events: (async () => {
-        const decision =
-          await decisionService.getDecision(
-            decisionService.createDecisionIdFromApprovalId(approval.id),
-          );
+      build: async (load) => {
+        const decision = await load(
+          `approval.decision.${approval.id}`,
+          async () =>
+            await decisionService.getDecision(
+              decisionService.createDecisionIdFromApprovalId(approval.id),
+            ),
+        );
         return [
           {
             type: "approval.updated" as const,
@@ -483,40 +638,21 @@ export class WebsocketHub {
               ]
             : []),
         ];
-      })(),
+      },
     });
   }
 
   async publishApprovalsUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["approvals", "decisions"],
-      events: (async () => [
-        {
-          type: "approvals.updated",
-          payload: await harnessService.listApprovals(),
-        },
-        {
-          type: "decisions.updated",
-          payload: await decisionService.listDecisions(),
-        },
-      ])(),
-    });
+    await this.publishUpdates("approvals");
   }
 
   async publishDecisionsUpdated(): Promise<void> {
-    await this.publishEvents({
-      slices: ["decisions"],
-      events: [
-        {
-          type: "decisions.updated",
-          payload: await decisionService.listDecisions(),
-        },
-      ],
-    });
+    await this.publishUpdates("decisions");
   }
 
   publishChatDelta(sessionId: string, runId: string, delta: string): void {
     const existing = this.pendingChatDeltas.get(sessionId);
+    this.pendingRealtimeBytes += Buffer.byteLength(delta, "utf8");
     this.pendingChatDeltas.set(sessionId, {
       sessionId,
       runId,
@@ -525,6 +661,10 @@ export class WebsocketHub {
           ? `${existing.delta}${delta}`
           : delta,
     });
+    if (this.pendingRealtimeBytes >= this.maxPendingRealtimeBytes) {
+      this.flushPendingRealtimeEvents();
+      return;
+    }
     this.schedulePendingFlush();
   }
 

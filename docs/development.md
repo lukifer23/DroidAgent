@@ -34,6 +34,13 @@ pnpm verify:full
 - `pnpm verify:full`
   - `pnpm verify` plus the real server-backed Playwright acceptance suite
 
+## Current Internal Convergence Points
+
+- server realtime mutation fanout should go through the shared slice-aware queue in `apps/server/src/lib/realtime-mutation-queue.ts`
+- browser chat/session lifecycle state should go through `apps/web/src/lib/chat-session-store.ts`
+- websocket transport should apply chat and terminal events in `apps/web/src/hooks/use-websocket.ts`, not in parallel consumers
+- OpenClaw remains the source of truth for session lifecycle, approvals, pairing, and execution; DroidAgent caches and annotates that state for UX only
+
 ## Browser Test Layers
 
 - `pnpm test:e2e`
@@ -76,4 +83,5 @@ For PRs touching sessions, approvals, pairing, websocket semantics, maintenance 
 2. Confirm owner-gated mutations still route through `decisionService`.
 3. Confirm browser clients still consume DroidAgent wrapper surfaces, not raw OpenClaw control semantics.
 4. Confirm websocket + dashboard convergence still has one canonical refresh path.
-5. Update `docs/surface-inventory.md` whenever a public route/event compatibility alias is added or changed.
+5. Confirm browser chat state still has one canonical session store instead of parallel run/stream/feedback ownership.
+6. Update `docs/surface-inventory.md` whenever a public route/event compatibility alias is added or changed.

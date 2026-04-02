@@ -90,6 +90,8 @@ function buildSignalRegistrationRequest(body: {
 export function registerOperationsRoutes(
   app: Hono<{ Variables: AppVariables }>,
 ) {
+  const perfReadyFile = process.env.DROIDAGENT_PERF_READY_FILE ?? null;
+
   app.get("/api/terminal/session", async (c) => {
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;
@@ -219,13 +221,20 @@ export function registerOperationsRoutes(
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;
     const settings = await appStateService.getRuntimeSettings();
+    const prepareSource =
+      perfReadyFile && !fs.existsSync(perfReadyFile)
+        ? "prewarm"
+        : "operator";
     const metric = performanceService.start("server", "memory.prepare", {
       runtime: settings.selectedRuntime,
       embeddingModel: settings.ollamaEmbeddingModel,
       reindex: true,
+      source: prepareSource,
     });
     try {
-      const { status, started } = await memoryPrepareService.triggerPrepare();
+      const { status, started } = await memoryPrepareService.triggerPrepare({
+        source: prepareSource,
+      });
       metric.finish({
         semanticReady: status.semanticReady,
         indexedFiles: status.indexedFiles,
@@ -234,8 +243,7 @@ export function registerOperationsRoutes(
         started,
       });
       void Promise.all([
-        websocketHub.publishMemoryUpdated(),
-        websocketHub.publishSetupUpdated(),
+        websocketHub.publishUpdates("memory", "setup"),
       ]).catch((error) => {
         console.error("Failed to publish memory prepare updates", error);
       });
@@ -376,14 +384,14 @@ export function registerOperationsRoutes(
       modelId: body.modelId ?? null,
     });
     startupService.invalidate();
-    await Promise.all([
-      websocketHub.publishSetupUpdated(),
-      websocketHub.publishAccessUpdated(),
-      websocketHub.publishRuntimeUpdated(),
-      websocketHub.publishProvidersUpdated(),
-      websocketHub.publishMemoryUpdated(),
-      websocketHub.publishContextUpdated(),
-    ]);
+    await websocketHub.publishUpdates(
+      "setup",
+      "access",
+      "runtime",
+      "providers",
+      "memory",
+      "context",
+    );
     return c.json(result);
   });
 
@@ -402,8 +410,7 @@ export function registerOperationsRoutes(
     const state = await appStateService.markSetupStepCompleted("workspace", {
       workspaceRoot,
     });
-    await websocketHub.publishSetupUpdated();
-    await websocketHub.publishMemoryUpdated();
+    await websocketHub.publishUpdates("setup", "memory");
     return c.json(state);
   });
 
@@ -421,9 +428,7 @@ export function registerOperationsRoutes(
     const state = await appStateService.markSetupStepCompleted("runtime", {
       selectedRuntime: body.runtimeId,
     });
-    await websocketHub.publishSetupUpdated();
-    await websocketHub.publishRuntimeUpdated();
-    await websocketHub.publishProvidersUpdated();
+    await websocketHub.publishUpdates("setup", "runtime", "providers");
     return c.json(state);
   });
 
@@ -442,11 +447,13 @@ export function registerOperationsRoutes(
       "providerRegistration",
       {},
     );
-    await websocketHub.publishSetupUpdated();
-    await websocketHub.publishRuntimeUpdated();
-    await websocketHub.publishProvidersUpdated();
-    await websocketHub.publishMemoryUpdated();
-    await websocketHub.publishContextUpdated();
+    await websocketHub.publishUpdates(
+      "setup",
+      "runtime",
+      "providers",
+      "memory",
+      "context",
+    );
     return c.json(state);
   });
 
@@ -465,8 +472,7 @@ export function registerOperationsRoutes(
     const state = await appStateService.updateSetupState({
       signalEnabled: true,
     });
-    await websocketHub.publishSetupUpdated();
-    await websocketHub.publishChannelUpdated();
+    await websocketHub.publishUpdates("setup", "channel");
     return c.json(state);
   });
 
@@ -482,8 +488,7 @@ export function registerOperationsRoutes(
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;
     await runtimeService.installRuntime(c.req.param("runtimeId") as RuntimeId);
-    await websocketHub.publishRuntimeUpdated();
-    await websocketHub.publishProvidersUpdated();
+    await websocketHub.publishUpdates("runtime", "providers");
     return c.json({ ok: true });
   });
 
@@ -493,8 +498,7 @@ export function registerOperationsRoutes(
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;
     await runtimeService.startRuntime(c.req.param("runtimeId") as RuntimeId);
-    await websocketHub.publishRuntimeUpdated();
-    await websocketHub.publishProvidersUpdated();
+    await websocketHub.publishUpdates("runtime", "providers");
     return c.json({ ok: true });
   });
 
@@ -504,8 +508,7 @@ export function registerOperationsRoutes(
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;
     await runtimeService.stopRuntime(c.req.param("runtimeId") as RuntimeId);
-    await websocketHub.publishRuntimeUpdated();
-    await websocketHub.publishProvidersUpdated();
+    await websocketHub.publishUpdates("runtime", "providers");
     return c.json({ ok: true });
   });
 
@@ -519,10 +522,12 @@ export function registerOperationsRoutes(
       c.req.param("runtimeId") as "ollama" | "llamaCpp",
       body.modelId,
     );
-    await websocketHub.publishRuntimeUpdated();
-    await websocketHub.publishProvidersUpdated();
-    await websocketHub.publishMemoryUpdated();
-    await websocketHub.publishContextUpdated();
+    await websocketHub.publishUpdates(
+      "runtime",
+      "providers",
+      "memory",
+      "context",
+    );
     return c.json({ ok: true });
   });
 
@@ -533,8 +538,7 @@ export function registerOperationsRoutes(
     if (unauthorized) return unauthorized;
     const body = (await c.req.json()) as { enabled: boolean };
     const status = await openclawService.setSmartContextManagement(body.enabled);
-    await websocketHub.publishMemoryUpdated();
-    await websocketHub.publishContextUpdated();
+    await websocketHub.publishUpdates("memory", "context");
     return c.json(status);
   });
 
@@ -570,9 +574,7 @@ export function registerOperationsRoutes(
     await appStateService.markSetupStepCompleted("cloudProviders");
     await runtimeService.startRuntime("openclaw");
     runtimeService.invalidateCaches();
-    await websocketHub.publishSetupUpdated();
-    await websocketHub.publishRuntimeUpdated();
-    await websocketHub.publishProvidersUpdated();
+    await websocketHub.publishUpdates("setup", "runtime", "providers");
     return c.json(await keychainService.listProviderSummaries());
   });
 
@@ -608,10 +610,12 @@ export function registerOperationsRoutes(
 
     await runtimeService.startRuntime("openclaw");
     runtimeService.invalidateCaches();
-    await websocketHub.publishRuntimeUpdated();
-    await websocketHub.publishProvidersUpdated();
-    await websocketHub.publishMemoryUpdated();
-    await websocketHub.publishContextUpdated();
+    await websocketHub.publishUpdates(
+      "runtime",
+      "providers",
+      "memory",
+      "context",
+    );
     return c.json(await keychainService.listProviderSummaries());
   });
 
@@ -645,10 +649,12 @@ export function registerOperationsRoutes(
       selectedModel: modelId,
     });
     runtimeService.invalidateCaches();
-    await websocketHub.publishSetupUpdated();
-    await websocketHub.publishProvidersUpdated();
-    await websocketHub.publishMemoryUpdated();
-    await websocketHub.publishContextUpdated();
+    await websocketHub.publishUpdates(
+      "setup",
+      "providers",
+      "memory",
+      "context",
+    );
     return c.json(await runtimeService.listProviderProfiles());
   });
 }

@@ -129,7 +129,6 @@ export function AppLayout() {
   }, []);
   const viewportRefs = useMemo(() => [topbarRef, navRef], []);
   useViewportMeasure({
-    enabled: Boolean(shellRef.current),
     refs: viewportRefs,
     onMeasure: updateViewportChrome,
     includeViewportScroll: true,

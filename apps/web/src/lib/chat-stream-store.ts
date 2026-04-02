@@ -1,87 +1,84 @@
 import { useSyncExternalStore } from "react";
 
-export interface StreamingRun {
-  runId: string;
-  text: string;
-}
+import {
+  chatSessionStore,
+  type StreamingRun,
+} from "./chat-session-store";
 
+type StreamingSnapshot = Record<string, StreamingRun>;
 type Listener = () => void;
 
-function sameStreamingRun(
-  left: StreamingRun | undefined,
-  right: StreamingRun | undefined,
-): boolean {
-  if (!left && !right) {
-    return true;
+let cachedStreaming: StreamingSnapshot = {};
+let cachedSessions = chatSessionStore.getSnapshot().sessions;
+
+function deriveStreaming(): StreamingSnapshot {
+  const { sessions } = chatSessionStore.getSnapshot();
+  if (sessions === cachedSessions) {
+    return cachedStreaming;
   }
 
-  if (!left || !right) {
-    return false;
+  const nextStreaming: StreamingSnapshot = {};
+  let changed = false;
+
+  for (const [sessionId, session] of Object.entries(sessions)) {
+    if (session.streaming) {
+      nextStreaming[sessionId] = session.streaming;
+    }
+    if (cachedStreaming[sessionId] !== nextStreaming[sessionId]) {
+      changed = true;
+    }
   }
 
-  return left.runId === right.runId && left.text === right.text;
+  if (!changed) {
+    const nextKeys = Object.keys(nextStreaming);
+    const cachedKeys = Object.keys(cachedStreaming);
+    changed = nextKeys.length !== cachedKeys.length;
+  }
+
+  cachedSessions = sessions;
+  if (!changed) {
+    return cachedStreaming;
+  }
+
+  cachedStreaming = nextStreaming;
+  return cachedStreaming;
 }
 
-function sameStreamingSnapshot(
-  left: Record<string, StreamingRun>,
-  right: Record<string, StreamingRun>,
-): boolean {
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  if (leftKeys.length !== rightKeys.length) {
-    return false;
-  }
-
-  return leftKeys.every((key) => sameStreamingRun(left[key], right[key]));
-}
-
-class ChatStreamStore {
-  private readonly listeners = new Set<Listener>();
-  private runs: Record<string, StreamingRun> = {};
-
+class ChatStreamStoreFacade {
   subscribe(listener: Listener): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return chatSessionStore.subscribe(listener);
   }
 
-  getSnapshot(): Record<string, StreamingRun> {
-    return this.runs;
+  getSnapshot(): StreamingSnapshot {
+    return deriveStreaming();
   }
 
-  private emit(): void {
-    for (const listener of this.listeners) {
-      listener();
+  setRuns(next: StreamingSnapshot): void {
+    const current = deriveStreaming();
+    for (const sessionId of Object.keys(current)) {
+      if (!(sessionId in next)) {
+        chatSessionStore.clearStreaming(sessionId);
+      }
     }
-  }
-
-  setRuns(next: Record<string, StreamingRun>): void {
-    if (sameStreamingSnapshot(this.runs, next)) {
-      return;
+    for (const [sessionId, run] of Object.entries(next)) {
+      chatSessionStore.setStreaming(sessionId, run);
     }
-
-    this.runs = next;
-    this.emit();
   }
 
   clear(sessionId: string): void {
-    if (!(sessionId in this.runs)) {
-      return;
-    }
-    const next = { ...this.runs };
-    delete next[sessionId];
-    this.setRuns(next);
+    chatSessionStore.clearStreaming(sessionId);
   }
 }
 
-export const chatStreamStore = new ChatStreamStore();
+export const chatStreamStore = new ChatStreamStoreFacade();
 
 export function useStreamingRuns() {
-  const emptySnapshot: Record<string, StreamingRun> = {};
+  const emptySnapshot: StreamingSnapshot = {};
   return useSyncExternalStore(
     (listener) => chatStreamStore.subscribe(listener),
     () => chatStreamStore.getSnapshot(),
-    () => emptySnapshot
+    () => emptySnapshot,
   );
 }
+
+export type { StreamingRun };

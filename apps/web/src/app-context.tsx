@@ -11,26 +11,21 @@ import {
   type ReactNode
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { ChatMessage, ClientCommand, ServerEvent } from "@droidagent/shared";
+import type { ClientCommand, ServerEvent } from "@droidagent/shared";
 
 import { useAccessQuery, useAuthQuery, useDashboardQuery, usePasskeysQuery } from "./app-data";
 import { useWebSocket } from "./hooks/use-websocket";
-import { api } from "./lib/api";
 import { clientPerformance } from "./lib/client-performance";
-import { terminalStore } from "./lib/terminal-store";
+import { prefetchSessionMessages } from "./lib/chat-session-cache";
+import {
+  chatSessionStore,
+  type ChatSessionFeedback,
+} from "./lib/chat-session-store";
+export type { ChatSessionFeedback } from "./lib/chat-session-store";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
-}
-
-export interface ChatSessionFeedback {
-  sessionId: string;
-  status: "waiting_first_token" | "streaming" | "done" | "error";
-  firstTokenMs: number | null;
-  completedMs: number | null;
-  errorMessage: string | null;
-  updatedAt: string;
 }
 
 interface DroidAgentAppContextValue {
@@ -57,37 +52,7 @@ interface DroidAgentAppContextValue {
   trackJobStart: (jobId: string) => void;
 }
 
-interface ChatFeedbackSnapshot {
-  liveBySessionId: Record<string, ChatSessionFeedback>;
-  recentBySessionId: Record<string, ChatSessionFeedback>;
-}
-
 const DroidAgentAppContext = createContext<DroidAgentAppContextValue | null>(null);
-const chatFeedbackListeners = new Set<() => void>();
-let chatFeedbackSnapshot: ChatFeedbackSnapshot = {
-  liveBySessionId: {},
-  recentBySessionId: {},
-};
-
-function updateChatFeedbackSnapshot(
-  updater: (current: ChatFeedbackSnapshot) => ChatFeedbackSnapshot,
-): void {
-  chatFeedbackSnapshot = updater(chatFeedbackSnapshot);
-  for (const listener of chatFeedbackListeners) {
-    listener();
-  }
-}
-
-function getChatFeedbackSnapshot(): ChatFeedbackSnapshot {
-  return chatFeedbackSnapshot;
-}
-
-function subscribeChatFeedback(listener: () => void): () => void {
-  chatFeedbackListeners.add(listener);
-  return () => {
-    chatFeedbackListeners.delete(listener);
-  };
-}
 
 export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
@@ -118,21 +83,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   });
 
   const routeTransitionRef = useRef<{ path: string; metric: ReturnType<typeof clientPerformance.start> } | null>(null);
-  const pendingChatMetricsRef = useRef<
-    Map<
-      string,
-      {
-        startedAt: number;
-        firstToken: ReturnType<typeof clientPerformance.start>;
-        firstTokenFinished: boolean;
-        completed: ReturnType<typeof clientPerformance.start>;
-      }
-    >
-  >(new Map());
   const pendingJobMetricsRef = useRef<Map<string, ReturnType<typeof clientPerformance.start>>>(new Map());
-  const chatFeedbackTimeoutsRef = useRef<
-    Map<string, ReturnType<typeof setTimeout>>
-  >(new Map());
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -204,15 +155,6 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     };
   }, [themePreference]);
 
-  useEffect(() => {
-    return () => {
-      for (const timeoutId of chatFeedbackTimeoutsRef.current.values()) {
-        clearTimeout(timeoutId);
-      }
-      chatFeedbackTimeoutsRef.current.clear();
-    };
-  }, []);
-
   const refreshQueries = useEffectEvent(async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
@@ -259,130 +201,13 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     routeTransitionRef.current = null;
   });
 
-  const clearChatFeedbackTimeout = useEffectEvent((sessionId: string) => {
-    const timeoutId = chatFeedbackTimeoutsRef.current.get(sessionId);
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-      chatFeedbackTimeoutsRef.current.delete(sessionId);
-    }
-  });
-
-  const scheduleChatFeedbackClear = useEffectEvent(
-    (sessionId: string, delayMs = 12_000) => {
-      clearChatFeedbackTimeout(sessionId);
-      const timeoutId = setTimeout(() => {
-        chatFeedbackTimeoutsRef.current.delete(sessionId);
-        updateChatFeedbackSnapshot((current) => {
-          if (!(sessionId in current.liveBySessionId)) {
-            return current;
-          }
-          const nextLive = { ...current.liveBySessionId };
-          delete nextLive[sessionId];
-          return {
-            ...current,
-            liveBySessionId: nextLive,
-          };
-        });
-      }, delayMs);
-      chatFeedbackTimeoutsRef.current.set(sessionId, timeoutId);
-    },
-  );
-
   const trackChatSubmit = useEffectEvent((sessionId: string) => {
-    clearChatFeedbackTimeout(sessionId);
-    pendingChatMetricsRef.current.set(sessionId, {
-      startedAt: performance.now(),
-      firstToken: clientPerformance.start("client.chat.submit_to_first_token", {
-        sessionId
-      }),
-      firstTokenFinished: false,
-      completed: clientPerformance.start("client.chat.submit_to_done", {
-        sessionId
-      })
-    });
-    updateChatFeedbackSnapshot((current) => ({
-      ...current,
-      liveBySessionId: {
-        ...current.liveBySessionId,
-        [sessionId]: {
-        sessionId,
-        status: "waiting_first_token",
-        firstTokenMs: null,
-        completedMs: null,
-        errorMessage: null,
-        updatedAt: new Date().toISOString(),
-        },
-      },
-    }));
-    updateChatFeedbackSnapshot((current) => {
-      if (!(sessionId in current.recentBySessionId)) {
-        return current;
-      }
-      const next = { ...current.recentBySessionId };
-      delete next[sessionId];
-      return {
-        ...current,
-        recentBySessionId: next,
-      };
-    });
+    chatSessionStore.trackSubmit(sessionId);
   });
 
   const trackChatFailure = useEffectEvent(
     (sessionId: string, message: string) => {
-      const tracked = pendingChatMetricsRef.current.get(sessionId);
-      const nextCompletedMs = tracked
-        ? Number((performance.now() - tracked.startedAt).toFixed(2))
-        : null;
-      if (tracked && !tracked.firstTokenFinished) {
-        tracked.firstToken.finish({
-          outcome: "error",
-        });
-        tracked.firstTokenFinished = true;
-      }
-      tracked?.completed.finish({
-        outcome: "error",
-      });
-      pendingChatMetricsRef.current.delete(sessionId);
-      updateChatFeedbackSnapshot((current) => ({
-        ...current,
-        liveBySessionId: {
-          ...current.liveBySessionId,
-          [sessionId]: {
-          sessionId,
-          status: "error",
-          firstTokenMs: current.liveBySessionId[sessionId]?.firstTokenMs ?? null,
-          completedMs:
-            nextCompletedMs ??
-            current.liveBySessionId[sessionId]?.completedMs ??
-            null,
-          errorMessage: message,
-          updatedAt: new Date().toISOString(),
-          },
-        },
-      }));
-      updateChatFeedbackSnapshot((current) => {
-        const live = current.liveBySessionId[sessionId] ?? null;
-        const recent = current.recentBySessionId[sessionId] ?? null;
-        return {
-          ...current,
-          recentBySessionId: {
-            ...current.recentBySessionId,
-            [sessionId]: {
-              sessionId,
-              status: "error",
-              firstTokenMs: live?.firstTokenMs ?? recent?.firstTokenMs ?? null,
-              completedMs:
-                nextCompletedMs ??
-                live?.completedMs ??
-                recent?.completedMs ??
-                null,
-              errorMessage: message,
-              updatedAt: new Date().toISOString(),
-            },
-          },
-        };
-      });
-      scheduleChatFeedbackClear(sessionId);
+      chatSessionStore.trackFailure(sessionId, message);
       setErrorMessage(message);
     },
   );
@@ -397,162 +222,6 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   });
 
   const handleSocketMessage = useEffectEvent((event: ServerEvent) => {
-    if (event.type === "chat.stream.delta") {
-      const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
-      const firstTokenMs = tracked
-        ? Number((performance.now() - tracked.startedAt).toFixed(2))
-        : null;
-      if (tracked && !tracked.firstTokenFinished) {
-        tracked.firstToken.finish({
-          runId: event.payload.runId
-        });
-        tracked.firstTokenFinished = true;
-      }
-      clearChatFeedbackTimeout(event.payload.sessionId);
-      updateChatFeedbackSnapshot((current) => ({
-        ...current,
-        liveBySessionId: {
-          ...current.liveBySessionId,
-          [event.payload.sessionId]: {
-          sessionId: event.payload.sessionId,
-          status: "streaming",
-          firstTokenMs:
-            current.liveBySessionId[event.payload.sessionId]?.firstTokenMs ??
-            firstTokenMs,
-          completedMs: null,
-          errorMessage: null,
-          updatedAt: new Date().toISOString(),
-          },
-        },
-      }));
-      return;
-    }
-
-    if (event.type === "chat.stream.done") {
-      const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
-      const nextCompletedMs = tracked
-        ? Number((performance.now() - tracked.startedAt).toFixed(2))
-        : null;
-      if (tracked && !tracked.firstTokenFinished) {
-        tracked.firstToken.finish({
-          runId: event.payload.runId,
-          outcome: "no-delta"
-        });
-        tracked.firstTokenFinished = true;
-      }
-      tracked?.completed.finish({
-        runId: event.payload.runId,
-        outcome: "done"
-      });
-      pendingChatMetricsRef.current.delete(event.payload.sessionId);
-      updateChatFeedbackSnapshot((current) => ({
-        ...current,
-        liveBySessionId: {
-          ...current.liveBySessionId,
-          [event.payload.sessionId]: {
-          sessionId: event.payload.sessionId,
-          status: "done",
-          firstTokenMs:
-            current.liveBySessionId[event.payload.sessionId]?.firstTokenMs ??
-            null,
-          completedMs:
-            nextCompletedMs ??
-            current.liveBySessionId[event.payload.sessionId]?.completedMs ??
-            null,
-          errorMessage: null,
-          updatedAt: new Date().toISOString(),
-          },
-        },
-      }));
-      updateChatFeedbackSnapshot((current) => {
-        const live = current.liveBySessionId[event.payload.sessionId] ?? null;
-        const recent = current.recentBySessionId[event.payload.sessionId] ?? null;
-        return {
-          ...current,
-          recentBySessionId: {
-            ...current.recentBySessionId,
-            [event.payload.sessionId]: {
-              sessionId: event.payload.sessionId,
-              status: "done",
-              firstTokenMs: live?.firstTokenMs ?? recent?.firstTokenMs ?? null,
-              completedMs:
-                nextCompletedMs ??
-                live?.completedMs ??
-                recent?.completedMs ??
-                null,
-              errorMessage: null,
-              updatedAt: new Date().toISOString(),
-            },
-          },
-        };
-      });
-      scheduleChatFeedbackClear(event.payload.sessionId);
-      return;
-    }
-
-    if (event.type === "chat.stream.error") {
-      const tracked = pendingChatMetricsRef.current.get(event.payload.sessionId);
-      const nextCompletedMs = tracked
-        ? Number((performance.now() - tracked.startedAt).toFixed(2))
-        : null;
-      if (tracked && !tracked.firstTokenFinished) {
-        tracked.firstToken.finish({
-          runId: event.payload.runId,
-          outcome: "error"
-        });
-        tracked.firstTokenFinished = true;
-      }
-      tracked?.completed.finish({
-        runId: event.payload.runId,
-        outcome: "error"
-      });
-      pendingChatMetricsRef.current.delete(event.payload.sessionId);
-      updateChatFeedbackSnapshot((current) => ({
-        ...current,
-        liveBySessionId: {
-          ...current.liveBySessionId,
-          [event.payload.sessionId]: {
-          sessionId: event.payload.sessionId,
-          status: "error",
-          firstTokenMs:
-            current.liveBySessionId[event.payload.sessionId]?.firstTokenMs ??
-            null,
-          completedMs:
-            nextCompletedMs ??
-            current.liveBySessionId[event.payload.sessionId]?.completedMs ??
-            null,
-          errorMessage: event.payload.message,
-          updatedAt: new Date().toISOString(),
-          },
-        },
-      }));
-      updateChatFeedbackSnapshot((current) => {
-        const live = current.liveBySessionId[event.payload.sessionId] ?? null;
-        const recent = current.recentBySessionId[event.payload.sessionId] ?? null;
-        return {
-          ...current,
-          recentBySessionId: {
-            ...current.recentBySessionId,
-            [event.payload.sessionId]: {
-              sessionId: event.payload.sessionId,
-              status: "error",
-              firstTokenMs: live?.firstTokenMs ?? recent?.firstTokenMs ?? null,
-              completedMs:
-                nextCompletedMs ??
-                live?.completedMs ??
-                recent?.completedMs ??
-                null,
-              errorMessage: event.payload.message,
-              updatedAt: new Date().toISOString(),
-            },
-          },
-        };
-      });
-      scheduleChatFeedbackClear(event.payload.sessionId);
-      setErrorMessage(event.payload.message);
-      return;
-    }
-
     if (event.type === "job.output") {
       const tracked = pendingJobMetricsRef.current.get(event.payload.jobId);
       if (tracked) {
@@ -561,21 +230,6 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
         });
         pendingJobMetricsRef.current.delete(event.payload.jobId);
       }
-      return;
-    }
-
-    if (event.type === "terminal.updated") {
-      terminalStore.updateSession(event.payload);
-      return;
-    }
-
-    if (event.type === "terminal.output") {
-      terminalStore.appendOutput(event.payload.sessionId, event.payload.data);
-      return;
-    }
-
-    if (event.type === "terminal.closed") {
-      terminalStore.close(event.payload.sessionId, event.payload.reason);
       return;
     }
 
@@ -638,16 +292,9 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       : dashboardSessions[0]?.id;
     if (
       targetSessionId &&
-      !queryClient.getQueryData<ChatMessage[]>([
-        "sessions",
-        targetSessionId,
-        "messages",
-      ])
+      chatSessionStore.getSessionSnapshot(targetSessionId).historyStatus !== "ready"
     ) {
-      void queryClient.prefetchQuery({
-        queryKey: ["sessions", targetSessionId, "messages"],
-        queryFn: () => api<ChatMessage[]>(`/api/sessions/${encodeURIComponent(targetSessionId)}/messages`)
-      });
+      void prefetchSessionMessages(queryClient, targetSessionId);
     }
   }, [authQuery.data?.user, dashboardSessions, queryClient, selectedSessionId]);
 
@@ -726,8 +373,27 @@ export function useClientPerformanceSnapshot() {
 
 export function useChatFeedbackSnapshot() {
   return useSyncExternalStore(
-    subscribeChatFeedback,
-    getChatFeedbackSnapshot,
-    getChatFeedbackSnapshot,
+    (listener) => chatSessionStore.subscribe(listener),
+    () => {
+      const snapshot = chatSessionStore.getSnapshot();
+      const liveBySessionId: Record<string, ChatSessionFeedback> = {};
+      const recentBySessionId: Record<string, ChatSessionFeedback> = {};
+      for (const [sessionId, session] of Object.entries(snapshot.sessions)) {
+        if (session.liveFeedback) {
+          liveBySessionId[sessionId] = session.liveFeedback;
+        }
+        if (session.recentFeedback) {
+          recentBySessionId[sessionId] = session.recentFeedback;
+        }
+      }
+      return {
+        liveBySessionId,
+        recentBySessionId,
+      };
+    },
+    () => ({
+      liveBySessionId: {},
+      recentBySessionId: {},
+    }),
   );
 }

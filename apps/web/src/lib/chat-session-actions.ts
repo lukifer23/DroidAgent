@@ -1,9 +1,15 @@
 import type { Dispatch, SetStateAction } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 
-import type { ChatAttachment, ChatMessage, SessionSummary } from "@droidagent/shared";
+import type { ChatAttachment, SessionSummary } from "@droidagent/shared";
 
-import { api, postJson } from "./api";
+import { postJson } from "./api";
+import {
+  invalidateChatSessionIndexes,
+  prefetchSessionMessages,
+  setCachedSessionMessages,
+} from "./chat-session-cache";
+import { chatSessionStore } from "./chat-session-store";
 import {
   updateArchivedSessionCache,
   updateDashboardSessionCache,
@@ -22,33 +28,6 @@ function clearComposer(context: SessionActionContext): void {
   context.setPendingAttachments([]);
 }
 
-async function prefetchMessages(
-  queryClient: QueryClient,
-  sessionId: string,
-): Promise<void> {
-  await queryClient.prefetchQuery({
-    queryKey: ["sessions", sessionId, "messages"],
-    queryFn: () =>
-      api<ChatMessage[]>(
-        `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
-      ),
-    staleTime: 15_000,
-  });
-}
-
-async function syncSessionCachesWhenOffline(
-  queryClient: QueryClient,
-  wsStatus: string,
-): Promise<void> {
-  if (wsStatus === "connected") {
-    return;
-  }
-  await Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
-    queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] }),
-  ]);
-}
-
 export async function startFreshSession(
   context: SessionActionContext,
 ): Promise<void> {
@@ -60,14 +39,13 @@ export async function startFreshSession(
     ];
     return next;
   });
-  context.queryClient.setQueryData<ChatMessage[]>(
-    ["sessions", freshSession.id, "messages"],
-    [],
-  );
+  setCachedSessionMessages(context.queryClient, freshSession.id, []);
+  chatSessionStore.primeMessages(freshSession.id, []);
   context.setSelectedSessionId(freshSession.id);
   clearComposer(context);
-  await prefetchMessages(context.queryClient, freshSession.id);
-  await syncSessionCachesWhenOffline(context.queryClient, context.wsStatus);
+  await prefetchSessionMessages(context.queryClient, freshSession.id);
+  chatSessionStore.markSessionSwitching(freshSession.id, false);
+  await invalidateChatSessionIndexes(context.queryClient, context.wsStatus);
 }
 
 export async function closeCurrentSession(params: SessionActionContext & {
@@ -82,10 +60,8 @@ export async function closeCurrentSession(params: SessionActionContext & {
 
   if (!replacementSession) {
     replacementSession = await postJson<SessionSummary>("/api/sessions", {});
-    params.queryClient.setQueryData<ChatMessage[]>(
-      ["sessions", replacementSession.id, "messages"],
-      [],
-    );
+    setCachedSessionMessages(params.queryClient, replacementSession.id, []);
+    chatSessionStore.primeMessages(replacementSession.id, []);
     updateDashboardSessionCache(params.queryClient, (currentSessions) => [
       replacementSession!,
       ...currentSessions.filter(
@@ -102,6 +78,7 @@ export async function closeCurrentSession(params: SessionActionContext & {
 
   params.setSelectedSessionId(replacementSession.id);
   clearComposer(params);
+  chatSessionStore.markSessionSwitching(replacementSession.id, false);
 
   const archivedSession = await postJson<SessionSummary>(
     `/api/sessions/${encodeURIComponent(selectedSessionId)}/archive`,
@@ -118,8 +95,9 @@ export async function closeCurrentSession(params: SessionActionContext & {
     queryKey: ["sessions", selectedSessionId, "messages"],
     exact: true,
   });
-  await prefetchMessages(params.queryClient, replacementSession.id);
-  await syncSessionCachesWhenOffline(params.queryClient, params.wsStatus);
+  chatSessionStore.clearSession(selectedSessionId);
+  await prefetchSessionMessages(params.queryClient, replacementSession.id);
+  await invalidateChatSessionIndexes(params.queryClient, params.wsStatus);
 }
 
 export async function restoreSession(
@@ -137,6 +115,7 @@ export async function restoreSession(
     currentSessions.filter((session) => session.id !== restored.id),
   );
   params.setSelectedSessionId(restored.id);
-  await prefetchMessages(params.queryClient, restored.id);
-  await syncSessionCachesWhenOffline(params.queryClient, params.wsStatus);
+  chatSessionStore.markSessionSwitching(restored.id, false);
+  await prefetchSessionMessages(params.queryClient, restored.id);
+  await invalidateChatSessionIndexes(params.queryClient, params.wsStatus);
 }

@@ -114,9 +114,11 @@ The canonical public route, websocket, script, and data-path inventory lives in 
 - the benchmark scripts write JSON artifacts under `artifacts/perf/`
 - the dashboard snapshot is composed from independently cached slices for setup, access, runtimes, providers, channels, harness, memory, host pressure, memory drafts, context management, maintenance, launch-agent state, sessions, jobs, decisions, and approvals
 - request-path warmup now waits for startup restore, then primes the main dashboard/access/runtime/provider caches before readiness completes so the first real dashboard request does not pay hidden restore work
-- realtime dashboard mutation fanout includes dedicated harness/memory/setup/provider/runtime/etc updates, slice-aware invalidation, and client-side snapshot reconciliation to keep partial dashboard patches from drifting during noisy update bursts
+- realtime dashboard mutation fanout now converges through a shared slice-aware mutation queue so invalidation, startup refresh, and websocket event bursts are coalesced once per flush instead of emitted by disconnected one-off publishers
+- client chat/session state now converges through one canonical per-session store for loaded history, optimistic sends, active run state, streaming text, feedback timing, and switch/resync state; websocket transport and routed surfaces subscribe to selectors over that state instead of maintaining parallel run/stream/feedback paths
 - decision-related mutations invalidate and publish through one path so approvals, memory-draft review, and pairing do not fan out as disconnected subsystems
 - HTTP and websocket chat send/abort now converge through one coordinator lifecycle path for transport parity
+- browser terminal websocket events are applied through one transport consumer path, removing the old double-application risk between websocket plumbing and app context
 
 ## UI shell and layout stability
 
@@ -125,6 +127,7 @@ The canonical public route, websocket, script, and data-path inventory lives in 
 - Chat and Terminal shells now share unified viewport-height formulas so sticky composers, PTY surfaces, and status stacks stay aligned on Fold-sized and phone-sized viewports
 - route chunk prefetch is intentionally narrow after auth: `Files` and `Settings` are prefetched during idle, while `Terminal`, `Models`, and `Channels` stay lazy
 - hot route surfaces trim expensive blur/animation work, and markdown rendering is lazy-loaded only when a message actually needs rich markdown semantics
+- transcript scroll anchoring stays rAF-batched and viewport measurement now stays armed regardless of initial ref timing, which removes a fragile mount-order dependency in the shared shell chrome measurement path
 - style concerns are layered: base palette/components in `styles.css`, cross-screen shell primitives in `styles/system.css`, and motion/accessibility handling in `styles/motion.css`
 
 ## Optional Signal path

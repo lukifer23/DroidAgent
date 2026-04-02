@@ -89,8 +89,7 @@ export function registerChannelRoutes(app: Hono<{ Variables: AppVariables }>) {
       pin?: string;
     };
     await signalService.verifyRegistration(body);
-    await websocketHub.publishChannelUpdated();
-    await websocketHub.publishSetupUpdated();
+    await websocketHub.publishUpdates("channel", "setup");
     return c.json(await harnessService.listChannels());
   });
 
@@ -161,8 +160,7 @@ export function registerChannelRoutes(app: Hono<{ Variables: AppVariables }>) {
       disconnectRequest.clearLocalData = body.clearLocalData;
     }
     await signalService.disconnect(disconnectRequest);
-    await websocketHub.publishChannelUpdated();
-    await websocketHub.publishSetupUpdated();
+    await websocketHub.publishUpdates("channel", "setup");
     return c.json(await harnessService.listChannels());
   });
 
@@ -223,8 +221,7 @@ export function registerChannelRoutes(app: Hono<{ Variables: AppVariables }>) {
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;
     const status = await launchAgentService.install();
-    await websocketHub.publishLaunchAgentUpdated();
-    await websocketHub.publishSetupUpdated();
+    await websocketHub.publishUpdates("launchAgent", "setup");
     return c.json(status);
   });
 

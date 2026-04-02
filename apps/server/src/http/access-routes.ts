@@ -32,8 +32,7 @@ export function registerAccessRoutes(app: Hono<{ Variables: AppVariables }>) {
     const gate = await requireOwnerOrLocalBootstrap(c);
     if (gate) return gate;
     const result = await accessService.enableTailscaleServe();
-    await websocketHub.publishAccessUpdated();
-    await websocketHub.publishSetupUpdated();
+    await websocketHub.publishUpdates("access", "setup");
     return c.json(result);
   });
 
@@ -70,8 +69,7 @@ export function registerAccessRoutes(app: Hono<{ Variables: AppVariables }>) {
       source: "tailscale" | "cloudflare";
     };
     const canonicalOrigin = await accessService.setCanonicalSource(body.source);
-    await websocketHub.publishAccessUpdated();
-    await websocketHub.publishSetupUpdated();
+    await websocketHub.publishUpdates("access", "setup");
     return c.json({ canonicalOrigin });
   });
 

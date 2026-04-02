@@ -32,6 +32,7 @@ The concrete route, websocket, script, and data-path inventory that applies this
 ## Guardrails
 
 - Do not add a second session, approval, or pairing state machine in DroidAgent.
+- Do not add a second browser-side chat session lifecycle store. The canonical DroidAgent client cache may annotate OpenClaw-owned sessions for UX, but it must not invent alternate session truth.
 - If OpenClaw already owns the underlying truth, DroidAgent should surface, filter, or audit it instead of recreating it.
 - New DroidAgent-native flows are justified only when they add owner control, mobile usability, workspace safety, or auditability that OpenClaw does not already provide.
 - Internal refactors that consolidate transport orchestration, status-cache ownership, or diagnostics are valid only when they preserve this boundary and do not migrate OpenClaw-owned semantics into DroidAgent.

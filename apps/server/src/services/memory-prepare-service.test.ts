@@ -152,8 +152,12 @@ describe("MemoryPrepareService", () => {
     const listener = vi.fn();
     service.subscribe(listener);
 
-    const first = await service.triggerPrepare();
-    const second = await service.triggerPrepare();
+    const first = await service.triggerPrepare({
+      source: "operator",
+    });
+    const second = await service.triggerPrepare({
+      source: "operator",
+    });
 
     expect(first.started).toBe(true);
     expect(second.started).toBe(false);
@@ -197,7 +201,9 @@ describe("MemoryPrepareService", () => {
     mocks.prepareSemanticMemory.mockRejectedValue(new Error("index failed"));
 
     const service = new MemoryPrepareService();
-    const result = await service.triggerPrepare();
+    const result = await service.triggerPrepare({
+      source: "operator",
+    });
 
     expect(result.started).toBe(true);
 
@@ -209,6 +215,69 @@ describe("MemoryPrepareService", () => {
     expect(finish).toHaveBeenCalledWith(
       expect.objectContaining({
         outcome: "error",
+      }),
+    );
+  });
+
+  it("records an operator completion sample when joining an active prewarm", async () => {
+    let resolvePrepare!: (status: MemoryStatus) => void;
+    const preparePromise = new Promise<MemoryStatus>((resolve) => {
+      resolvePrepare = resolve;
+    });
+    const prewarmFinish = vi.fn();
+    const operatorFinish = vi.fn();
+    mocks.performanceStart
+      .mockReturnValueOnce({
+        finish: prewarmFinish,
+      })
+      .mockReturnValueOnce({
+        finish: operatorFinish,
+      });
+    mocks.prepareSemanticMemory.mockImplementation(() => preparePromise);
+
+    const service = new MemoryPrepareService();
+    const prewarm = await service.triggerPrepare({
+      source: "prewarm",
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.prepareSemanticMemory).toHaveBeenCalledTimes(1);
+    });
+
+    const operator = await service.triggerPrepare({
+      source: "operator",
+    });
+
+    expect(prewarm.started).toBe(true);
+    expect(operator.started).toBe(false);
+
+    resolvePrepare(makeMemoryStatus());
+
+    await vi.waitFor(() => {
+      expect(operatorFinish).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: "ok",
+          joined: true,
+          semanticReady: true,
+        }),
+      );
+    });
+
+    expect(mocks.performanceStart).toHaveBeenNthCalledWith(
+      1,
+      "server",
+      "memory.prepare.complete",
+      expect.objectContaining({
+        source: "prewarm",
+      }),
+    );
+    expect(mocks.performanceStart).toHaveBeenNthCalledWith(
+      2,
+      "server",
+      "memory.prepare.complete",
+      expect.objectContaining({
+        source: "operator",
+        joined: true,
       }),
     );
   });
@@ -229,7 +298,9 @@ describe("MemoryPrepareService", () => {
     mocks.getJsonSetting.mockResolvedValue(fingerprint);
 
     const service = new MemoryPrepareService();
-    const result = await service.triggerPrepare();
+    const result = await service.triggerPrepare({
+      source: "operator",
+    });
 
     expect(result.started).toBe(true);
 
@@ -247,6 +318,52 @@ describe("MemoryPrepareService", () => {
         skipped: true,
         semanticReady: true,
       }),
+    );
+  });
+
+  it("records prewarm prepares separately and finishes metrics before persisting completion", async () => {
+    const sequence: string[] = [];
+    const fingerprint = await computeMemorySourceFingerprint({
+      workspaceRoot: "/workspace",
+      memoryDirectory: "/workspace/memory",
+      memoryFilePath: "/workspace/MEMORY.md",
+    });
+    mocks.performanceStart.mockReturnValue({
+      finish: vi.fn(() => {
+        sequence.push("metric.finish");
+      }),
+    });
+    mocks.getJsonSetting.mockResolvedValue(fingerprint);
+    mocks.updateMemoryPrepareStatus.mockImplementation(async (update) => {
+      sequence.push(`status:${update.state}`);
+      mocks.state.prepareStatus = {
+        ...mocks.state.prepareStatus,
+        ...update,
+        updatedAt: "2026-03-29T00:00:01.000Z",
+      };
+    });
+
+    const service = new MemoryPrepareService();
+    const result = await service.triggerPrepare({
+      source: "prewarm",
+    });
+
+    expect(result.started).toBe(true);
+    await vi.waitFor(() => {
+      expect(mocks.state.prepareStatus.state).toBe("completed");
+    });
+
+    expect(mocks.performanceStart).toHaveBeenCalledWith(
+      "server",
+      "memory.prepare.complete",
+      expect.objectContaining({
+        source: "prewarm",
+      }),
+    );
+    expect(sequence.indexOf("metric.finish")).toBeGreaterThan(-1);
+    expect(sequence.indexOf("status:completed")).toBeGreaterThan(-1);
+    expect(sequence.indexOf("metric.finish")).toBeLessThan(
+      sequence.indexOf("status:completed"),
     );
   });
 });

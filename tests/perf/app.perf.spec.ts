@@ -189,13 +189,33 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   ] as const;
   for (const [metricName, artifactName] of serverMetricNames) {
     const metric = serverSnapshot?.metrics?.find(
-      (entry: { name?: string; summary?: { lastDurationMs?: number | null } }) =>
+      (
+        entry: {
+          name?: string;
+          summary?: { lastDurationMs?: number | null };
+          recentSamples?: Array<{
+            durationMs?: number | null;
+            endedAt?: string;
+            context?: Record<string, string | undefined>;
+          }>;
+        },
+      ) =>
         entry.name === metricName,
     );
-    if (typeof metric?.summary?.lastDurationMs === "number") {
+    const preferredSample =
+      metricName === "memory.prepare" || metricName === "memory.prepare.complete"
+        ? [...(metric?.recentSamples ?? [])]
+            .reverse()
+            .find((sample) => sample.context?.source === "operator") ?? null
+        : null;
+    const durationMs =
+      typeof preferredSample?.durationMs === "number"
+        ? preferredSample.durationMs
+        : metric?.summary?.lastDurationMs;
+    if (typeof durationMs === "number") {
       metrics.push({
         name: artifactName,
-        durationMs: metric.summary.lastDurationMs,
+        durationMs,
       });
     }
   }
