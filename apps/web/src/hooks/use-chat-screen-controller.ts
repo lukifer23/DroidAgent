@@ -2,7 +2,6 @@ import {
   type ClipboardEvent,
   type FormEvent,
   useCallback,
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -12,6 +11,7 @@ import { useNavigate } from "@tanstack/react-router";
 import type {
   ChatAttachment,
   ChatMessage,
+  DashboardState,
   HostPressureRecoveryResult,
   SessionSummary,
 } from "@droidagent/shared";
@@ -21,10 +21,7 @@ import {
   useDashboardQuery,
   usePerformanceSubscription,
 } from "../app-data";
-import {
-  useClientPerformanceSnapshot,
-  useDroidAgentApp,
-} from "../app-context";
+import { useClientPerformanceSnapshot, useDroidAgentApp } from "../app-context";
 import type { ExpandedImageState } from "../components/chat-message-parts";
 import type { ChatScreenShellProps } from "../components/chat-screen-shell";
 import {
@@ -36,15 +33,16 @@ import { useDecisionActions } from "./use-decision-actions";
 import { api, postFormData, postJson } from "../lib/api";
 import { buildRunInChatPrompt } from "../lib/command-suggestions";
 import { TERMINAL_PREFILL_STORAGE_KEY } from "../lib/constants";
-import {
-  buildOptimisticChatMessage,
-} from "../lib/chat-screen-utils";
+import { buildOptimisticChatMessage } from "../lib/chat-screen-utils";
 import {
   prefetchSessionMessages,
   setCachedSessionMessages,
 } from "../lib/chat-session-cache";
 import { chatSessionStore } from "../lib/chat-session-store";
-import { getPendingDecisions, getSessionDecisions } from "../lib/dashboard-selectors";
+import {
+  getPendingDecisions,
+  getSessionDecisions,
+} from "../lib/dashboard-selectors";
 import { formatLatency, formatTokenBudget, roleLabel } from "../lib/formatters";
 import { clientPerformance } from "../lib/client-performance";
 import {
@@ -53,6 +51,32 @@ import {
   startFreshSession,
 } from "../lib/chat-session-actions";
 import { useChatSessionState } from "./use-chat-session-state";
+
+interface ChatDashboardSlice {
+  approvals: DashboardState["approvals"];
+  decisions: DashboardState["decisions"];
+  harness: DashboardState["harness"];
+  hostPressure: DashboardState["hostPressure"];
+  maintenance: DashboardState["maintenance"];
+  memory: DashboardState["memory"];
+  providers: DashboardState["providers"];
+  runtimes: DashboardState["runtimes"];
+  sessions: DashboardState["sessions"];
+}
+
+function selectChatDashboard(data: DashboardState): ChatDashboardSlice {
+  return {
+    approvals: data.approvals,
+    decisions: data.decisions,
+    harness: data.harness,
+    hostPressure: data.hostPressure,
+    maintenance: data.maintenance,
+    memory: data.memory,
+    providers: data.providers,
+    runtimes: data.runtimes,
+    sessions: data.sessions,
+  };
+}
 
 export function useChatScreenController(): ChatScreenShellProps {
   const queryClient = useQueryClient();
@@ -69,14 +93,17 @@ export function useChatScreenController(): ChatScreenShellProps {
     wsStatus,
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
-  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const dashboardQuery = useDashboardQuery(
+    Boolean(authQuery.data?.user),
+    selectChatDashboard,
+  );
   const performanceQuery = usePerformanceSubscription();
   const dashboard = dashboardQuery.data;
   const clientPerformanceSnapshot = useClientPerformanceSnapshot();
   const [chatInput, setChatInput] = useState("");
-  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>(
-    [],
-  );
+  const [pendingAttachments, setPendingAttachments] = useState<
+    ChatAttachment[]
+  >([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImageState | null>(
     null,
@@ -108,16 +135,15 @@ export function useChatScreenController(): ChatScreenShellProps {
   const recentChatFeedback = sessionState.recentChatFeedback;
   const streaming = sessionState.streaming;
   const activeProvider = providers.find((provider) => provider.enabled);
-  const openclawRuntime = runtimes.find(
-    (runtime) => runtime.id === "openclaw",
-  );
+  const openclawRuntime = runtimes.find((runtime) => runtime.id === "openclaw");
   const harness = dashboard?.harness;
   const maintenance = dashboard?.maintenance;
   const hostPressure = dashboard?.hostPressure;
   const decisions = dashboard?.decisions ?? [];
   const availableTools = harness?.availableTools ?? [];
   const memory = dashboard?.memory;
-  const transportReady = wsStatus === "connected" && Boolean(selectedSessionKey);
+  const transportReady =
+    wsStatus === "connected" && Boolean(selectedSessionKey);
   const maintenanceActive = Boolean(maintenance?.blocksNewWork);
   const hostPressureLevel = hostPressure?.level ?? "unknown";
   const pressureBlocks = Boolean(hostPressure?.blocksAgentRuns);
@@ -149,7 +175,7 @@ export function useChatScreenController(): ChatScreenShellProps {
   const activeRunApproval =
     activeRun?.stage === "approval_required"
       ? ((activeRun.approvalId
-          ? approvalsById.get(activeRun.approvalId) ?? null
+          ? (approvalsById.get(activeRun.approvalId) ?? null)
           : null) ?? (approvals.length === 1 ? approvals[0]! : null))
       : null;
   const { resolveDecision, resolveApproval } = useDecisionActions(decisions);
@@ -163,7 +189,10 @@ export function useChatScreenController(): ChatScreenShellProps {
   const liveMetricMap = useMemo(
     () =>
       new Map(
-        clientPerformanceSnapshot.metrics.map((metric) => [metric.name, metric]),
+        clientPerformanceSnapshot.metrics.map((metric) => [
+          metric.name,
+          metric,
+        ]),
       ),
     [clientPerformanceSnapshot.metrics],
   );
@@ -189,75 +218,70 @@ export function useChatScreenController(): ChatScreenShellProps {
     ],
   );
   const showStreamingCard = Boolean(
-    streaming &&
-      !isTerminalChatFeedback(liveChatFeedback),
+    streaming && !isTerminalChatFeedback(liveChatFeedback),
   );
   const showPendingAssistantCard = Boolean(
     !showStreamingCard &&
-      (activeRun?.active ||
-        liveChatFeedback?.status === "waiting_first_token"),
+    (activeRun?.active || liveChatFeedback?.status === "waiting_first_token"),
   );
   const showRecentRunSummaryCard = Boolean(
     terminalChatFeedback &&
-      !activeRun?.active &&
-      currentRunBreakdown.items.length > 0,
+    !activeRun?.active &&
+    currentRunBreakdown.items.length > 0,
   );
 
-  const liveMetrics = useMemo(
-    () => {
-      const metrics: Array<{ label: string; value: string }> = [];
+  const liveMetrics = useMemo(() => {
+    const metrics: Array<{ label: string; value: string }> = [];
 
-      if (activeRun?.active || showStreamingCard || feedbackForMetrics) {
-        metrics.push({
-          label: "First token",
-          value: selectedRunFeedback.firstToken,
-        });
-        metrics.push({
-          label: "Reply",
-          value: selectedRunFeedback.reply,
-        });
-        const modelWait = currentRunBreakdown.items.find(
-          (item) => item.label === "Model/tool wait",
-        );
-        if (modelWait && modelWait.value !== "Waiting...") {
-          metrics.push({
-            label: "Model/tool",
-            value: modelWait.value,
-          });
-        }
-        const toolWait = currentRunBreakdown.items.find(
-          (item) => item.label === "Tool wait",
-        );
-        if (toolWait) {
-          metrics.push({
-            label: "Tool wait",
-            value: toolWait.value,
-          });
-        }
-      }
-
-      const reconnectValue = formatLatency(
-        liveMetricMap.get("client.ws.reconnect_to_resync")?.summary,
+    if (activeRun?.active || showStreamingCard || feedbackForMetrics) {
+      metrics.push({
+        label: "First token",
+        value: selectedRunFeedback.firstToken,
+      });
+      metrics.push({
+        label: "Reply",
+        value: selectedRunFeedback.reply,
+      });
+      const modelWait = currentRunBreakdown.items.find(
+        (item) => item.label === "Model/tool wait",
       );
-      if (reconnectValue !== "Awaiting run") {
+      if (modelWait && modelWait.value !== "Waiting...") {
         metrics.push({
-          label: "Reconnect",
-          value: reconnectValue,
+          label: "Model/tool",
+          value: modelWait.value,
         });
       }
+      const toolWait = currentRunBreakdown.items.find(
+        (item) => item.label === "Tool wait",
+      );
+      if (toolWait) {
+        metrics.push({
+          label: "Tool wait",
+          value: toolWait.value,
+        });
+      }
+    }
 
-      return metrics;
-    },
-    [
-      activeRun?.active,
-      feedbackForMetrics,
-      currentRunBreakdown.items,
-      liveMetricMap,
-      selectedRunFeedback.firstToken,
-      selectedRunFeedback.reply,
-      showStreamingCard,
-    ],
-  );
+    const reconnectValue = formatLatency(
+      liveMetricMap.get("client.ws.reconnect_to_resync")?.summary,
+    );
+    if (reconnectValue !== "Awaiting run") {
+      metrics.push({
+        label: "Reconnect",
+        value: reconnectValue,
+      });
+    }
+
+    return metrics;
+  }, [
+    activeRun?.active,
+    feedbackForMetrics,
+    currentRunBreakdown.items,
+    liveMetricMap,
+    selectedRunFeedback.firstToken,
+    selectedRunFeedback.reply,
+    showStreamingCard,
+  ]);
   const visibleLiveMetrics = useMemo(
     () => liveMetrics.filter((metric) => metric.value !== "Awaiting run"),
     [liveMetrics],
@@ -286,13 +310,13 @@ export function useChatScreenController(): ChatScreenShellProps {
       : liveChatFeedback?.status === "waiting_first_token"
         ? "The request was accepted. The Mac is working through the model/tool path before first token."
         : liveChatFeedback?.status === "error"
-          ? liveChatFeedback.errorMessage ??
-            "The last run failed before DroidAgent could finish the reply."
+          ? (liveChatFeedback.errorMessage ??
+            "The last run failed before DroidAgent could finish the reply.")
           : terminalChatFeedback
             ? `Last run ${terminalChatFeedback.status === "error" ? "failed" : "finished"} • first token ${selectedRunFeedback.firstToken} • reply ${selectedRunFeedback.reply}.`
             : maintenanceActive
-              ? maintenance?.current?.message ??
-                "Maintenance is active. New work is temporarily blocked."
+              ? (maintenance?.current?.message ??
+                "Maintenance is active. New work is temporarily blocked.")
               : pressureBlocks
                 ? `${
                     hostPressure?.message ??
@@ -308,27 +332,31 @@ export function useChatScreenController(): ChatScreenShellProps {
   const normalizedImageModel =
     harness?.imageModel?.replace(/^ollama\//, "") ?? null;
 
-  const headerFacts = [...new Set([
-    activeProvider?.model ?? "No active model",
-    activeProvider?.contextWindow
-      ? formatTokenBudget(activeProvider.contextWindow)
-      : "context pending",
-    pendingDraftCount > 0
-      ? `${pendingDraftCount} draft${pendingDraftCount === 1 ? "" : "s"} pending`
-      : "drafts clear",
-    hostPressureLevel === "critical"
-      ? "pressure critical"
-      : hostPressureLevel === "warn"
-        ? "pressure elevated"
-        : null,
-    harness?.attachmentsEnabled
-      ? normalizedImageModel && normalizedActiveModel
-        ? normalizedImageModel === normalizedActiveModel
-          ? "multimodal ready"
-          : `vision ${normalizedImageModel}`
-        : "attachments ready"
-      : "attachments unavailable",
-  ].filter(Boolean))] as string[];
+  const headerFacts = [
+    ...new Set(
+      [
+        activeProvider?.model ?? "No active model",
+        activeProvider?.contextWindow
+          ? formatTokenBudget(activeProvider.contextWindow)
+          : "context pending",
+        pendingDraftCount > 0
+          ? `${pendingDraftCount} draft${pendingDraftCount === 1 ? "" : "s"} pending`
+          : "drafts clear",
+        hostPressureLevel === "critical"
+          ? "pressure critical"
+          : hostPressureLevel === "warn"
+            ? "pressure elevated"
+            : null,
+        harness?.attachmentsEnabled
+          ? normalizedImageModel && normalizedActiveModel
+            ? normalizedImageModel === normalizedActiveModel
+              ? "multimodal ready"
+              : `vision ${normalizedImageModel}`
+            : "attachments ready"
+          : "attachments unavailable",
+      ].filter(Boolean),
+    ),
+  ] as string[];
   const sessionSecondaryStatus = sessionState.switching
     ? "Opening chat"
     : sessionState.historyStatus === "loading"
@@ -339,26 +367,6 @@ export function useChatScreenController(): ChatScreenShellProps {
           ? "History failed"
           : "History synced";
   const showRailRunCard = Boolean(activeRun?.active);
-
-  useEffect(() => {
-    const container = threadRef.current;
-    if (!container) {
-      return;
-    }
-
-    const bottomGap =
-      container.scrollHeight - container.scrollTop - container.clientHeight;
-    if (bottomGap > 120) {
-      return;
-    }
-
-    const handle = window.requestAnimationFrame(() => {
-      container.scrollTop = container.scrollHeight;
-    });
-    return () => {
-      window.cancelAnimationFrame(handle);
-    };
-  }, [messages.length, selectedSessionKey, streaming?.text, activeRun?.updatedAt]);
 
   async function uploadFiles(files: File[]) {
     if (files.length === 0) {
@@ -478,9 +486,12 @@ export function useChatScreenController(): ChatScreenShellProps {
     const nextSession = chatSessionStore.getSessionSnapshot(sessionId);
     if (nextSession.historyStatus !== "ready") {
       chatSessionStore.markSessionSwitching(sessionId, true);
-      const switchMetric = clientPerformance.start("client.chat.session_switch", {
-        sessionId,
-      });
+      const switchMetric = clientPerformance.start(
+        "client.chat.session_switch",
+        {
+          sessionId,
+        },
+      );
       try {
         await prefetchSessionMessages(queryClient, sessionId);
         switchMetric.finish({
@@ -589,7 +600,10 @@ export function useChatScreenController(): ChatScreenShellProps {
       selectedSessionKey,
       optimisticMessages,
     );
-    chatSessionStore.appendOptimisticMessage(selectedSessionKey, optimisticMessage);
+    chatSessionStore.appendOptimisticMessage(
+      selectedSessionKey,
+      optimisticMessage,
+    );
 
     trackChatSubmit(selectedSessionKey);
     if (params.clearComposer) {
@@ -632,7 +646,11 @@ export function useChatScreenController(): ChatScreenShellProps {
           ? error.message
           : "Failed to send the message to DroidAgent.",
       );
-      setCachedSessionMessages(queryClient, selectedSessionKey, previousMessages);
+      setCachedSessionMessages(
+        queryClient,
+        selectedSessionKey,
+        previousMessages,
+      );
       chatSessionStore.primeMessages(selectedSessionKey, previousMessages);
       if (params.clearComposer) {
         setChatInput(previousInput);
@@ -687,8 +705,13 @@ export function useChatScreenController(): ChatScreenShellProps {
     [handleResolveApproval, runAction],
   );
 
-  const handleOpenImage = useCallback((image: ExpandedImageState) => setExpandedImage(image), []);
-  const handleResolveDecision = useCallback<ChatScreenShellProps["resolveDecision"]>(
+  const handleOpenImage = useCallback(
+    (image: ExpandedImageState) => setExpandedImage(image),
+    [],
+  );
+  const handleResolveDecision = useCallback<
+    ChatScreenShellProps["resolveDecision"]
+  >(
     async (decision, resolution, expectedUpdatedAt) => {
       await resolveDecision(decision, resolution, expectedUpdatedAt);
     },
@@ -788,8 +811,8 @@ export function useChatScreenController(): ChatScreenShellProps {
     },
     sendDisabled,
     sendTitle: pressureBlocks
-      ? hostPressure?.message ??
-        "Host pressure is critical. Sending is paused until cleanup completes."
+      ? (hostPressure?.message ??
+        "Host pressure is critical. Sending is paused until cleanup completes.")
       : undefined,
     expandedImage,
     onCloseExpandedImage: () => setExpandedImage(null),

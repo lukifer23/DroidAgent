@@ -1,7 +1,9 @@
 import type { DashboardState } from "@droidagent/shared";
 
 export function isOperatorReady(
-  dashboard: DashboardState | undefined,
+  dashboard:
+    | Pick<DashboardState, "canonicalUrl" | "memory" | "setup">
+    | undefined,
 ): boolean {
   const setup = dashboard?.setup;
   const memory = dashboard?.memory;

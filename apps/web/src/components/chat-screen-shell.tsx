@@ -19,15 +19,10 @@ import type {
 import type { ChatSessionFeedback } from "../app-context";
 import {
   ApprovalCard,
-  CopyButton,
   type ExpandedImageState,
   formatHostRatio,
-  formatMessageTime,
-  MessageMemoryActions,
-  MessagePartView,
   PendingAttachmentList,
   PressureContributorBadge,
-  shouldShowCopyButton,
   StreamingMarkdown,
 } from "./chat-message-parts";
 import {
@@ -37,7 +32,8 @@ import {
   RunActivityTrail,
 } from "./chat-run-panels";
 import type { ChatRunViewState } from "../lib/chat-run-store";
-import { formatHostBytes, roleLabel } from "../lib/formatters";
+import { formatHostBytes } from "../lib/formatters";
+import { ChatTranscriptList } from "./chat-transcript-list";
 
 interface MetricChip {
   label: string;
@@ -181,7 +177,8 @@ function TranscriptWindow(props: ChatScreenShellProps) {
         </div>
         <small>
           {activeSession?.title ?? "Operator Chat"} • {messages.length}
-          {showStreamingCard ? "+" : ""} message{messages.length === 1 ? "" : "s"}
+          {showStreamingCard ? "+" : ""} message
+          {messages.length === 1 ? "" : "s"}
         </small>
       </div>
 
@@ -190,7 +187,9 @@ function TranscriptWindow(props: ChatScreenShellProps) {
           <div className="operator-transcript-alerts">
             {maintenanceActive ? (
               <div className="operator-run-strip failed">
-                <strong>{maintenanceMessage ?? "Maintenance in progress"}</strong>
+                <strong>
+                  {maintenanceMessage ?? "Maintenance in progress"}
+                </strong>
                 <span>
                   {maintenancePhase
                     ? `New work is blocked while the host is ${maintenancePhase}.`
@@ -223,81 +222,27 @@ function TranscriptWindow(props: ChatScreenShellProps) {
           !liveChatFeedback &&
           !terminalChatFeedback ? (
             <article className="panel-card compact">
-              This chat is empty. Start with a prompt, attach files, or restore an
-              archived chat from the rail.
+              This chat is empty. Start with a prompt, attach files, or restore
+              an archived chat from the rail.
             </article>
           ) : null}
-          {messages.map((message) => (
-            <article key={message.id} className={`message-card ${message.role}`}>
-              <div className="message-meta">
-                <div className="message-meta-copy">
-                  <header>{roleLabel(message.role)}</header>
-                  <span>{formatMessageTime(message.createdAt)}</span>
-                </div>
-                {shouldShowCopyButton(message) ? (
-                  <CopyButton text={message.text} />
-                ) : null}
-              </div>
-
-              <div className="message-part-stack">
-                {((message.parts ?? []).length > 0
-                  ? message.parts ?? []
-                  : [
-                      {
-                        type: "markdown",
-                        text: message.text,
-                      } as const,
-                    ]
-                ).map((part, index) => {
-                  const approval =
-                    part.type === "approval_request"
-                      ? ((part.approvalId
-                          ? approvalsById.get(part.approvalId) ?? null
-                          : null) ?? (approvals.length === 1 ? approvals[0]! : null))
-                      : null;
-
-                  return (
-                    <MessagePartView
-                      key={`${message.id}-${part.type}-${index}`}
-                      approval={approval}
-                      commandActionDisabledReason={
-                        pressureBlocks
-                          ? props.hostPressure?.message ??
-                            "Host pressure is critical. New agent runs are paused."
-                          : null
-                      }
-                      commandActionsEnabled={!pressureBlocks}
-                      onOpenImage={onOpenImage}
-                      onOpenInTerminal={onOpenInTerminal}
-                      onResolveApproval={onResolveApprovalAction}
-                      onRunCommand={onRunCommandFromMessage}
-                      part={part}
-                    />
-                  );
-                })}
-              </div>
-
-              {message.text.trim() ? (
-                <MessageMemoryActions
-                  onAddMemory={() =>
-                    void runAction(async () => {
-                      await onCreateMemoryDraft("memory", message);
-                    }, "Draft added to durable memory.")
-                  }
-                  onAddPreferences={() =>
-                    void runAction(async () => {
-                      await onCreateMemoryDraft("preferences", message);
-                    }, "Draft added to preferences.")
-                  }
-                  onAddTodayNote={() =>
-                    void runAction(async () => {
-                      await onCreateMemoryDraft("todayNote", message);
-                    }, "Draft added to today's note.")
-                  }
-                />
-              ) : null}
-            </article>
-          ))}
+          <ChatTranscriptList
+            activeRunUpdatedAt={activeRun?.updatedAt}
+            approvals={approvals}
+            approvalsById={approvalsById}
+            hostPressureMessage={props.hostPressure?.message}
+            messages={messages}
+            onCreateMemoryDraft={onCreateMemoryDraft}
+            onOpenImage={onOpenImage}
+            onOpenInTerminal={onOpenInTerminal}
+            onResolveApprovalAction={onResolveApprovalAction}
+            onRunCommandFromMessage={onRunCommandFromMessage}
+            pressureBlocks={pressureBlocks}
+            runAction={runAction}
+            sessionId={activeSession?.id ?? "web:operator"}
+            streamingText={streamingText}
+            threadRef={props.threadRef}
+          />
 
           {showPendingAssistantCard ? (
             <PendingAssistantCard
@@ -324,14 +269,19 @@ function TranscriptWindow(props: ChatScreenShellProps) {
                     <div className="button-row">
                       <button
                         onClick={() =>
-                          void runAction(async () => {
-                            await resolveDecision(decision, "approved");
-                          }, decision.kind === "memoryDraftReview"
-                            ? "Memory draft applied."
-                            : "Decision approved.")
+                          void runAction(
+                            async () => {
+                              await resolveDecision(decision, "approved");
+                            },
+                            decision.kind === "memoryDraftReview"
+                              ? "Memory draft applied."
+                              : "Decision approved.",
+                          )
                         }
                       >
-                        {decision.kind === "memoryDraftReview" ? "Apply" : "Approve"}
+                        {decision.kind === "memoryDraftReview"
+                          ? "Apply"
+                          : "Approve"}
                       </button>
                       <details className="message-details">
                         <summary>More</summary>
@@ -339,14 +289,19 @@ function TranscriptWindow(props: ChatScreenShellProps) {
                           <button
                             className="secondary"
                             onClick={() =>
-                              void runAction(async () => {
-                                await resolveDecision(decision, "denied");
-                              }, decision.kind === "memoryDraftReview"
-                                ? "Memory draft dismissed."
-                                : "Decision denied.")
+                              void runAction(
+                                async () => {
+                                  await resolveDecision(decision, "denied");
+                                },
+                                decision.kind === "memoryDraftReview"
+                                  ? "Memory draft dismissed."
+                                  : "Decision denied.",
+                              )
                             }
                           >
-                            {decision.kind === "memoryDraftReview" ? "Dismiss" : "Deny"}
+                            {decision.kind === "memoryDraftReview"
+                              ? "Dismiss"
+                              : "Deny"}
                           </button>
                           {decision.kind === "memoryDraftReview" ? (
                             <button
@@ -386,7 +341,9 @@ function TranscriptWindow(props: ChatScreenShellProps) {
               <div className="message-markdown">
                 <StreamingMarkdown
                   onOpenImage={onOpenImage}
-                  text={streamingText || "Working through the live OpenClaw run..."}
+                  text={
+                    streamingText || "Working through the live OpenClaw run..."
+                  }
                 />
               </div>
             </article>
@@ -457,7 +414,9 @@ function SidebarRail(props: ChatScreenShellProps) {
             </label>
           ) : (
             <div className="operator-side-inline-meta">
-              <span>{messages.length + (showStreamingCard ? 1 : 0)} visible items</span>
+              <span>
+                {messages.length + (showStreamingCard ? 1 : 0)} visible items
+              </span>
               <span>{sessionSecondaryStatus}</span>
             </div>
           )}
@@ -498,7 +457,9 @@ function SidebarRail(props: ChatScreenShellProps) {
                 <div key={session.id} className="operator-session-archive-card">
                   <div>
                     <strong>{session.title}</strong>
-                    <span>{session.lastMessagePreview || "No preview yet"}</span>
+                    <span>
+                      {session.lastMessagePreview || "No preview yet"}
+                    </span>
                   </div>
                   <button
                     type="button"
@@ -683,7 +644,10 @@ function ComposerWindow(props: ChatScreenShellProps) {
   } = props;
 
   return (
-    <form className="operator-composer-window panel-card compact" onSubmit={onSubmit}>
+    <form
+      className="operator-composer-window panel-card compact"
+      onSubmit={onSubmit}
+    >
       <div className="operator-window-head">
         <div className="operator-window-copy">
           <div className="journey-kicker">Compose</div>
@@ -738,8 +702,8 @@ function ComposerWindow(props: ChatScreenShellProps) {
               type="submit"
               title={
                 pressureBlocks
-                  ? hostPressure?.message ??
-                    "Host pressure is critical. Sending is paused until cleanup completes."
+                  ? (hostPressure?.message ??
+                    "Host pressure is critical. Sending is paused until cleanup completes.")
                   : sendTitle
               }
               disabled={sendDisabled || !harnessReady}
@@ -777,11 +741,7 @@ function ImageLightbox({
       >
         <div className="image-lightbox-head">
           <strong>{expandedImage.label ?? expandedImage.alt}</strong>
-          <button
-            type="button"
-            className="secondary"
-            onClick={onClose}
-          >
+          <button type="button" className="secondary" onClick={onClose}>
             Close
           </button>
         </div>
@@ -846,7 +806,9 @@ export function ChatScreenShell(props: ChatScreenShellProps) {
               <span className={`status-chip${memoryIndexed ? " ready" : ""}`}>
                 {memoryIndexed ? "Memory indexed" : "Memory pending"}
               </span>
-              <span className={`status-chip${pendingDecisionCount > 0 ? "" : " ready"}`}>
+              <span
+                className={`status-chip${pendingDecisionCount > 0 ? "" : " ready"}`}
+              >
                 {pendingDecisionCount > 0
                   ? `${pendingDecisionCount} decision${pendingDecisionCount === 1 ? "" : "s"}`
                   : `${availableToolsCount} tools ready`}

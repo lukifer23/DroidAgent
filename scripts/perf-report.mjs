@@ -19,6 +19,9 @@ async function main() {
   try {
     const server = await readJson(serverPath);
     console.log("Server benchmarks");
+    for (const metric of server.coldMetrics ?? []) {
+      console.log(`- ${metric.pathname} cold: ${metric.durationMs} ms`);
+    }
     for (const metric of server.metrics ?? []) {
       const label = metric.name ?? metric.pathname;
       console.log(
@@ -26,11 +29,11 @@ async function main() {
       );
     }
     const coldDashboardMetric = (server.diagnostics?.metrics ?? []).find(
-      (entry) => entry.name === "dashboard.snapshot",
+      (entry) => entry.name === "dashboard.snapshot.compose",
     );
-    if (coldDashboardMetric?.summary?.maxDurationMs !== null) {
+    if (typeof coldDashboardMetric?.summary?.maxDurationMs === "number") {
       console.log(
-        `- dashboard.snapshot cold max: ${coldDashboardMetric.summary.maxDurationMs} ms`,
+        `- dashboard.snapshot.compose max: ${coldDashboardMetric.summary.maxDurationMs} ms`,
       );
     }
   } catch {
@@ -51,12 +54,13 @@ async function main() {
   }
 
   try {
-    const [budgets, serverArtifact, buildManifest, baseline] = await Promise.all([
-      readJson(budgetsPath),
-      readJson(serverPath),
-      loadBuildManifest(),
-      readJson(baselinePath).catch(() => null),
-    ]);
+    const [budgets, serverArtifact, buildManifest, baseline] =
+      await Promise.all([
+        readJson(budgetsPath),
+        readJson(serverPath),
+        loadBuildManifest(),
+        readJson(baselinePath).catch(() => null),
+      ]);
     console.log("Tracked budgets");
     for (const rule of budgets.metrics ?? []) {
       const value = await resolveMetricValue(rule, {

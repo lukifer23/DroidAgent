@@ -170,7 +170,9 @@ export class DashboardService {
   }
 
   private async getMemory() {
-    return await this.memoryCache.get(() => openclawService.memoryStatusQuick());
+    return await this.memoryCache.get(() =>
+      openclawService.memoryStatusQuick(),
+    );
   }
 
   private async getHostPressure() {
@@ -180,7 +182,9 @@ export class DashboardService {
   }
 
   private async getMemoryDrafts() {
-    return await this.memoryDraftsCache.get(() => memoryDraftService.listDrafts());
+    return await this.memoryDraftsCache.get(() =>
+      memoryDraftService.listDrafts(),
+    );
   }
 
   private async getContextManagement() {
@@ -190,7 +194,9 @@ export class DashboardService {
   }
 
   private async getMaintenance() {
-    return await this.maintenanceCache.get(() => maintenanceService.getStatus());
+    return await this.maintenanceCache.get(() =>
+      maintenanceService.getStatus(),
+    );
   }
 
   private async getLaunchAgent() {
@@ -212,78 +218,105 @@ export class DashboardService {
   }
 
   private async getApprovals() {
-    return await this.approvalsCache.get(() => decisionService.listLegacyApprovals());
+    return await this.approvalsCache.get(() =>
+      decisionService.listLegacyApprovals(),
+    );
   }
 
-  async getDashboardState() {
-    const metric = performanceService.start("server", "dashboard.snapshot");
+  private async composeDashboardState() {
+    const metric = performanceService.start(
+      "server",
+      "dashboard.snapshot.compose",
+    );
     try {
-      return await this.snapshotCache.get(async () => {
-        const [
-          setup,
-          access,
-          runtimes,
-          providerState,
-          channelState,
-          harness,
-          memory,
-          hostPressure,
-          memoryDrafts,
-          contextManagement,
-          maintenance,
-          launchAgent,
-          sessions,
-          jobs,
-          decisions,
-          approvals,
-        ] = await Promise.all([
-          this.getSetup(),
-          this.getAccess(),
-          this.getRuntimes(),
-          this.getProviders(),
-          this.getChannels(),
-          this.getHarness(),
-          this.getMemory(),
-          this.getHostPressure(),
-          this.getMemoryDrafts(),
-          this.getContextManagement(),
-          this.getMaintenance(),
-          this.getLaunchAgent(),
-          this.getSessions(),
-          this.getJobs(),
-          this.getDecisions(),
-          this.getApprovals(),
-        ]);
+      const [
+        setup,
+        access,
+        runtimes,
+        providerState,
+        channelState,
+        harness,
+        memory,
+        hostPressure,
+        memoryDrafts,
+        contextManagement,
+        maintenance,
+        launchAgent,
+        sessions,
+        jobs,
+        decisions,
+        approvals,
+      ] = await Promise.all([
+        this.getSetup(),
+        this.getAccess(),
+        this.getRuntimes(),
+        this.getProviders(),
+        this.getChannels(),
+        this.getHarness(),
+        this.getMemory(),
+        this.getHostPressure(),
+        this.getMemoryDrafts(),
+        this.getContextManagement(),
+        this.getMaintenance(),
+        this.getLaunchAgent(),
+        this.getSessions(),
+        this.getJobs(),
+        this.getDecisions(),
+        this.getApprovals(),
+      ]);
 
-        return DashboardStateSchema.parse({
-          build: buildInfoService.getBuildInfo(),
-          setup,
-          canonicalUrl: access.canonicalUrl,
-          tailscaleStatus: access.tailscaleStatus,
-          cloudflareStatus: access.cloudflareStatus,
-          serveStatus: access.serveStatus,
-          bootstrapRequired: access.bootstrapRequired,
-          startupDiagnostics: startupService.peekDiagnostics(),
-          runtimes,
-          providers: providerState.providers,
-          cloudProviders: providerState.cloudProviders,
-          channels: channelState.statuses,
-          channelConfig: channelState.config,
-          harness,
-          memory,
-          hostPressure,
-          memoryDrafts,
-          contextManagement,
-          maintenance,
-          launchAgent,
-          sessions,
-          jobs,
-          decisions,
-          approvals,
-        });
+      return DashboardStateSchema.parse({
+        build: buildInfoService.getBuildInfo(),
+        setup,
+        canonicalUrl: access.canonicalUrl,
+        tailscaleStatus: access.tailscaleStatus,
+        cloudflareStatus: access.cloudflareStatus,
+        serveStatus: access.serveStatus,
+        bootstrapRequired: access.bootstrapRequired,
+        startupDiagnostics: startupService.peekDiagnostics(),
+        runtimes,
+        providers: providerState.providers,
+        cloudProviders: providerState.cloudProviders,
+        channels: channelState.statuses,
+        channelConfig: channelState.config,
+        harness,
+        memory,
+        hostPressure,
+        memoryDrafts,
+        contextManagement,
+        maintenance,
+        launchAgent,
+        sessions,
+        jobs,
+        decisions,
+        approvals,
       });
     } finally {
       metric.finish();
+    }
+  }
+
+  async getDashboardState() {
+    const cache = this.snapshotCache.state();
+    const metric = performanceService.start("server", "dashboard.snapshot", {
+      cache,
+    });
+    try {
+      const snapshot = await this.snapshotCache.get(() =>
+        this.composeDashboardState(),
+      );
+      metric.finish({
+        cache,
+        outcome: "ok",
+      });
+      return snapshot;
+    } catch (error) {
+      metric.finish({
+        cache,
+        outcome: "error",
+        error: error instanceof Error ? error.name : "unknown",
+      });
+      throw error;
     }
   }
 }

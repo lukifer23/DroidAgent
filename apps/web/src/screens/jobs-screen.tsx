@@ -1,11 +1,27 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import type { JobOutputSnapshot, JobRecord } from "@droidagent/shared";
+import type {
+  DashboardState,
+  JobOutputSnapshot,
+  JobRecord,
+} from "@droidagent/shared";
 
 import { useAuthQuery, useDashboardQuery } from "../app-data";
 import { useDroidAgentApp } from "../app-context";
 import { api, postJson } from "../lib/api";
+
+interface JobsDashboardSlice {
+  hostPressure: DashboardState["hostPressure"];
+  jobs: DashboardState["jobs"];
+}
+
+function selectJobsDashboard(data: DashboardState): JobsDashboardSlice {
+  return {
+    hostPressure: data.hostPressure,
+    jobs: data.jobs,
+  };
+}
 
 function renderLogTail(value: string, maxChars = 48_000): string {
   if (value.length <= maxChars) {
@@ -18,7 +34,10 @@ function renderLogTail(value: string, maxChars = 48_000): string {
 export function JobsScreen() {
   const { runAction, trackJobStart } = useDroidAgentApp();
   const authQuery = useAuthQuery();
-  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const dashboardQuery = useDashboardQuery(
+    Boolean(authQuery.data?.user),
+    selectJobsDashboard,
+  );
   const dashboard = dashboardQuery.data;
   const [commandInput, setCommandInput] = useState("pwd");
   const [jobCwdInput, setJobCwdInput] = useState(".");
@@ -39,8 +58,11 @@ export function JobsScreen() {
 
   const outputQuery = useQuery({
     queryKey: ["jobs", selectedJobId, "output"],
-    queryFn: () => api<JobOutputSnapshot>(`/api/jobs/${encodeURIComponent(selectedJobId ?? "")}/output`),
-    enabled: Boolean(selectedJobId)
+    queryFn: () =>
+      api<JobOutputSnapshot>(
+        `/api/jobs/${encodeURIComponent(selectedJobId ?? "")}/output`,
+      ),
+    enabled: Boolean(selectedJobId),
   });
 
   return (
@@ -55,11 +77,17 @@ export function JobsScreen() {
         ) : null}
         <label>
           Command
-          <input value={commandInput} onChange={(event) => setCommandInput(event.target.value)} />
+          <input
+            value={commandInput}
+            onChange={(event) => setCommandInput(event.target.value)}
+          />
         </label>
         <label>
           Working directory
-          <input value={jobCwdInput} onChange={(event) => setJobCwdInput(event.target.value)} />
+          <input
+            value={jobCwdInput}
+            onChange={(event) => setJobCwdInput(event.target.value)}
+          />
         </label>
         <button
           disabled={jobStartsBlocked}
@@ -67,7 +95,7 @@ export function JobsScreen() {
             void runAction(async () => {
               const response = await postJson<{ jobId: string }>("/api/jobs", {
                 command: commandInput,
-                cwd: jobCwdInput
+                cwd: jobCwdInput,
               });
               trackJobStart(response.jobId);
               setSelectedJobId(response.jobId);
@@ -100,23 +128,30 @@ export function JobsScreen() {
           {selectedJobId ? (
             <>
               <small>
-                stdout {outputQuery.data?.stdoutBytes ?? 0} bytes • stderr {outputQuery.data?.stderrBytes ?? 0} bytes
+                stdout {outputQuery.data?.stdoutBytes ?? 0} bytes • stderr{" "}
+                {outputQuery.data?.stderrBytes ?? 0} bytes
               </small>
               <div className="stack-list job-output-grid">
                 <section>
                   <strong>stdout</strong>
                   <pre className="viewer-panel">
-                    {renderLogTail(outputQuery.data?.stdout || "No stdout yet.")}
+                    {renderLogTail(
+                      outputQuery.data?.stdout || "No stdout yet.",
+                    )}
                   </pre>
                 </section>
                 <section>
                   <strong>stderr</strong>
                   <pre className="viewer-panel">
-                    {renderLogTail(outputQuery.data?.stderr || "No stderr yet.")}
+                    {renderLogTail(
+                      outputQuery.data?.stderr || "No stderr yet.",
+                    )}
                   </pre>
                 </section>
               </div>
-              {outputQuery.data?.truncated ? <small>Output was truncated at the safety ceiling.</small> : null}
+              {outputQuery.data?.truncated ? (
+                <small>Output was truncated at the safety ceiling.</small>
+              ) : null}
             </>
           ) : (
             <small>Select a job to inspect live and replayed output.</small>

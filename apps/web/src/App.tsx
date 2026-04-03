@@ -7,13 +7,14 @@ import {
   createRoute,
   createRouter,
 } from "@tanstack/react-router";
+import type { DashboardState, WorkspaceEntry } from "@droidagent/shared";
 
 import { useAuthQuery, useDashboardQuery } from "./app-data";
 import { DroidAgentAppProvider } from "./app-context";
 import { AppLayout } from "./app-layout";
 import { api } from "./lib/api";
 import { isOperatorReady } from "./lib/operator-readiness";
-import type { WorkspaceEntry } from "@droidagent/shared";
+import { FilesScreen } from "./screens/files-screen";
 
 const loadChatScreen = () => import("./screens/chat-screen");
 const loadSetupScreen = () => import("./screens/setup-screen");
@@ -22,7 +23,6 @@ const loadJobsScreen = () => import("./screens/jobs-screen");
 const loadModelsScreen = () => import("./screens/models-screen");
 const loadChannelsScreen = () => import("./screens/channels-screen");
 const loadTerminalScreen = () => import("./screens/terminal-screen");
-const loadFilesScreen = () => import("./screens/files-screen");
 
 const ChatScreen = lazy(async () => ({
   default: (await loadChatScreen()).ChatScreen,
@@ -45,14 +45,18 @@ const ChannelsScreen = lazy(async () => ({
 const TerminalScreen = lazy(async () => ({
   default: (await loadTerminalScreen()).TerminalScreen,
 }));
-const FilesScreen = lazy(async () => ({
-  default: (await loadFilesScreen()).FilesScreen,
-}));
 const preloadScreens = () =>
   Promise.all([
-    loadFilesScreen(),
     loadSettingsScreen(),
+    loadJobsScreen(),
+    loadModelsScreen(),
+    loadChannelsScreen(),
+    loadTerminalScreen(),
   ]);
+
+function selectOperatorReadiness(data: DashboardState): boolean {
+  return isOperatorReady(data);
+}
 
 function withLazyScreen(Component: ComponentType) {
   return function LazyScreen() {
@@ -66,10 +70,11 @@ function withLazyScreen(Component: ComponentType) {
 
 function IndexRedirect() {
   const authQuery = useAuthQuery();
-  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
-  return (
-    <Navigate to={isOperatorReady(dashboardQuery.data) ? "/chat" : "/setup"} />
+  const dashboardQuery = useDashboardQuery(
+    Boolean(authQuery.data?.user),
+    selectOperatorReadiness,
   );
+  return <Navigate to={dashboardQuery.data ? "/chat" : "/setup"} />;
 }
 
 function IdleRoutePreloader() {
@@ -95,9 +100,7 @@ function IdleRoutePreloader() {
         queryClient.prefetchQuery({
           queryKey: ["files", "."],
           queryFn: () =>
-            api<WorkspaceEntry[]>(
-              `/api/files?path=${encodeURIComponent(".")}`,
-            ),
+            api<WorkspaceEntry[]>(`/api/files?path=${encodeURIComponent(".")}`),
           staleTime: 15_000,
         }),
       ]);
@@ -153,7 +156,7 @@ const chatRoute = createRoute({
 const filesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "files",
-  component: withLazyScreen(FilesScreen),
+  component: FilesScreen,
 });
 
 const jobsRoute = createRoute({

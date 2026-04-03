@@ -11,6 +11,19 @@ export class TtlCache<T> {
     this.pending = null;
   }
 
+  state(force = false): "hit" | "pending" | "miss" {
+    const now = Date.now();
+    if (!force && this.value !== null && now < this.expiresAt) {
+      return "hit";
+    }
+
+    if (!force && this.pending) {
+      return "pending";
+    }
+
+    return "miss";
+  }
+
   async get(load: () => Promise<T>, force = false): Promise<T> {
     const now = Date.now();
     if (!force && this.value !== null && now < this.expiresAt) {

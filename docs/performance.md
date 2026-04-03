@@ -19,7 +19,7 @@ pnpm hygiene:check
 ```
 
 - `pnpm perf:server`
-  - measures server HTTP timings
+  - measures the first cold `/api/access` and authenticated `/api/dashboard` requests plus the warm request path p95
   - writes `artifacts/perf/server-latest.json`
 - `pnpm perf:e2e`
   - runs Playwright UX timing scenarios
@@ -45,6 +45,7 @@ Server-side:
 - `http.get./api/access`
 - `http.get./api/dashboard`
 - `dashboard.snapshot`
+- `dashboard.snapshot.compose`
 - `chat.send.submitToAccepted`
 - `chat.stream.acceptedToFirstDelta`
 - `chat.stream.firstDeltaForward`
@@ -88,7 +89,7 @@ E2E artifact metrics:
 - `chat_first_token_visible_ms`
 - `chat_done_ms`
 - `reconnect_resync_ms`
-- bundle bytes from the Vite manifest for the main entry chunk and terminal route chunk
+- bundle bytes from the Vite manifest for the main entry, shared shell/vendor chunks, markdown chunk, terminal route chunk, and xterm chunk
 
 Notable implementation guardrails in this pass:
 
@@ -100,10 +101,14 @@ Notable implementation guardrails in this pass:
 - websocket-driven dashboard patches are reconciled with debounced full snapshot pulls after high-impact runtime/provider/channel/context/memory mutations
 - server-side mutation fanout now coalesces dashboard slice invalidation and websocket emits through one shared queue, which reduces repeated slice loads and keeps mutation bursts ordered
 - request-path warmup now waits for startup restore before priming dashboard/access/runtime/provider caches, and dashboard memory status uses the quick cached path on the hot request path
+- perf artifacts now record the first real authenticated `/api/dashboard` request separately from `dashboard.snapshot.compose`, which keeps cold-path reporting tied to operator-visible wait instead of warmed slice-compose samples
 - the memory prepare endpoint is now a fast single-flight background trigger; completion latency is measured separately from accepted latency
 - explicit memory prepare fingerprints the durable-memory source set and skips the heavy reindex path when the index is already current
 - `memory.prepare` and `memory.prepare.complete` samples now stamp `source` context (`operator`, `resume`, `prewarm`), and an operator request that joins an in-flight prepare emits its own joined completion sample so perf artifacts do not accidentally report stale bootstrap timings as interactive latency
 - browser chat/session timing is now sourced from one canonical per-session store, which keeps first-token and completion timings aligned with the same run/stream lifecycle the UI renders
+- websocket reconnect now opens transport immediately when the browser comes back online and resyncs dashboard/access state in the background so reconnect-visible downtime is bounded by socket availability instead of a backoff-plus-fetch loop
+- the `Files` route stays hot in the shell while the other secondary operator routes warm during idle, which trims route-switch churn without forcing every screen into the unauthenticated bootstrap path
+- shared bundle budgets now gate app-shell, React vendor, markdown, and xterm chunks instead of only the main entry and terminal leaf route
 
 The Settings diagnostics view now shows p95, last sample, sample count, `ok`/`warn`/`error` counts, and sample age so old or unhealthy latency numbers are easier to spot before they mislead an operator.
 
@@ -126,7 +131,7 @@ This keeps model time, relay overhead, and browser-observed latency from being m
 
 - `GET /api/access` local p95 <= `250 ms`
 - `GET /api/dashboard` local p95 <= `250 ms`
-- `dashboard.snapshot` cold max <= `750 ms`
+- first authenticated `GET /api/dashboard` request <= `750 ms`
 - cold dashboard browser fetch p95 <= `1200 ms`
 - warm route switch p95 <= `220 ms`
 - websocket reconnect to resync p95 <= `2000 ms`
@@ -135,7 +140,12 @@ This keeps model time, relay overhead, and browser-observed latency from being m
 - memory prepare completion p95 <= `35000 ms`
 - chat first token visible p95 <= `200 ms`
 - main entry JS <= `350 kB`
+- shared app-shell JS <= `260 kB`
+- shared React vendor JS <= `190 kB`
+- shared router vendor JS <= `20 kB`
+- shared markdown JS <= `130 kB`
 - terminal route JS <= `300 kB`
+- xterm JS <= `360 kB`
 
 Model generation time is recorded separately from DroidAgent relay overhead. Reindex and memory-draft timings are also tracked independently so semantic-memory maintenance work does not get folded into chat latency.
 
@@ -152,7 +162,7 @@ The default local baseline also assumes `qwen3.5:4b` on Ollama with a `65k` cont
 5. Run `pnpm perf:baseline`.
 6. Run `pnpm perf:check`.
 
-Warm-path p95 is still the main review target for `access` and `dashboard`, but the budget set now also tracks cold dashboard behavior, visible first-token latency, background memory prepare behavior, and bundle-size drift.
+Warm-path p95 is still the main review target for `access` and `dashboard`, but the budget set now also tracks the first real dashboard request, visible first-token latency, reconnect-visible downtime, background memory prepare behavior, and bundle-size drift across shared chunks.
 
 ## Current Targets
 
@@ -162,7 +172,7 @@ This table is the maintained target set for the perf workflow.
 |--------|--------|
 | `GET /api/access` p95 | `<= 250 ms` |
 | `GET /api/dashboard` p95 | `<= 250 ms` |
-| `dashboard.snapshot` cold max | `<= 750 ms` |
+| First authenticated `GET /api/dashboard` | `<= 750 ms` |
 | Cold dashboard browser fetch p95 | `<= 1200 ms` |
 | Route switch p95 | `<= 220 ms` |
 | Chat first token visible p95 | `<= 200 ms` |
@@ -171,18 +181,30 @@ This table is the maintained target set for the perf workflow.
 | Memory prepare completion p95 | `<= 35000 ms` |
 | File save p95 | `<= 500 ms` |
 | Main entry JS | `<= 350 kB` |
+| Shared app-shell JS | `<= 260 kB` |
+| Shared React vendor JS | `<= 190 kB` |
+| Shared router vendor JS | `<= 20 kB` |
+| Shared markdown JS | `<= 130 kB` |
 | Terminal route JS | `<= 300 kB` |
+| xterm JS | `<= 360 kB` |
 
 ## Latest Validated Local Run
 
-Validated on `2026-04-02`:
+Validated on `2026-04-03`:
 
-- server `GET /api/access` p95: `2.10 ms`
-- server `GET /api/dashboard` p95: `2.06 ms`
-- server `dashboard.snapshot` cold max: `0.01 ms`
-- E2E route switch p95: `198.30 ms`
-- E2E chat first token visible p95: `63.00 ms`
-- E2E memory prepare accepted p95: `6.80 ms`
-- E2E memory prepare completion p95: `15.01 ms`
-- main entry JS: `16.73 kB`
+- server `GET /api/access` p95: `8.06 ms`
+- server `GET /api/dashboard` p95: `7.03 ms`
+- server first authenticated `GET /api/dashboard`: `3.74 ms`
+- E2E route switch p95: `195.46 ms`
+- E2E reconnect to resync p95: `61.67 ms`
+- E2E chat first token visible p95: `62.08 ms`
+- E2E memory prepare accepted p95: `6.90 ms`
+- E2E memory prepare completion p95: `18.61 ms`
+- main entry JS: `23.42 kB`
+- shared app-shell JS: `241.59 kB`
+- shared React vendor JS: `178.32 kB`
+- shared markdown JS: `111.67 kB`
 - terminal route JS: `9.69 kB`
+- xterm JS: `340.36 kB`
+
+The main remaining stretch-target gap after this run is route switching. It stays inside the checked-in `220 ms` gate but remains above the stricter `180 ms` target from the current hardening plan.

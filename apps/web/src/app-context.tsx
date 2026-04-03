@@ -8,12 +8,17 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type ReactNode
+  type ReactNode,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ClientCommand, ServerEvent } from "@droidagent/shared";
 
-import { useAccessQuery, useAuthQuery, useDashboardQuery, usePasskeysQuery } from "./app-data";
+import {
+  useAccessQuery,
+  useAuthQuery,
+  useDashboardQuery,
+  usePasskeysQuery,
+} from "./app-data";
 import { useWebSocket } from "./hooks/use-websocket";
 import { clientPerformance } from "./lib/client-performance";
 import { prefetchSessionMessages } from "./lib/chat-session-cache";
@@ -36,7 +41,10 @@ interface DroidAgentAppContextValue {
   isOnline: boolean;
   wsStatus: "disconnected" | "connecting" | "connected";
   refreshQueries: () => Promise<void>;
-  runAction: (work: () => Promise<void>, successMessage?: string) => Promise<void>;
+  runAction: (
+    work: () => Promise<void>,
+    successMessage?: string,
+  ) => Promise<void>;
   selectedSessionId: string;
   setSelectedSessionId: (sessionId: string) => void;
   sendRealtimeCommand: (command: ClientCommand) => boolean;
@@ -52,13 +60,21 @@ interface DroidAgentAppContextValue {
   trackJobStart: (jobId: string) => void;
 }
 
-const DroidAgentAppContext = createContext<DroidAgentAppContextValue | null>(null);
+const DroidAgentAppContext = createContext<DroidAgentAppContextValue | null>(
+  null,
+);
+
+function selectDashboardSessions(data: { sessions: { id: string }[] }) {
+  return data.sessions;
+}
 
 export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [isOnline, setIsOnline] = useState(
+    typeof navigator !== "undefined" ? navigator.onLine : true,
+  );
   const [selectedSessionId, setSelectedSessionId] = useState("web:operator");
   const [themePreference, setThemePreference] = useState<
     "system" | "dark" | "light"
@@ -71,7 +87,8 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       ? saved
       : "system";
   });
-  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
+  const [installPromptEvent, setInstallPromptEvent] =
+    useState<BeforeInstallPromptEvent | null>(null);
   const [resolvedTheme, setResolvedTheme] = useState<"dark" | "light">(() => {
     if (
       typeof window !== "undefined" &&
@@ -82,8 +99,13 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     return "dark";
   });
 
-  const routeTransitionRef = useRef<{ path: string; metric: ReturnType<typeof clientPerformance.start> } | null>(null);
-  const pendingJobMetricsRef = useRef<Map<string, ReturnType<typeof clientPerformance.start>>>(new Map());
+  const routeTransitionRef = useRef<{
+    path: string;
+    metric: ReturnType<typeof clientPerformance.start>;
+  } | null>(null);
+  const pendingJobMetricsRef = useRef<
+    Map<string, ReturnType<typeof clientPerformance.start>>
+  >(new Map());
 
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
@@ -104,7 +126,10 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
 
     window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
     return () => {
-      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener(
+        "beforeinstallprompt",
+        handleBeforeInstallPrompt,
+      );
     };
   }, []);
 
@@ -168,24 +193,28 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     ]);
   });
 
-  const runAction = useEffectEvent(async (work: () => Promise<void>, successMessage?: string) => {
-    setErrorMessage(null);
-    try {
-      await work();
-      if (successMessage) {
-        setNotice(successMessage);
+  const runAction = useEffectEvent(
+    async (work: () => Promise<void>, successMessage?: string) => {
+      setErrorMessage(null);
+      try {
+        await work();
+        if (successMessage) {
+          setNotice(successMessage);
+        }
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "DroidAgent action failed.",
+        );
       }
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "DroidAgent action failed.");
-    }
-  });
+    },
+  );
 
   const beginRouteTransition = useEffectEvent((path: string) => {
     routeTransitionRef.current = {
       path,
       metric: clientPerformance.start("client.route.switch", {
-        path
-      })
+        path,
+      }),
     };
   });
 
@@ -196,7 +225,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     }
 
     current.metric.finish({
-      outcome: "ok"
+      outcome: "ok",
     });
     routeTransitionRef.current = null;
   });
@@ -216,8 +245,8 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     pendingJobMetricsRef.current.set(
       jobId,
       clientPerformance.start("client.job.start_to_first_output", {
-        jobId
-      })
+        jobId,
+      }),
     );
   });
 
@@ -226,7 +255,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       const tracked = pendingJobMetricsRef.current.get(event.payload.jobId);
       if (tracked) {
         tracked.finish({
-          stream: event.payload.stream
+          stream: event.payload.stream,
         });
         pendingJobMetricsRef.current.delete(event.payload.jobId);
       }
@@ -239,14 +268,17 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
   });
 
   const authQuery = useAuthQuery();
-  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
-  const dashboardSessions = dashboardQuery.data?.sessions ?? [];
+  const dashboardQuery = useDashboardQuery(
+    Boolean(authQuery.data?.user),
+    selectDashboardSessions,
+  );
+  const dashboardSessions = dashboardQuery.data ?? [];
   usePasskeysQuery(Boolean(authQuery.data?.user));
   useAccessQuery();
 
   const { status: wsStatus, send: sendRealtimeCommand } = useWebSocket({
     enabled: Boolean(authQuery.data?.user),
-    onMessage: handleSocketMessage
+    onMessage: handleSocketMessage,
   });
 
   const authReadyRecordedRef = useRef(false);
@@ -256,7 +288,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     if (authQuery.isSuccess && !authReadyRecordedRef.current) {
       authReadyRecordedRef.current = true;
       clientPerformance.record("client.auth.ready", performance.now(), {
-        hasUser: Boolean(authQuery.data?.user)
+        hasUser: Boolean(authQuery.data?.user),
       });
     }
   }, [authQuery.data?.user, authQuery.isSuccess]);
@@ -265,7 +297,7 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
     if (dashboardQuery.isSuccess && !dashboardReadyRecordedRef.current) {
       dashboardReadyRecordedRef.current = true;
       clientPerformance.record("client.dashboard.ready", performance.now(), {
-        sessions: dashboardSessions.length
+        sessions: dashboardSessions.length,
       });
     }
   }, [dashboardQuery.isSuccess, dashboardSessions.length]);
@@ -287,12 +319,15 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const targetSessionId = dashboardSessions.some((session) => session.id === selectedSessionId)
+    const targetSessionId = dashboardSessions.some(
+      (session) => session.id === selectedSessionId,
+    )
       ? selectedSessionId
       : dashboardSessions[0]?.id;
     if (
       targetSessionId &&
-      chatSessionStore.getSessionSnapshot(targetSessionId).historyStatus !== "ready"
+      chatSessionStore.getSessionSnapshot(targetSessionId).historyStatus !==
+        "ready"
     ) {
       void prefetchSessionMessages(queryClient, targetSessionId);
     }
@@ -349,16 +384,22 @@ export function DroidAgentAppProvider({ children }: { children: ReactNode }) {
       trackChatFailure,
       trackJobStart,
       wsStatus,
-    ]
+    ],
   );
 
-  return <DroidAgentAppContext.Provider value={value}>{children}</DroidAgentAppContext.Provider>;
+  return (
+    <DroidAgentAppContext.Provider value={value}>
+      {children}
+    </DroidAgentAppContext.Provider>
+  );
 }
 
 export function useDroidAgentApp() {
   const context = useContext(DroidAgentAppContext);
   if (!context) {
-    throw new Error("useDroidAgentApp must be used within DroidAgentAppProvider.");
+    throw new Error(
+      "useDroidAgentApp must be used within DroidAgentAppProvider.",
+    );
   }
   return context;
 }
@@ -367,7 +408,7 @@ export function useClientPerformanceSnapshot() {
   return useSyncExternalStore(
     (listener) => clientPerformance.subscribe(listener),
     () => clientPerformance.snapshot(),
-    () => clientPerformance.snapshot()
+    () => clientPerformance.snapshot(),
   );
 }
 

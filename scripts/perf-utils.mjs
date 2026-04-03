@@ -68,6 +68,16 @@ export function resolveServerDiagnosticsMetric(serverArtifact, rule) {
   return metric.summary[rule.stat] ?? null;
 }
 
+export function resolveServerColdMetric(serverArtifact, rule) {
+  const metric = (serverArtifact.coldMetrics ?? []).find(
+    (entry) => entry.pathname === rule.path,
+  );
+  if (!metric) {
+    return null;
+  }
+  return metric[rule.stat] ?? null;
+}
+
 export function resolveE2EMetric(e2eArtifacts, rule) {
   const values = [];
   for (const artifact of e2eArtifacts) {
@@ -87,11 +97,27 @@ export function resolveE2EMetric(e2eArtifacts, rule) {
 }
 
 export async function resolveBuildMetric(buildManifest, rule) {
-  if (!buildManifest || typeof rule.entry !== "string") {
+  if (!buildManifest) {
     return null;
   }
 
-  const entry = buildManifest[rule.entry];
+  const entryKey =
+    typeof rule.entry === "string"
+      ? rule.entry
+      : typeof rule.keyPrefix === "string"
+        ? Object.keys(buildManifest).find((key) =>
+            key.startsWith(rule.keyPrefix),
+          )
+        : typeof rule.keyIncludes === "string"
+          ? Object.keys(buildManifest).find((key) =>
+              key.includes(rule.keyIncludes),
+            )
+          : null;
+  if (!entryKey) {
+    return null;
+  }
+
+  const entry = buildManifest[entryKey];
   if (!entry || typeof entry !== "object") {
     return null;
   }
@@ -127,6 +153,9 @@ export async function resolveMetricValue(
 ) {
   if (rule.source === "server") {
     return resolveServerMetric(serverArtifact, rule);
+  }
+  if (rule.source === "serverCold") {
+    return resolveServerColdMetric(serverArtifact, rule);
   }
   if (rule.source === "serverDiagnostics") {
     return resolveServerDiagnosticsMetric(serverArtifact, rule);

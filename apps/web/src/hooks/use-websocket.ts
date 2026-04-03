@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import type { ClientCommand, DashboardState, JobOutputSnapshot, ServerEvent } from "@droidagent/shared";
+import type {
+  ClientCommand,
+  DashboardState,
+  JobOutputSnapshot,
+  ServerEvent,
+} from "@droidagent/shared";
 
 import { clientPerformance } from "../lib/client-performance";
 import { chatSessionStore } from "../lib/chat-session-store";
@@ -75,7 +80,10 @@ export interface UseWebSocketOptions {
   onMessage?: (event: ServerEvent) => void;
 }
 
-function updateDashboardState(current: DashboardState | undefined, event: ServerEvent): DashboardState | undefined {
+function updateDashboardState(
+  current: DashboardState | undefined,
+  event: ServerEvent,
+): DashboardState | undefined {
   if (!current) {
     return current;
   }
@@ -83,7 +91,7 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
   if (event.type === "setup.updated") {
     return {
       ...current,
-      setup: event.payload
+      setup: event.payload,
     };
   }
 
@@ -94,14 +102,14 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
       tailscaleStatus: event.payload.tailscaleStatus,
       cloudflareStatus: event.payload.cloudflareStatus,
       serveStatus: event.payload.serveStatus,
-      bootstrapRequired: event.payload.bootstrapRequired
+      bootstrapRequired: event.payload.bootstrapRequired,
     };
   }
 
   if (event.type === "runtime.updated") {
     return {
       ...current,
-      runtimes: event.payload
+      runtimes: event.payload,
     };
   }
 
@@ -109,7 +117,7 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
     return {
       ...current,
       providers: event.payload.providers,
-      cloudProviders: event.payload.cloudProviders
+      cloudProviders: event.payload.cloudProviders,
     };
   }
 
@@ -117,28 +125,28 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
     return {
       ...current,
       channels: event.payload.statuses,
-      channelConfig: event.payload.config
+      channelConfig: event.payload.config,
     };
   }
 
   if (event.type === "launchAgent.updated") {
     return {
       ...current,
-      launchAgent: event.payload
+      launchAgent: event.payload,
     };
   }
 
   if (event.type === "context.updated") {
     return {
       ...current,
-      contextManagement: event.payload
+      contextManagement: event.payload,
     };
   }
 
   if (event.type === "memory.updated") {
     return {
       ...current,
-      memory: event.payload
+      memory: event.payload,
     };
   }
 
@@ -173,7 +181,7 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
   if (event.type === "sessions.updated") {
     return {
       ...current,
-      sessions: event.payload
+      sessions: event.payload,
     };
   }
 
@@ -181,15 +189,19 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
     return {
       ...current,
       jobs: current.jobs.some((job) => job.id === event.payload.id)
-        ? current.jobs.map((job) => (job.id === event.payload.id ? event.payload : job))
-        : [event.payload, ...current.jobs]
+        ? current.jobs.map((job) =>
+            job.id === event.payload.id ? event.payload : job,
+          )
+        : [event.payload, ...current.jobs],
     };
   }
 
   if (event.type === "decision.updated") {
     return {
       ...current,
-      decisions: current.decisions.some((decision) => decision.id === event.payload.id)
+      decisions: current.decisions.some(
+        (decision) => decision.id === event.payload.id,
+      )
         ? current.decisions.map((decision) =>
             decision.id === event.payload.id ? event.payload : decision,
           )
@@ -207,16 +219,20 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
   if (event.type === "approval.updated") {
     return {
       ...current,
-      approvals: current.approvals.some((approval) => approval.id === event.payload.id)
-        ? current.approvals.map((approval) => (approval.id === event.payload.id ? event.payload : approval))
-        : [event.payload, ...current.approvals]
+      approvals: current.approvals.some(
+        (approval) => approval.id === event.payload.id,
+      )
+        ? current.approvals.map((approval) =>
+            approval.id === event.payload.id ? event.payload : approval,
+          )
+        : [event.payload, ...current.approvals],
     };
   }
 
   if (event.type === "approvals.updated") {
     return {
       ...current,
-      approvals: event.payload
+      approvals: event.payload,
     };
   }
 
@@ -226,18 +242,43 @@ function updateDashboardState(current: DashboardState | undefined, event: Server
 export function useWebSocket(options: UseWebSocketOptions) {
   const { enabled, onMessage } = options;
   const queryClient = useQueryClient();
-  const [status, setStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
+  const [status, setStatus] = useState<
+    "disconnected" | "connecting" | "connected"
+  >("disconnected");
   const wsRef = useRef<WebSocket | null>(null);
+  const connectRef = useRef<() => void>(() => undefined);
   const retryRef = useRef(0);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onMessageRef = useRef(onMessage);
   const reconnectStartedAtRef = useRef<number | null>(null);
-  const flushHandleRef = useRef<number | ReturnType<typeof setTimeout> | null>(null);
-  const pendingJobOutputRef = useRef<Map<string, { stdout: string; stderr: string; stdoutBytes: number; stderrBytes: number }>>(
-    new Map()
+  const reconnectVersionRef = useRef(0);
+  const flushHandleRef = useRef<number | ReturnType<typeof setTimeout> | null>(
+    null,
   );
-  const dashboardSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingJobOutputRef = useRef<
+    Map<
+      string,
+      {
+        stdout: string;
+        stderr: string;
+        stdoutBytes: number;
+        stderrBytes: number;
+      }
+    >
+  >(new Map());
+  const dashboardSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const reconnectResyncPromiseRef = useRef<Promise<void> | null>(null);
+  const closingRef = useRef(false);
   onMessageRef.current = onMessage;
+
+  const clearReconnectTimeout = useCallback(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, []);
 
   const syncDashboardSnapshot = useCallback(() => {
     if (dashboardSyncTimeoutRef.current) {
@@ -266,26 +307,29 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
     if (pendingJobOutputRef.current.size > 0) {
       for (const [jobId, pending] of pendingJobOutputRef.current.entries()) {
-        queryClient.setQueryData<JobOutputSnapshot | undefined>(["jobs", jobId, "output"], (current) => {
-          if (!current) {
-            return {
-              jobId,
-              stdout: pending.stdout,
-              stderr: pending.stderr,
-              truncated: false,
-              stdoutBytes: pending.stdoutBytes,
-              stderrBytes: pending.stderrBytes
-            };
-          }
+        queryClient.setQueryData<JobOutputSnapshot | undefined>(
+          ["jobs", jobId, "output"],
+          (current) => {
+            if (!current) {
+              return {
+                jobId,
+                stdout: pending.stdout,
+                stderr: pending.stderr,
+                truncated: false,
+                stdoutBytes: pending.stdoutBytes,
+                stderrBytes: pending.stderrBytes,
+              };
+            }
 
-          return {
-            ...current,
-            stdout: `${current.stdout}${pending.stdout}`,
-            stderr: `${current.stderr}${pending.stderr}`,
-            stdoutBytes: current.stdoutBytes + pending.stdoutBytes,
-            stderrBytes: current.stderrBytes + pending.stderrBytes
-          };
-        });
+            return {
+              ...current,
+              stdout: `${current.stdout}${pending.stdout}`,
+              stderr: `${current.stderr}${pending.stderr}`,
+              stdoutBytes: current.stdoutBytes + pending.stdoutBytes,
+              stderrBytes: current.stderrBytes + pending.stderrBytes,
+            };
+          },
+        );
       }
       pendingJobOutputRef.current.clear();
     }
@@ -300,7 +344,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
       return;
     }
 
-    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    if (
+      typeof window !== "undefined" &&
+      typeof window.requestAnimationFrame === "function"
+    ) {
       flushHandleRef.current = window.requestAnimationFrame(() => {
         flushPendingRealtimeState();
       });
@@ -320,23 +367,149 @@ export function useWebSocket(options: UseWebSocketOptions) {
     return true;
   }, []);
 
-  const connect = useCallback(() => {
-    if (!enabled) return;
+  const resyncAfterReconnect = useCallback(
+    (reconnectVersion: number) => {
+      const reconnectStartedAt = reconnectStartedAtRef.current;
+      if (reconnectStartedAt === null || reconnectResyncPromiseRef.current) {
+        return reconnectResyncPromiseRef.current;
+      }
 
+      const reconnectAttempt = retryRef.current;
+      reconnectResyncPromiseRef.current = (async () => {
+        try {
+          const [dashboardResponse, accessResponse] = await Promise.all([
+            fetch(SNAPSHOT_URL, { credentials: "include" }),
+            fetch("/api/access", { credentials: "include" }),
+          ]);
+
+          if (
+            reconnectVersion === reconnectVersionRef.current &&
+            wsRef.current?.readyState === WebSocket.OPEN
+          ) {
+            if (dashboardResponse.ok) {
+              const data = await dashboardResponse.json();
+              queryClient.setQueryData(["dashboard"], data);
+            }
+            if (accessResponse.ok) {
+              const access = await accessResponse.json();
+              queryClient.setQueryData(["access"], access);
+            }
+          }
+
+          if (reconnectStartedAtRef.current === reconnectStartedAt) {
+            clientPerformance.record(
+              "client.ws.reconnect_to_resync",
+              performance.now() - reconnectStartedAt,
+              {
+                attempt: reconnectAttempt,
+                outcome: "ok",
+              },
+              reconnectStartedAt,
+            );
+            reconnectStartedAtRef.current = null;
+          }
+        } catch {
+          if (reconnectStartedAtRef.current === reconnectStartedAt) {
+            clientPerformance.record(
+              "client.ws.reconnect_to_resync",
+              performance.now() - reconnectStartedAt,
+              {
+                attempt: reconnectAttempt,
+                outcome: "error",
+              },
+              reconnectStartedAt,
+            );
+            reconnectStartedAtRef.current = null;
+          }
+        } finally {
+          reconnectResyncPromiseRef.current = null;
+        }
+      })();
+
+      return reconnectResyncPromiseRef.current;
+    },
+    [queryClient],
+  );
+
+  const scheduleReconnect = useCallback(
+    (delayMs?: number) => {
+      if (!enabled || closingRef.current) {
+        return;
+      }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        return;
+      }
+      if (
+        wsRef.current &&
+        (wsRef.current.readyState === WebSocket.OPEN ||
+          wsRef.current.readyState === WebSocket.CONNECTING)
+      ) {
+        return;
+      }
+
+      clearReconnectTimeout();
+      const delay =
+        delayMs ??
+        Math.min(
+          INITIAL_DELAY_MS * Math.pow(2, retryRef.current),
+          MAX_DELAY_MS,
+        );
+      if (delay <= 0) {
+        connectRef.current();
+        return;
+      }
+      timeoutRef.current = setTimeout(() => {
+        timeoutRef.current = null;
+        if (
+          closingRef.current ||
+          !enabled ||
+          (typeof navigator !== "undefined" && navigator.onLine === false)
+        ) {
+          return;
+        }
+        connectRef.current();
+      }, delay);
+    },
+    [clearReconnectTimeout, enabled],
+  );
+
+  const connect = useCallback(() => {
+    if (!enabled || closingRef.current) {
+      return;
+    }
+    if (
+      wsRef.current &&
+      (wsRef.current.readyState === WebSocket.OPEN ||
+        wsRef.current.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+
+    clearReconnectTimeout();
     setStatus("connecting");
     const protocol = location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${protocol}//${location.host}/ws`);
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (closingRef.current) {
+        ws.close();
+        return;
+      }
       const reconnectStartedAt = reconnectStartedAtRef.current;
+      const reconnectVersion = reconnectVersionRef.current;
       retryRef.current = 0;
       setStatus("connected");
       if (reconnectStartedAt !== null) {
-        clientPerformance.record("client.ws.reconnect_to_socket", performance.now() - reconnectStartedAt, {
-          attempt: retryRef.current
-        }, reconnectStartedAt);
-        reconnectStartedAtRef.current = null;
+        clientPerformance.record(
+          "client.ws.reconnect_to_socket",
+          performance.now() - reconnectStartedAt,
+          {
+            attempt: retryRef.current,
+          },
+          reconnectStartedAt,
+        );
+        void resyncAfterReconnect(reconnectVersion);
       }
     };
 
@@ -350,7 +523,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
           queryClient.setQueryData(["access"], payload.payload);
         }
         if (payload.type === "chat.history") {
-          queryClient.setQueryData(["sessions", payload.payload.sessionId, "messages"], payload.payload.messages);
+          queryClient.setQueryData(
+            ["sessions", payload.payload.sessionId, "messages"],
+            payload.payload.messages,
+          );
           chatSessionStore.handleHistoryEvent(payload.payload);
         }
         if (payload.type === "chat.stream.delta") {
@@ -367,11 +543,13 @@ export function useWebSocket(options: UseWebSocketOptions) {
         }
         if (payload.type === "job.output") {
           const chunkBytes = UTF8_ENCODER.encode(payload.payload.chunk).length;
-          const existing = pendingJobOutputRef.current.get(payload.payload.jobId) ?? {
+          const existing = pendingJobOutputRef.current.get(
+            payload.payload.jobId,
+          ) ?? {
             stdout: "",
             stderr: "",
             stdoutBytes: 0,
-            stderrBytes: 0
+            stderrBytes: 0,
           };
           if (payload.payload.stream === "stdout") {
             existing.stdout += payload.payload.chunk;
@@ -387,21 +565,34 @@ export function useWebSocket(options: UseWebSocketOptions) {
           terminalStore.updateSession(payload.payload);
         }
         if (payload.type === "terminal.output") {
-          terminalStore.appendOutput(payload.payload.sessionId, payload.payload.data);
+          terminalStore.appendOutput(
+            payload.payload.sessionId,
+            payload.payload.data,
+          );
         }
         if (payload.type === "terminal.closed") {
-          terminalStore.close(payload.payload.sessionId, payload.payload.reason);
+          terminalStore.close(
+            payload.payload.sessionId,
+            payload.payload.reason,
+          );
         }
         if (shouldPatchDashboard(payload)) {
-          queryClient.setQueryData<DashboardState | undefined>(["dashboard"], (current) => updateDashboardState(current, payload));
+          queryClient.setQueryData<DashboardState | undefined>(
+            ["dashboard"],
+            (current) => updateDashboardState(current, payload),
+          );
           if (payload.type === "sessions.updated") {
-            void queryClient.invalidateQueries({ queryKey: ["sessions", "archived"] });
+            void queryClient.invalidateQueries({
+              queryKey: ["sessions", "archived"],
+            });
           }
           if (shouldResyncDashboard(payload)) {
             syncDashboardSnapshot();
           }
           if (shouldRefreshStartupDiagnostics(payload)) {
-            void queryClient.invalidateQueries({ queryKey: ["startupDiagnostics"] });
+            void queryClient.invalidateQueries({
+              queryKey: ["startupDiagnostics"],
+            });
           }
         }
         if (payload.type === "performance.updated") {
@@ -415,68 +606,76 @@ export function useWebSocket(options: UseWebSocketOptions) {
 
     ws.onclose = () => {
       wsRef.current = null;
+      if (closingRef.current) {
+        return;
+      }
       setStatus("disconnected");
-      reconnectStartedAtRef.current = performance.now();
-
-      if (!enabled) return;
-
-      const delay = Math.min(INITIAL_DELAY_MS * Math.pow(2, retryRef.current), MAX_DELAY_MS);
+      reconnectVersionRef.current += 1;
+      if (!enabled) {
+        return;
+      }
+      if (reconnectStartedAtRef.current === null) {
+        reconnectStartedAtRef.current = performance.now();
+      }
       retryRef.current += 1;
-
-      timeoutRef.current = setTimeout(async () => {
-        try {
-          const [dashboardResponse, accessResponse] = await Promise.all([
-            fetch(SNAPSHOT_URL, { credentials: "include" }),
-            fetch("/api/access", { credentials: "include" })
-          ]);
-          if (dashboardResponse.ok) {
-            const data = await dashboardResponse.json();
-            queryClient.setQueryData(["dashboard"], data);
-          }
-          if (accessResponse.ok) {
-            const access = await accessResponse.json();
-            queryClient.setQueryData(["access"], access);
-          }
-          if (reconnectStartedAtRef.current !== null) {
-            clientPerformance.record(
-              "client.ws.reconnect_to_resync",
-              performance.now() - reconnectStartedAtRef.current,
-              {
-                attempt: retryRef.current
-              },
-              reconnectStartedAtRef.current
-            );
-          }
-        } catch {
-          // ignore
-        }
-        connect();
-      }, delay);
+      scheduleReconnect();
     };
 
     ws.onerror = () => {
       ws.close();
     };
   }, [
+    clearReconnectTimeout,
     enabled,
-    flushPendingRealtimeState,
     queryClient,
+    resyncAfterReconnect,
+    scheduleReconnect,
     syncDashboardSnapshot,
   ]);
+  connectRef.current = connect;
 
   useEffect(() => {
+    closingRef.current = false;
     connect();
-    return () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
+
+    const handleOnline = () => {
+      retryRef.current = 0;
+      if (reconnectStartedAtRef.current === null) {
+        reconnectStartedAtRef.current = performance.now();
       }
+      clearReconnectTimeout();
+      connectRef.current();
+    };
+
+    const handleOffline = () => {
+      clearReconnectTimeout();
+      if (
+        wsRef.current &&
+        (wsRef.current.readyState === WebSocket.OPEN ||
+          wsRef.current.readyState === WebSocket.CONNECTING)
+      ) {
+        wsRef.current.close();
+      }
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      closingRef.current = true;
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      clearReconnectTimeout();
       if (dashboardSyncTimeoutRef.current) {
         clearTimeout(dashboardSyncTimeoutRef.current);
         dashboardSyncTimeoutRef.current = null;
       }
       if (flushHandleRef.current !== null) {
-        if (typeof flushHandleRef.current === "number" && typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+        if (
+          typeof flushHandleRef.current === "number" &&
+          typeof window !== "undefined" &&
+          typeof window.cancelAnimationFrame === "function"
+        ) {
           window.cancelAnimationFrame(flushHandleRef.current);
         } else {
           clearTimeout(flushHandleRef.current as ReturnType<typeof setTimeout>);
@@ -488,10 +687,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
         wsRef.current = null;
       }
     };
-  }, [connect, flushPendingRealtimeState]);
+  }, [clearReconnectTimeout, connect, scheduleReconnect]);
 
   return {
     status,
-    send
+    send,
   };
 }

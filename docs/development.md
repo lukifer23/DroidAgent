@@ -58,11 +58,11 @@ pnpm verify:full
 - Server diagnostics live at `GET /api/diagnostics/performance`
 - Client timings are captured in-browser and surfaced in the Settings diagnostics card
 - `pnpm perf:server`
-  - measures `/api/access` and `/api/dashboard`
+  - measures the first cold `/api/access` and authenticated `/api/dashboard` requests, then the warm p95 request path for both routes
 - `pnpm perf:baseline`
   - refreshes `artifacts/perf/baseline.json` from the latest artifacts
 - `pnpm perf:check`
-  - enforces `perf-budgets.json` and baseline regression thresholds
+  - enforces `perf-budgets.json` and baseline regression thresholds, including shared shell/vendor chunks
 - `pnpm perf:report`
   - prints the latest server and E2E perf artifacts
 
@@ -71,9 +71,10 @@ pnpm verify:full
 1. Run `pnpm verify:full`.
 2. Run `pnpm perf:server` and `pnpm perf:e2e` when you are updating the baseline or checking a perf-sensitive change.
 3. Run `pnpm perf:report`, `pnpm perf:baseline`, and `pnpm perf:check`.
-4. Run `pnpm perf:live` when validating real OpenClaw/Ollama behavior on the live path.
-5. Review `artifacts/perf/` and the Settings diagnostics card for regressions.
-6. Update docs when commands, routes, supported operational flows, or perf budgets change.
+4. If you changed how a perf artifact is defined or added new tracked shared chunks, refresh the baseline in the same change instead of leaving the gate on stale semantics.
+5. Run `pnpm perf:live` when validating real OpenClaw/Ollama behavior on the live path.
+6. Review `artifacts/perf/` and the Settings diagnostics card for regressions.
+7. Update docs when commands, routes, supported operational flows, or perf budgets change.
 
 ## Boundary Review Checklist
 

@@ -126,7 +126,11 @@ button,
   border: 0;
   border-radius: 12px;
   padding: 0.78rem 0.96rem;
-  background: linear-gradient(135deg, var(--interactive), var(--interactive-strong));
+  background: linear-gradient(
+    135deg,
+    var(--interactive),
+    var(--interactive-strong)
+  );
   color: #f7fbff;
   font-weight: 700;
   cursor: pointer;
@@ -1403,6 +1407,11 @@ small {
   overflow-y: auto;
   padding: 0;
   scrollbar-width: thin;
+}
+
+.chat-virtual-spacer {
+  min-height: 0;
+  pointer-events: none;
 }
 
 .operator-run-strip {
@@ -2683,7 +2692,8 @@ small {
   overflow: hidden;
   border-radius: 18px;
   border: 1px solid var(--border);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 55%),
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 55%),
     rgba(11, 15, 20, 0.74);
 }
 

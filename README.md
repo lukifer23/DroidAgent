@@ -113,8 +113,11 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - Explicit memory prepare now fingerprints the durable-memory source set and skips the expensive reindex path when the local index is already current.
 - Memory-prepare diagnostics now stamp `source` context (`operator`, `resume`, `prewarm`) and emit joined completion samples when an operator request attaches to an in-flight prepare, so bootstrap/prewarm work no longer pollutes interactive perf analysis.
 - Server request-path warmup now waits for startup restore, primes the main dashboard/access caches before readiness completes, and keeps the dashboard hot path on quick memory status instead of forcing a live OpenClaw memory probe on first load.
-- Route chunk prefetch is intentionally narrow now: only `Files` and `Settings` are prefetched after auth, while Chat/Terminal hot surfaces trim heavy paint effects and markdown loads lazily only when needed.
+- The `Files` route is now kept hot in the main operator shell, while `Settings`, `Jobs`, `Models`, `Channels`, and `Terminal` still warm during idle after auth so route switches stay responsive without pulling every route into the initial bootstrap path.
 - Server diagnostics now split chat accept, first-delta wait, first-delta forward, full relay, memory draft apply, and memory reindex timings so operator latency surfaces stay honest.
+- Server perf artifacts now record the first real authenticated `GET /api/dashboard` request separately from cached dashboard compose timing, so cold-path reporting reflects what the operator actually waits on instead of a warmed slice cache.
+- Perf budgets now guard the large shared client chunks that were previously invisible to the gate: app-shell, React vendor, markdown, and xterm are budgeted alongside the main entry and terminal route chunks.
+- Websocket reconnect now reopens the socket as soon as the browser comes back online and refreshes dashboard/access state in the background, which shortens reconnect-visible downtime without splitting transport ownership.
 - Performance artifacts are now actively budgeted. `pnpm perf:baseline` refreshes the baseline snapshot and `pnpm perf:check` enforces `perf-budgets.json` against the latest artifacts and baseline thresholds.
 - Performance validation now has a dual track: deterministic harness metrics remain the CI regression gate (`perf:server`, `perf:e2e`, `perf:check`), while `perf:live` is opt-in reporting for real OpenClaw/Ollama behavior.
 - File APIs are workspace-relative and text-only.

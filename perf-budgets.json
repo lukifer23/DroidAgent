@@ -16,10 +16,10 @@
       "budgetMs": 250
     },
     {
-      "id": "server.dashboard.cold.max",
-      "source": "serverDiagnostics",
-      "name": "dashboard.snapshot",
-      "stat": "maxDurationMs",
+      "id": "server.dashboard.cold.request.max",
+      "source": "serverCold",
+      "path": "/api/dashboard",
+      "stat": "durationMs",
       "budgetMs": 750
     },
     {
@@ -95,11 +95,46 @@
       "budgetBytes": 350000
     },
     {
+      "id": "build.app_shell.shared.bytes",
+      "source": "build",
+      "keyPrefix": "_app-shell-",
+      "stat": "sizeBytes",
+      "budgetBytes": 260000
+    },
+    {
+      "id": "build.react_vendor.shared.bytes",
+      "source": "build",
+      "keyPrefix": "_react-vendor-",
+      "stat": "sizeBytes",
+      "budgetBytes": 190000
+    },
+    {
+      "id": "build.router_vendor.shared.bytes",
+      "source": "build",
+      "keyPrefix": "_router-vendor-",
+      "stat": "sizeBytes",
+      "budgetBytes": 20000
+    },
+    {
+      "id": "build.markdown.shared.bytes",
+      "source": "build",
+      "keyIncludes": "react-markdown/index.js",
+      "stat": "sizeBytes",
+      "budgetBytes": 130000
+    },
+    {
       "id": "build.terminal.route.bytes",
       "source": "build",
       "entry": "src/screens/terminal-screen.tsx",
       "stat": "sizeBytes",
       "budgetBytes": 300000
+    },
+    {
+      "id": "build.terminal.xterm.bytes",
+      "source": "build",
+      "keyIncludes": "@xterm/xterm/lib/xterm.mjs",
+      "stat": "sizeBytes",
+      "budgetBytes": 360000
     }
   ]
 }

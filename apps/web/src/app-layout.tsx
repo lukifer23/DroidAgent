@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
+import type { DashboardState } from "@droidagent/shared";
 
 import { useAccessQuery, useAuthQuery, useDashboardQuery } from "./app-data";
 import { useDroidAgentApp } from "./app-context";
@@ -29,10 +30,7 @@ import {
 import { useDecisionActions } from "./hooks/use-decision-actions";
 import { useViewportMeasure } from "./hooks/use-viewport-measure";
 import { postJson } from "./lib/api";
-import {
-  formatHostBytes,
-  formatTokenBudget,
-} from "./lib/formatters";
+import { formatHostBytes, formatTokenBudget } from "./lib/formatters";
 import {
   getPendingDecisions,
   getResolvedDecisions,
@@ -52,6 +50,34 @@ const navItems = [
   { to: "/settings", label: "Settings", icon: Settings2, readyOnly: true },
 ] as const;
 
+interface AppLayoutDashboardSlice {
+  build: DashboardState["build"];
+  canonicalUrl: DashboardState["canonicalUrl"];
+  decisions: DashboardState["decisions"];
+  hostPressure: DashboardState["hostPressure"];
+  launchAgent: DashboardState["launchAgent"];
+  memory: DashboardState["memory"];
+  providers: DashboardState["providers"];
+  runtimes: DashboardState["runtimes"];
+  setup: DashboardState["setup"];
+}
+
+function selectAppLayoutDashboard(
+  data: DashboardState,
+): AppLayoutDashboardSlice {
+  return {
+    build: data.build,
+    canonicalUrl: data.canonicalUrl,
+    decisions: data.decisions,
+    hostPressure: data.hostPressure,
+    launchAgent: data.launchAgent,
+    memory: data.memory,
+    providers: data.providers,
+    runtimes: data.runtimes,
+    setup: data.setup,
+  };
+}
+
 export function AppLayout() {
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -66,7 +92,10 @@ export function AppLayout() {
   } = useDroidAgentApp();
   const authQuery = useAuthQuery();
   const accessQuery = useAccessQuery();
-  const dashboardQuery = useDashboardQuery(Boolean(authQuery.data?.user));
+  const dashboardQuery = useDashboardQuery(
+    Boolean(authQuery.data?.user),
+    selectAppLayoutDashboard,
+  );
   const [hostDrawerOpen, setHostDrawerOpen] = useState(false);
   const [decisionDrawerOpen, setDecisionDrawerOpen] = useState(false);
   const shellRef = useRef<HTMLElement | null>(null);
@@ -90,8 +119,9 @@ export function AppLayout() {
   const isFilesRoute = location.pathname === "/files";
   const isTerminalRoute = location.pathname === "/terminal";
   const activeProvider = providers.find((provider) => provider.enabled);
-  const runtimeCount = runtimes.filter((runtime) => runtime.state === "running")
-    .length;
+  const runtimeCount = runtimes.filter(
+    (runtime) => runtime.state === "running",
+  ).length;
   const passkeyCount = setup?.passkeyConfigured ? 1 : 0;
   const pendingDecisions = getPendingDecisions(decisions);
   const recentDecisions = getResolvedDecisions(decisions);
@@ -140,7 +170,11 @@ export function AppLayout() {
 
   if (!authQuery.data?.user) {
     return (
-      <Suspense fallback={<main className="app-shell loading">Loading DroidAgent...</main>}>
+      <Suspense
+        fallback={
+          <main className="app-shell loading">Loading DroidAgent...</main>
+        }
+      >
         <AuthScreen />
       </Suspense>
     );
@@ -192,8 +226,7 @@ export function AppLayout() {
               ? "Telemetry fallback"
               : "Normal",
       detail:
-        hostPressure?.message ??
-        "Host pressure telemetry is still loading.",
+        hostPressure?.message ?? "Host pressure telemetry is still loading.",
       tone:
         hostPressureLevel === "critical"
           ? "critical"
@@ -206,13 +239,16 @@ export function AppLayout() {
       value: memory?.semanticReady ? "Indexed" : "Pending",
       detail: memory?.semanticReady
         ? `${memory.indexedFiles} files • ${memory.indexedChunks} chunks`
-        : memory?.embeddingProbeError ??
-          "Semantic memory is not prepared yet.",
+        : (memory?.embeddingProbeError ??
+          "Semantic memory is not prepared yet."),
       tone: memory?.semanticReady ? "good" : "warn",
     },
     {
       label: "Decisions",
-      value: pendingDecisions.length > 0 ? `${pendingDecisions.length} waiting` : "Clear",
+      value:
+        pendingDecisions.length > 0
+          ? `${pendingDecisions.length} waiting`
+          : "Clear",
       detail:
         pendingDecisions.length > 0
           ? "One or more owner decisions need attention."
@@ -223,8 +259,7 @@ export function AppLayout() {
       label: "LaunchAgent",
       value: launchAgent?.running ? "Running" : "Needs attention",
       detail:
-        launchAgent?.healthMessage ??
-        "LaunchAgent health is still loading.",
+        launchAgent?.healthMessage ?? "LaunchAgent health is still loading.",
       tone: launchAgent?.running ? "good" : "warn",
     },
     ...(hostPressure && hostPressureAvailableBytes !== null
@@ -248,9 +283,12 @@ export function AppLayout() {
     decision: (typeof pendingDecisions)[number],
     resolution: "approved" | "denied",
   ) => {
-    void runAction(async () => {
-      await resolveDecision(decision, resolution);
-    }, decisionResolutionNotice(decision, resolution));
+    void runAction(
+      async () => {
+        await resolveDecision(decision, resolution);
+      },
+      decisionResolutionNotice(decision, resolution),
+    );
   };
 
   return (
@@ -284,7 +322,9 @@ export function AppLayout() {
               onClick={() => setDecisionDrawerOpen(true)}
             >
               Decisions
-              <span className={`topbar-action-badge${pendingDecisions.length > 0 ? " warn" : ""}`}>
+              <span
+                className={`topbar-action-badge${pendingDecisions.length > 0 ? " warn" : ""}`}
+              >
                 {pendingDecisions.length}
               </span>
             </button>
@@ -306,7 +346,6 @@ export function AppLayout() {
             </button>
           </div>
         </div>
-
       </header>
 
       {!isOnline ? (
@@ -321,21 +360,25 @@ export function AppLayout() {
       ) : null}
       {isChatRoute && (notice || errorMessage) ? (
         <div className="notice-stack">
-          {notice ? <section className="status-banner success">{notice}</section> : null}
+          {notice ? (
+            <section className="status-banner success">{notice}</section>
+          ) : null}
           {errorMessage ? (
             <section className="status-banner error">{errorMessage}</section>
           ) : null}
         </div>
       ) : null}
-      {!isChatRoute && notice ? <section className="status-banner success">{notice}</section> : null}
+      {!isChatRoute && notice ? (
+        <section className="status-banner success">{notice}</section>
+      ) : null}
       {!isChatRoute && errorMessage ? (
         <section className="status-banner error">{errorMessage}</section>
       ) : null}
 
       {!operatorReady && !isSetupRoute ? (
         <section className="status-banner offline">
-          DroidAgent still needs a short setup pass before the live operator flow
-          is ready. <Link to="/setup">Finish setup</Link>
+          DroidAgent still needs a short setup pass before the live operator
+          flow is ready. <Link to="/setup">Finish setup</Link>
         </section>
       ) : null}
 
