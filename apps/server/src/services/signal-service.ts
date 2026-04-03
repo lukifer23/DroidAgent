@@ -7,7 +7,7 @@ import { nowIso } from "@droidagent/shared";
 import { SIGNAL_DAEMON_PORT, SIGNAL_DAEMON_URL, baseEnv, paths } from "../env.js";
 import { runCommand } from "../lib/process.js";
 import { appStateService } from "./app-state-service.js";
-import { openclawService } from "./openclaw-service.js";
+import { openclawChannelFacet } from "./openclaw-service-facets.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -44,7 +44,7 @@ export class SignalService {
 
   invalidateStateCache(): void {
     this.lastRefreshedAt = 0;
-    openclawService.invalidateChannelStatusCache();
+    openclawChannelFacet.invalidateChannelStatusCache();
   }
 
   private async which(binary: string): Promise<string | null> {
@@ -591,7 +591,7 @@ export class SignalService {
     });
 
     await this.waitForDaemon();
-    await openclawService.configureSignal({
+    await openclawChannelFacet.configureSignal({
       cliPath: settings.signalCliPath ?? (await this.detectCliPath()) ?? cliPath,
       accountId,
       httpUrl: SIGNAL_DAEMON_URL
@@ -654,7 +654,7 @@ export class SignalService {
     }
 
     await this.stopDaemon();
-    await openclawService.removeSignalChannel();
+    await openclawChannelFacet.removeSignalChannel();
 
     if (accountId && params.unregister) {
       const unregisterArgs = ["-a", accountId, "unregister"];

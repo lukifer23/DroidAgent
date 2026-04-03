@@ -6,7 +6,7 @@ import path from "node:path";
 import { FileContentSchema, WorkspaceEntrySchema } from "@droidagent/shared";
 
 import { appStateService } from "./app-state-service.js";
-import { openclawService } from "./openclaw-service.js";
+import { openclawWorkspaceFacet } from "./openclaw-service-facets.js";
 import { performanceService } from "./performance-service.js";
 
 const MAX_PATH_COMPONENTS = 64;
@@ -220,7 +220,7 @@ export class FileService {
     try {
       const normalizedTarget = normalizeClientPath(target);
       if (isFirstClassMemoryPath(normalizedTarget)) {
-        await openclawService.prepareWorkspaceScaffold();
+        await openclawWorkspaceFacet.prepareWorkspaceScaffold();
       }
       const { absolutePath, clientPath } = await this.resolveWithinRoot(normalizedTarget);
       const stat = await fs.stat(absolutePath);

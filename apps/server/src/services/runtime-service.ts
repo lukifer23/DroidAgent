@@ -29,7 +29,7 @@ import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 import { harnessService } from "./harness-service.js";
 import { keychainService } from "./keychain-service.js";
-import { openclawService } from "./openclaw-service.js";
+import { openclawRuntimeFacet } from "./openclaw-service-facets.js";
 import { signalService } from "./signal-service.js";
 
 const LLAMA_CPP_READY_TIMEOUT_MS = 300_000;
@@ -366,7 +366,7 @@ export class RuntimeService {
 
   async startRuntime(runtimeId: RuntimeId): Promise<void> {
     if (runtimeId === "openclaw") {
-      await openclawService.startGateway();
+      await openclawRuntimeFacet.startGateway();
       this.invalidateCaches();
       return;
     }
@@ -387,7 +387,7 @@ export class RuntimeService {
 
   async stopRuntime(runtimeId: RuntimeId): Promise<void> {
     if (runtimeId === "openclaw") {
-      await openclawService.stopGateway();
+      await openclawRuntimeFacet.stopGateway();
       this.invalidateCaches();
       return;
     }

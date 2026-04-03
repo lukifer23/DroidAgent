@@ -11,7 +11,7 @@ import { accessService } from "./access-service.js";
 import { appStateService } from "./app-state-service.js";
 import { cloudflareRemoteAccessProvider } from "./remote-access-service.js";
 import { keychainService } from "./keychain-service.js";
-import { openclawService } from "./openclaw-service.js";
+import { openclawRuntimeFacet } from "./openclaw-service-facets.js";
 import { runtimeService } from "./runtime-service.js";
 import { signalService } from "./signal-service.js";
 
@@ -135,9 +135,9 @@ export class StartupService {
     }
 
     try {
-      await openclawService.ensureConfigured();
+      await openclawRuntimeFacet.ensureConfigured();
       if (applyChanges) {
-        await openclawService.startGateway();
+        await openclawRuntimeFacet.startGateway();
       }
       diagnostics.push(
         StartupDiagnosticSchema.parse({

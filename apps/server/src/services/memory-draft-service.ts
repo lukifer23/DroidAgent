@@ -25,8 +25,8 @@ import {
 import { db, schema } from "../db/index.js";
 import { computeMemorySourceFingerprint } from "../lib/memory-fingerprint.js";
 import { appStateService } from "./app-state-service.js";
+import { openclawWorkspaceFacet } from "./openclaw-service-facets.js";
 import { performanceService } from "./performance-service.js";
-import { openclawService } from "./openclaw-service.js";
 
 function sourceKindLabel(kind: MemoryDraft["sourceKind"]): string {
   if (kind === "chatMessage") {
@@ -323,7 +323,7 @@ export class MemoryDraftService {
   ): Promise<MemoryDraftApplyResult> {
     const parsed = MemoryDraftApplyRequestSchema.parse(input);
     const draft = await this.getDraft(draftId);
-    const scaffold = await openclawService.prepareWorkspaceScaffold();
+    const scaffold = await openclawWorkspaceFacet.prepareWorkspaceScaffold();
     if (draft.status === "applied") {
       return MemoryDraftApplyResultSchema.parse({
         draft,
@@ -348,7 +348,7 @@ export class MemoryDraftService {
       draft.target === "preferences"
         ? scaffold.preferencesFilePath
         : draft.target === "todayNote"
-          ? await openclawService.ensureTodayMemoryNote()
+          ? await openclawWorkspaceFacet.ensureTodayMemoryNote()
           : scaffold.memoryFilePath;
     const existingContent = await readUtf8OrEmpty(targetPath);
     const nextContent = appendMarkdownBlock(
@@ -360,11 +360,11 @@ export class MemoryDraftService {
     let reindexMode: "incremental" | "force" = "incremental";
     let reindexError: Error | null = null;
     try {
-      await openclawService.reindexMemory({ force: false });
+      await openclawWorkspaceFacet.reindexMemory({ force: false });
     } catch (error) {
       reindexMode = "force";
       try {
-        await openclawService.reindexMemory({ force: true });
+        await openclawWorkspaceFacet.reindexMemory({ force: true });
       } catch (forceError) {
         reindexError =
           forceError instanceof Error

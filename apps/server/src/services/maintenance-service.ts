@@ -17,7 +17,7 @@ import {
 
 import { db, schema } from "../db/index.js";
 import { baseEnv, paths, SERVER_PORT } from "../env.js";
-import { openclawService } from "./openclaw-service.js";
+import { openclawRuntimeFacet } from "./openclaw-service-facets.js";
 import { runtimeService } from "./runtime-service.js";
 import { launchAgentService } from "./launch-agent-service.js";
 import { jobService } from "./job-service.js";
@@ -354,7 +354,7 @@ export class MaintenanceService {
     );
     const restoreDeadline = Date.now() + timeoutMs;
     while (Date.now() < restoreDeadline) {
-      const openclawStatus = await openclawService.status();
+      const openclawStatus = await openclawRuntimeFacet.status();
       if (openclawStatus.state === "running") {
         return;
       }
@@ -464,7 +464,7 @@ export class MaintenanceService {
         await runtimeService.stopRuntime("ollama");
         await runtimeService.stopRuntime("llamaCpp");
       }
-      await openclawService.stopGateway();
+      await openclawRuntimeFacet.stopGateway();
 
       const launchAgentStatus = await launchAgentService.status();
       if (launchAgentStatus.loaded) {

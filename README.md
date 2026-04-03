@@ -120,7 +120,7 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - Server perf artifacts now record the first real authenticated `GET /api/dashboard` request separately from cached dashboard compose timing, so cold-path reporting reflects what the operator actually waits on instead of a warmed slice cache.
 - Perf budgets now guard the large shared client chunks that were previously invisible to the gate: app-shell, React vendor, markdown, and xterm are budgeted alongside the main entry and terminal route chunks.
 - Websocket reconnect now reopens the socket as soon as the browser comes back online and refreshes dashboard/access state in the background, which shortens reconnect-visible downtime without splitting transport ownership.
-- Hot server consumers now import focused OpenClaw facets for dashboard status, websocket fanout, and owner operations instead of pulling the full `openclawService` surface into every orchestration layer.
+- Hot server consumers now import focused OpenClaw facets for dashboard status, websocket fanout, owner operations, memory/workspace flows, runtime/bootstrap restore, and channel integration, leaving direct `openclawService` usage isolated to the harness layer plus the facet module.
 - Performance artifacts are now actively budgeted. `pnpm perf:baseline` refreshes the baseline snapshot and `pnpm perf:check` enforces `perf-budgets.json` against the latest artifacts and baseline thresholds.
 - Performance validation now has a dual track: deterministic harness metrics remain the CI regression gate (`perf:server`, `perf:e2e`, `perf:check`), while `perf:live` is opt-in reporting for real OpenClaw/Ollama behavior.
 - File APIs are workspace-relative and text-only.

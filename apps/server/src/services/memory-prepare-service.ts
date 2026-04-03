@@ -2,7 +2,7 @@ import { nowIso, type MemoryStatus } from "@droidagent/shared";
 
 import { computeMemorySourceFingerprint } from "../lib/memory-fingerprint.js";
 import { appStateService } from "./app-state-service.js";
-import { openclawService } from "./openclaw-service.js";
+import { openclawMemoryFacet } from "./openclaw-service-facets.js";
 import { performanceService } from "./performance-service.js";
 import { runtimeService } from "./runtime-service.js";
 
@@ -29,7 +29,7 @@ export class MemoryPrepareService {
     update: Parameters<typeof appStateService.updateMemoryPrepareStatus>[0],
   ): Promise<void> {
     await appStateService.updateMemoryPrepareStatus(update);
-    openclawService.invalidateMemoryStatusCache();
+    openclawMemoryFacet.invalidateMemoryStatusCache();
     this.emitUpdate();
   }
 
@@ -75,7 +75,7 @@ export class MemoryPrepareService {
     if (this.activePrepare) {
       this.trackJoinedPrepare(params);
       return {
-        status: await openclawService.memoryStatusQuick(),
+        status: await openclawMemoryFacet.memoryStatusQuick(),
         started: false,
       };
     }
@@ -95,7 +95,7 @@ export class MemoryPrepareService {
     });
 
     return {
-      status: await openclawService.memoryStatusQuick(),
+      status: await openclawMemoryFacet.memoryStatusQuick(),
       started: true,
     };
   }
@@ -163,7 +163,7 @@ export class MemoryPrepareService {
         await runtimeService.ensureOllamaModel(settings.ollamaEmbeddingModel);
       }
 
-      const currentStatus = await openclawService.memoryStatusQuick();
+      const currentStatus = await openclawMemoryFacet.memoryStatusQuick();
       const currentFingerprint = await computeMemorySourceFingerprint({
         workspaceRoot: currentStatus.effectiveWorkspaceRoot,
         memoryDirectory: currentStatus.memoryDirectory,
@@ -202,7 +202,7 @@ export class MemoryPrepareService {
         progressLabel: "Refreshing semantic memory index.",
         error: null,
       });
-      const status = await openclawService.prepareSemanticMemory({
+      const status = await openclawMemoryFacet.prepareSemanticMemory({
         reindex: true,
       });
       const fingerprint = await computeMemorySourceFingerprint({
@@ -243,7 +243,7 @@ export class MemoryPrepareService {
             ? error.message
             : "Semantic memory prepare failed.",
       });
-      return await openclawService.memoryStatus();
+      return await openclawMemoryFacet.memoryStatus();
     }
   }
 }

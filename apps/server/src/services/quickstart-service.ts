@@ -15,7 +15,11 @@ import {
 import { ollamaModelSupportsVision } from "../lib/ollama.js";
 import { accessService } from "./access-service.js";
 import { harnessService } from "./harness-service.js";
-import { openclawService } from "./openclaw-service.js";
+import {
+  openclawMemoryFacet,
+  openclawRuntimeFacet,
+  openclawWorkspaceFacet,
+} from "./openclaw-service-facets.js";
 import { runtimeService } from "./runtime-service.js";
 
 function expandHomePath(input: string): string {
@@ -83,8 +87,8 @@ export class QuickstartService {
       actions.push(`Workspace set to ${workspaceRoot}.`);
     }
 
-    await openclawService.prepareWorkspaceContext();
-    const initialMemoryStatus = await openclawService.memoryStatus();
+    await openclawWorkspaceFacet.prepareWorkspaceContext();
+    const initialMemoryStatus = await openclawMemoryFacet.memoryStatus();
 
     let runtimes = await runtimeService.getRuntimeStatuses();
     let ollama = runtimes.find((runtime) => runtime.id === "ollama");
@@ -103,7 +107,7 @@ export class QuickstartService {
     }
 
     if (openclaw?.state !== "running") {
-      await openclawService.startGateway();
+      await openclawRuntimeFacet.startGateway();
       actions.push("Started OpenClaw.");
     }
 
@@ -190,7 +194,7 @@ export class QuickstartService {
       }
     }
 
-    const memoryStatus = await openclawService.prepareSemanticMemory({
+    const memoryStatus = await openclawMemoryFacet.prepareSemanticMemory({
       reindex: true,
     });
     if (!initialMemoryStatus.semanticReady && memoryStatus.semanticReady) {

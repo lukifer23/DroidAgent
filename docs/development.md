@@ -38,6 +38,7 @@ pnpm verify:full
 
 - server realtime mutation fanout should go through the shared slice-aware queue in `apps/server/src/lib/realtime-mutation-queue.ts`
 - server callers that only need OpenClaw memory/context/gateway status should import the focused facets in `apps/server/src/services/openclaw-service-facets.ts`, not the full `openclawService`
+- direct `openclawService` imports outside the harness layer should now be the exception; route/services should depend on focused facets unless they are implementing the harness boundary itself
 - browser chat/session lifecycle state should go through `apps/web/src/lib/chat-session-store.ts`
 - websocket transport should apply chat and terminal events in `apps/web/src/hooks/use-websocket.ts`, not in parallel consumers
 - OpenClaw remains the source of truth for session lifecycle, approvals, pairing, and execution; DroidAgent caches and annotates that state for UX only

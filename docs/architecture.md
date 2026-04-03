@@ -35,7 +35,7 @@ The canonical public route, websocket, script, and data-path inventory lives in 
 ## OpenClaw integration
 
 - Lifecycle, config/bootstrap, chat relay/session handling, memory state, approvals, channels, and pairing continue through the OpenClaw CLI/Gateway behind the harness surface.
-- Server consumers that only need a narrow slice of OpenClaw behavior now import focused internal facets for dashboard status, realtime fanout, or owner operations instead of depending on the full `openclawService` surface.
+- Server consumers that only need a narrow slice of OpenClaw behavior now import focused internal facets for dashboard status, realtime fanout, owner operations, memory/workspace flows, runtime/bootstrap restore, and channel integration instead of depending on the full `openclawService` surface.
 - Live chat now uses a server-side relay path into the OpenClaw Chat Completions endpoint on the local gateway.
 - DroidAgent re-emits sanitized stream events to the browser over its own WebSocket.
 - OpenClaw remains loopback-only with token auth.

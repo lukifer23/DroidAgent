@@ -15,7 +15,7 @@ import { db, schema } from "../db/index.js";
 import type { AuthUser, CurrentAuthSession } from "./auth-service.js";
 import { harnessService } from "./harness-service.js";
 import { memoryDraftService } from "./memory-draft-service.js";
-import { openclawService } from "./openclaw-service.js";
+import { openclawChannelFacet } from "./openclaw-service-facets.js";
 
 const RECENT_RESOLVED_LIMIT = 20;
 
@@ -420,7 +420,7 @@ export class DecisionService {
         "Signal pairing request is no longer pending. Refresh decisions and try again.",
       );
     }
-    await openclawService.resolveSignalPairing(code, resolution);
+    await openclawChannelFacet.resolveSignalPairing(code, resolution);
     return await this.persistDecision(
       this.buildChannelPairingDecision(pairing, {
         actor,

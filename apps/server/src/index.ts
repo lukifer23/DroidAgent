@@ -39,7 +39,7 @@ import {
   MemoryDraftStaleError,
 } from "./services/memory-draft-service.js";
 import { memoryPrepareService } from "./services/memory-prepare-service.js";
-import { openclawService } from "./services/openclaw-service.js";
+import { openclawRuntimeFacet } from "./services/openclaw-service-facets.js";
 import { runtimeService } from "./services/runtime-service.js";
 import { appStateService } from "./services/app-state-service.js";
 import { buildInfoService } from "./services/build-info-service.js";
@@ -613,7 +613,7 @@ if (fs.existsSync(paths.webDistDir)) {
 }
 
 if (!TEST_MODE) {
-  void openclawService.ensureConfigured().catch((error) => {
+  void openclawRuntimeFacet.ensureConfigured().catch((error) => {
     console.error("Failed to seed OpenClaw configuration", error);
   });
 }
