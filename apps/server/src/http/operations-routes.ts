@@ -20,7 +20,7 @@ import { keychainService } from "../services/keychain-service.js";
 import { maintenanceService } from "../services/maintenance-service.js";
 import { memoryDraftService } from "../services/memory-draft-service.js";
 import { memoryPrepareService } from "../services/memory-prepare-service.js";
-import { openclawService } from "../services/openclaw-service.js";
+import { openclawOperationsFacet } from "../services/openclaw-service-facets.js";
 import { performanceService } from "../services/performance-service.js";
 import { quickstartService } from "../services/quickstart-service.js";
 import { runtimeService } from "../services/runtime-service.js";
@@ -144,7 +144,7 @@ export function registerOperationsRoutes(
   app.get("/api/memory/status", async (c) => {
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;
-    return c.json(await openclawService.prepareWorkspaceContext());
+    return c.json(await openclawOperationsFacet.prepareWorkspaceContext());
   });
 
   app.get("/api/memory/drafts", async (c) => {
@@ -264,8 +264,8 @@ export function registerOperationsRoutes(
     const metric = performanceService.start("server", "memory.todayNote");
     try {
       const [notePath, status] = await Promise.all([
-        openclawService.ensureTodayMemoryNote(),
-        openclawService.memoryStatus(),
+        openclawOperationsFacet.ensureTodayMemoryNote(),
+        openclawOperationsFacet.memoryStatus(),
       ]);
       metric.finish({
         workspaceRoot: status.effectiveWorkspaceRoot,
@@ -323,7 +323,7 @@ export function registerOperationsRoutes(
         websocketHub.publishSessionsUpdated(),
       ]);
     } else if (action === "refreshHarnessHealth") {
-      await openclawService.status();
+      await openclawOperationsFacet.status();
       await websocketHub.publishRuntimeUpdated();
       result = { refreshed: true };
     } else if (action === "reconnectResync") {
@@ -406,7 +406,7 @@ export function registerOperationsRoutes(
       return c.json({ error: "Workspace root does not exist." }, 400);
     }
     await appStateService.updateRuntimeSettings({ workspaceRoot });
-    await openclawService.prepareWorkspaceContext();
+    await openclawOperationsFacet.prepareWorkspaceContext();
     const state = await appStateService.markSetupStepCompleted("workspace", {
       workspaceRoot,
     });
@@ -442,7 +442,7 @@ export function registerOperationsRoutes(
       modelId: string;
     };
     await runtimeService.pullModel(body.runtimeId, body.modelId);
-    await openclawService.startGateway();
+    await openclawOperationsFacet.startGateway();
     const state = await appStateService.markSetupStepCompleted(
       "providerRegistration",
       {},
@@ -537,7 +537,9 @@ export function registerOperationsRoutes(
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;
     const body = (await c.req.json()) as { enabled: boolean };
-    const status = await openclawService.setSmartContextManagement(body.enabled);
+    const status = await openclawOperationsFacet.setSmartContextManagement(
+      body.enabled,
+    );
     await websocketHub.publishUpdates("memory", "context");
     return c.json(status);
   });

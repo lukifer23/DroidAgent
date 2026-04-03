@@ -194,15 +194,15 @@ This table is the maintained target set for the perf workflow.
 
 Validated on `2026-04-03`:
 
-- server `GET /api/access` p95: `2.39 ms`
-- server `GET /api/dashboard` p95: `2.37 ms`
-- server first authenticated `GET /api/dashboard`: `3.70 ms`
-- E2E cold dashboard p95: `8.81 ms`
-- E2E route switch p95: `8.10 ms`
-- E2E reconnect to resync p95: `23.15 ms`
-- E2E chat first token visible p95: `110.67 ms`
-- E2E memory prepare accepted p95: `6.10 ms`
-- E2E memory prepare completion p95: `16.07 ms`
+- server `GET /api/access` p95: `1.97 ms`
+- server `GET /api/dashboard` p95: `2.18 ms`
+- server first authenticated `GET /api/dashboard`: `2.50 ms`
+- E2E cold dashboard p95: `10.23 ms`
+- E2E route switch p95: `9.10 ms`
+- E2E reconnect to resync p95: `25.08 ms`
+- E2E chat first token visible p95: `54.00 ms`
+- E2E memory prepare accepted p95: `7.30 ms`
+- E2E memory prepare completion p95: `19.12 ms`
 - main entry JS: `16.61 kB`
 - shared app-shell JS: `248.54 kB`
 - shared React vendor JS: `178.32 kB`
@@ -211,4 +211,4 @@ Validated on `2026-04-03`:
 - terminal route JS: `9.69 kB`
 - xterm JS: `340.36 kB`
 
-This validated run clears the stricter `180 ms` route-switch budget along with the other checked-in deterministic perf gates.
+This validated run clears the stricter `180 ms` route-switch budget along with the other checked-in deterministic perf gates. The baseline was refreshed on this secure OpenClaw dependency tree because the upgraded runtime stayed well inside the absolute budgets while shifting a few low-millisecond E2E timings above the older regression snapshot.

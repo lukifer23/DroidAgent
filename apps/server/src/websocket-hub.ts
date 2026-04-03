@@ -24,7 +24,7 @@ import { launchAgentService } from "./services/launch-agent-service.js";
 import { maintenanceService } from "./services/maintenance-service.js";
 import { memoryDraftService } from "./services/memory-draft-service.js";
 import { memoryPrepareService } from "./services/memory-prepare-service.js";
-import { openclawService } from "./services/openclaw-service.js";
+import { openclawRealtimeFacet } from "./services/openclaw-service-facets.js";
 import { performanceService } from "./services/performance-service.js";
 import { runtimeService } from "./services/runtime-service.js";
 import { sessionLifecycleService } from "./services/session-lifecycle-service.js";
@@ -273,7 +273,7 @@ export class WebsocketHub {
           {
             type: "context.updated",
             payload: await load("context.updated", () =>
-              openclawService.contextManagementStatus(),
+              openclawRealtimeFacet.contextManagementStatus(),
             ),
           },
           {
@@ -294,7 +294,7 @@ export class WebsocketHub {
           {
             type: "memory.updated",
             payload: await load("memory.updated", () =>
-              openclawService.memoryStatus(),
+              openclawRealtimeFacet.memoryStatus(),
             ),
           },
           {

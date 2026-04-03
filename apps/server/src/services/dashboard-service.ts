@@ -12,7 +12,7 @@ import { launchAgentService } from "./launch-agent-service.js";
 import { maintenanceService } from "./maintenance-service.js";
 import { decisionService } from "./decision-service.js";
 import { memoryDraftService } from "./memory-draft-service.js";
-import { openclawService } from "./openclaw-service.js";
+import { openclawDashboardFacet } from "./openclaw-service-facets.js";
 import { performanceService } from "./performance-service.js";
 import { runtimeService } from "./runtime-service.js";
 import { sessionLifecycleService } from "./session-lifecycle-service.js";
@@ -64,7 +64,7 @@ export class DashboardService {
     Awaited<ReturnType<typeof harnessService.harnessStatus>>
   >(DASHBOARD_SNAPSHOT_TTL_MS);
   private readonly memoryCache = new TtlCache<
-    Awaited<ReturnType<typeof openclawService.memoryStatus>>
+    Awaited<ReturnType<typeof openclawDashboardFacet.memoryStatusQuick>>
   >(DASHBOARD_SNAPSHOT_TTL_MS);
   private readonly hostPressureCache = new TtlCache<
     Awaited<ReturnType<typeof hostPressureService.getStatus>>
@@ -73,7 +73,7 @@ export class DashboardService {
     Awaited<ReturnType<typeof memoryDraftService.listDrafts>>
   >(DASHBOARD_SNAPSHOT_TTL_MS);
   private readonly contextManagementCache = new TtlCache<
-    Awaited<ReturnType<typeof openclawService.contextManagementStatus>>
+    Awaited<ReturnType<typeof openclawDashboardFacet.contextManagementStatus>>
   >(DASHBOARD_SNAPSHOT_TTL_MS);
   private readonly maintenanceCache = new TtlCache<
     Awaited<ReturnType<typeof maintenanceService.getStatus>>
@@ -171,7 +171,7 @@ export class DashboardService {
 
   private async getMemory() {
     return await this.memoryCache.get(() =>
-      openclawService.memoryStatusQuick(),
+      openclawDashboardFacet.memoryStatusQuick(),
     );
   }
 
@@ -189,7 +189,7 @@ export class DashboardService {
 
   private async getContextManagement() {
     return await this.contextManagementCache.get(() =>
-      openclawService.contextManagementStatus(),
+      openclawDashboardFacet.contextManagementStatus(),
     );
   }
 
