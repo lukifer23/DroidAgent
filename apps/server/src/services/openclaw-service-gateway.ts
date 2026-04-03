@@ -20,6 +20,12 @@ import type { OpenClawService } from "./openclaw-service.js";
 type OpenClawGatewayService = OpenClawService & {
   gatewayProcess: import("node:child_process").ChildProcess | null;
   gatewayHealthProbe(): Promise<{ version?: string }>;
+  inspectGatewayPortOwner(): Promise<{ pid: number; command: string } | null>;
+  isManagedOpenClawCommand(command: string): boolean;
+  buildGatewayPortConflictMessage(owner: {
+    pid: number;
+    command: string;
+  }): string;
   explainGatewayFailure(
     error: unknown,
     options?: {
@@ -310,6 +316,15 @@ export const openClawGatewayMethods = {
     const service = this as unknown as OpenClawGatewayService;
     await service.ensureConfigured();
     let failedPortOwnerPid: number | null = null;
+    const initialPortOwner = await service.inspectGatewayPortOwner();
+
+    if (
+      initialPortOwner &&
+      initialPortOwner.pid !== service.gatewayProcess?.pid &&
+      !service.isManagedOpenClawCommand(initialPortOwner.command)
+    ) {
+      throw new Error(service.buildGatewayPortConflictMessage(initialPortOwner));
+    }
 
     try {
       await service.gatewayHealthProbe();

@@ -486,6 +486,12 @@ export function registerOperationsRoutes(
     return c.json(await runtimeService.getRuntimeStatuses());
   });
 
+  app.get("/api/runtime/harness", async (c) => {
+    const unauthorized = await requireUser(c);
+    if (unauthorized) return unauthorized;
+    return c.json(await harnessService.harnessStatus());
+  });
+
   app.post("/api/runtime/:runtimeId/install", async (c) => {
     const blocked = await mutationGuard(c);
     if (blocked) return blocked;

@@ -105,25 +105,57 @@ async function requestJson(
   };
 }
 
+async function ollamaModelInstalled(modelId: string): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const child = spawn("ollama", ["list"], {
+      env: process.env,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.on("exit", (code) => {
+      if (code !== 0) {
+        resolve(false);
+        return;
+      }
+      const models = stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(1)
+        .map((line) => line.split(/\s{2,}/)[0]?.trim())
+        .filter((value): value is string => Boolean(value));
+      resolve(models.includes(modelId));
+    });
+    child.on("error", () => resolve(false));
+  });
+}
+
 async function configureLiveOllamaProfile(
   baseUrl: string,
   sessionToken: string,
   modelId: string,
   contextWindow: number,
 ): Promise<void> {
-  const response = await requestJson(baseUrl, "/api/runtime/ollama/profile", {
-    method: "POST",
-    sessionToken,
-    body: {
-      modelId,
-      contextWindow,
-      pull: true,
-    },
-  });
-  if (!response.ok) {
-    throw new Error(
-      `Failed to configure live Ollama profile: ${response.status} ${response.text ?? ""}`.trim(),
-    );
+  const installed = await ollamaModelInstalled(modelId);
+  if (!installed) {
+    const response = await requestJson(baseUrl, "/api/runtime/ollama/profile", {
+      method: "POST",
+      sessionToken,
+      body: {
+        modelId,
+        contextWindow,
+        pull: true,
+      },
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Failed to configure live Ollama profile: ${response.status} ${response.text ?? ""}`.trim(),
+      );
+    }
   }
 
   const openclawStartResponse = await requestJson(
@@ -142,16 +174,20 @@ async function configureLiveOllamaProfile(
   }
 
   for (let attempt = 0; attempt < 240; attempt += 1) {
-    const healthResponse = await requestJson(baseUrl, "/api/health");
-    const harnessSummary = healthResponse.json as {
-      harnessSummary?: {
-        activeModel?: string | null;
-        contextWindow?: number | null;
-      };
+    const harnessResponse = await requestJson(
+      baseUrl,
+      "/api/runtime/harness",
+      {
+        sessionToken,
+      },
+    );
+    const harnessSummary = harnessResponse.json as {
+      activeModel?: string | null;
+      contextWindow?: number | null;
     } | null;
     if (
-      harnessSummary?.harnessSummary?.activeModel === `ollama/${modelId}` &&
-      harnessSummary.harnessSummary.contextWindow === contextWindow
+      harnessSummary?.activeModel === `ollama/${modelId}` &&
+      harnessSummary.contextWindow === contextWindow
     ) {
       return;
     }
@@ -579,6 +615,11 @@ async function main() {
         DROIDAGENT_E2E_ROOT_DIR: rootDir,
         DROIDAGENT_E2E_RESET_TOKEN: state.resetToken,
         DROIDAGENT_E2E_STATE_PATH: statePath,
+        ...(USE_REAL_RUNTIME && perfMode
+          ? {
+              DROIDAGENT_SKIP_STARTUP_OPENCLAW: "1",
+            }
+          : {}),
         ...(perfMode
           ? {
               DROIDAGENT_PERF_READY_FILE: perfReadyFilePath,

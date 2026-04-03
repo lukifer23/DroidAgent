@@ -9,6 +9,7 @@ export interface E2EState {
   workspaceRoot: string;
   sampleFilePath: string;
   resetToken: string;
+  rootDir?: string;
   mode?: "test-harness" | "live-runtime";
   profileId?: string | null;
 }
@@ -22,7 +23,24 @@ const statePath = path.resolve(
 );
 
 export async function readE2EState(): Promise<E2EState> {
-  return JSON.parse(await fs.readFile(statePath, "utf8")) as E2EState;
+  const state = JSON.parse(await fs.readFile(statePath, "utf8")) as E2EState;
+  if (process.env.DROIDAGENT_PERF_MODE === "1" && state.rootDir) {
+    const perfReadyPath = path.join(state.rootDir, ".perf-ready");
+    let ready = false;
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      try {
+        await fs.access(perfReadyPath);
+        ready = true;
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+    if (!ready) {
+      throw new Error(`Timed out waiting for ${perfReadyPath}`);
+    }
+  }
+  return state;
 }
 
 export async function signInSeededOwner(

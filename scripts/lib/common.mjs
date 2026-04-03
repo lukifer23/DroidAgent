@@ -18,6 +18,10 @@ export function resolveE2EStatePath(port) {
   return path.join(repoRoot, "artifacts", "e2e", `state-${port}.json`);
 }
 
+export function resolvePerfReadyPath(rootDir) {
+  return path.join(rootDir, ".perf-ready");
+}
+
 export async function readJsonIfExists(filePath, fallback = null) {
   try {
     return JSON.parse(await fs.readFile(filePath, "utf8"));
@@ -66,4 +70,21 @@ export async function waitForHealth(baseUrl, options = {}) {
   }
 
   throw new Error(`Timed out waiting for ${baseUrl}${pathname}`);
+}
+
+export async function waitForFile(filePath, options = {}) {
+  const attempts = options.attempts ?? 240;
+  const intervalMs = options.intervalMs ?? 250;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await fs.access(filePath);
+      return;
+    } catch {
+      // retry
+    }
+    await sleep(intervalMs);
+  }
+
+  throw new Error(`Timed out waiting for ${filePath}`);
 }

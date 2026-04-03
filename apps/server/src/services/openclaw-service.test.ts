@@ -295,6 +295,9 @@ describe("OpenClaw context management policy", () => {
           url: OPENCLAW_GATEWAY_URL,
           token: "existing-token",
         },
+        tailscale: {
+          mode: "off",
+        },
         http: {
           endpoints: {
             chatCompletions: {
@@ -422,6 +425,7 @@ describe("OpenClaw context management policy", () => {
       },
       channels: {
         signal: {
+          enabled: false,
           dmPolicy: "pairing",
           groupPolicy: "disabled",
         },
@@ -547,6 +551,9 @@ describe("OpenClaw context management policy", () => {
           url: OPENCLAW_GATEWAY_URL,
           token: "existing-token",
         },
+        tailscale: {
+          mode: "off",
+        },
         http: {
           endpoints: {
             chatCompletions: {
@@ -590,6 +597,7 @@ describe("OpenClaw context management policy", () => {
       },
       channels: {
         signal: {
+          enabled: false,
           groupPolicy: "disabled",
           dmPolicy: "pairing",
         },
@@ -619,6 +627,14 @@ describe("OpenClaw context management policy", () => {
     vi.spyOn(openclawService, "ensureConfigured").mockResolvedValue(undefined);
     vi.spyOn(
       openclawService as never,
+      "inspectGatewayPortOwner" as never,
+    ).mockResolvedValue({
+      pid: 4242,
+      command:
+        "/Users/admin/Downloads/VSCode/DroidAgent/apps/server/node_modules/.bin/openclaw --profile droidagent gateway run",
+    });
+    vi.spyOn(
+      openclawService as never,
       "ensureOperatorExecAllowlist" as never,
     ).mockResolvedValue(undefined);
     const execSpy = vi
@@ -632,6 +648,63 @@ describe("OpenClaw context management policy", () => {
       "openclawStartedAt",
       expect.anything(),
     );
+    expect(terminateProcesses).not.toHaveBeenCalled();
+  });
+
+  it("refuses to reuse a healthy foreign OpenClaw gateway on the DroidAgent port", async () => {
+    vi.spyOn(openclawService, "ensureConfigured").mockResolvedValue(undefined);
+    vi.spyOn(
+      openclawService as never,
+      "inspectGatewayPortOwner" as never,
+    ).mockResolvedValue({
+      pid: 8181,
+      command:
+        "/Applications/Atomic Bot.app/Contents/MacOS/Atomic Bot --gateway openclaw",
+    });
+    const allowlistSpy = vi.spyOn(
+      openclawService as never,
+      "ensureOperatorExecAllowlist" as never,
+    );
+    const execSpy = vi
+      .spyOn(openclawService as never, "execOpenClaw" as never)
+      .mockResolvedValueOnce(JSON.stringify({ version: "2026.3.31" }));
+
+    await expect(openclawService.startGateway()).rejects.toThrow(
+      "A different OpenClaw service is already using the configured DroidAgent gateway port.",
+    );
+
+    expect(execSpy).not.toHaveBeenCalled();
+    expect(allowlistSpy).not.toHaveBeenCalled();
+  });
+
+  it("reuses the tracked gateway when the port owner command is generic", async () => {
+    vi.spyOn(openclawService, "ensureConfigured").mockResolvedValue(undefined);
+    (
+      openclawService as unknown as {
+        gatewayProcess: { pid: number; exitCode: null };
+      }
+    ).gatewayProcess = {
+      pid: 5151,
+      exitCode: null,
+    };
+    vi.spyOn(
+      openclawService as never,
+      "inspectGatewayPortOwner" as never,
+    ).mockResolvedValue({
+      pid: 5151,
+      command: "openclaw-gateway",
+    });
+    vi.spyOn(
+      openclawService as never,
+      "ensureOperatorExecAllowlist" as never,
+    ).mockResolvedValue(undefined);
+    const execSpy = vi
+      .spyOn(openclawService as never, "execOpenClaw" as never)
+      .mockResolvedValueOnce(JSON.stringify({ version: "2026.3.31" }));
+
+    await openclawService.startGateway();
+
+    expect(execSpy).toHaveBeenCalledTimes(1);
     expect(terminateProcesses).not.toHaveBeenCalled();
   });
 

@@ -7,6 +7,7 @@ export const perfModelProfiles = [
     provider: "ollama",
     modelId: "qwen3.5:4b",
     contextWindow: 65536,
+    openclawPort: 18891,
     baseline: true,
   },
   {
@@ -15,6 +16,7 @@ export const perfModelProfiles = [
     provider: "ollama",
     modelId: "gemma4:e4b",
     contextWindow: 65536,
+    openclawPort: 18892,
     baseline: false,
     sourceUrl:
       "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf?download=true",

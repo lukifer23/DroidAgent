@@ -80,6 +80,7 @@ import { startupService } from "./startup-service.js";
 describe("StartupService", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     startupService.invalidate();
     getRuntimeSettings.mockResolvedValue({
       selectedRuntime: "ollama",
@@ -210,5 +211,14 @@ describe("StartupService", () => {
     expect(diagnostics.find((entry) => entry.id === "signal")?.message).toContain(
       "not configured",
     );
+  });
+
+  it("skips OpenClaw autostart when the internal harness requests explicit runtime startup", async () => {
+    vi.stubEnv("DROIDAGENT_SKIP_STARTUP_OPENCLAW", "1");
+
+    await startupService.restore();
+
+    expect(ensureConfigured).toHaveBeenCalled();
+    expect(startGateway).not.toHaveBeenCalled();
   });
 });

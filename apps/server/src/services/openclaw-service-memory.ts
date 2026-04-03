@@ -350,6 +350,7 @@ export const openClawMemoryMethods = {
       ["gateway.bind", "loopback"],
       ["gateway.auth.mode", "token"],
       ["gateway.remote.url", OPENCLAW_GATEWAY_URL],
+      ["gateway.tailscale.mode", "off"],
       ["gateway.http.endpoints.chatCompletions.enabled", true],
       ["agents.defaults.workspace", workspaceRoot],
       [
@@ -382,6 +383,10 @@ export const openClawMemoryMethods = {
       ],
       ["channels.signal.dmPolicy", "pairing"],
       ["channels.signal.groupPolicy", "disabled"],
+      [
+        "channels.signal.enabled",
+        runtimeSettings.signalRegistrationState === "registered",
+      ],
     ];
 
     const currentConfig = service.readCurrentConfig();

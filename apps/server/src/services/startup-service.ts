@@ -6,6 +6,9 @@ import {
 } from "@droidagent/shared";
 
 const STARTUP_DIAGNOSTICS_TTL_MS = 15_000;
+function shouldSkipOpenClawAutostart() {
+  return process.env.DROIDAGENT_SKIP_STARTUP_OPENCLAW === "1";
+}
 
 import { accessService } from "./access-service.js";
 import { appStateService } from "./app-state-service.js";
@@ -136,7 +139,7 @@ export class StartupService {
 
     try {
       await openclawRuntimeFacet.ensureConfigured();
-      if (applyChanges) {
+      if (applyChanges && !shouldSkipOpenClawAutostart()) {
         await openclawRuntimeFacet.startGateway();
       }
       diagnostics.push(

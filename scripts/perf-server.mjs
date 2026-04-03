@@ -8,12 +8,18 @@ import { spawn } from "node:child_process";
 
 import {
   repoRoot,
+  resolvePerfReadyPath,
   resolveE2EStatePath,
   sleep,
+  waitForFile,
   waitForHealth,
 } from "./lib/common.mjs";
 
-const artifactDir = path.join(repoRoot, "artifacts", "perf");
+const artifactDir = path.resolve(
+  repoRoot,
+  process.env.DROIDAGENT_PERF_ARTIFACT_DIR?.trim() ||
+    path.join("artifacts", "perf"),
+);
 
 function average(values) {
   return Number(
@@ -51,6 +57,7 @@ async function ensureHarnessServer() {
       env: {
         ...process.env,
         DROIDAGENT_E2E_PORT: harnessPort,
+        DROIDAGENT_PERF_MODE: "1",
       },
     },
   );
@@ -58,7 +65,13 @@ async function ensureHarnessServer() {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
       const state = JSON.parse(await fs.readFile(e2eStatePath, "utf8"));
+      if (state.rootDir && state.mode === "live-runtime") {
+        await waitForFile(resolvePerfReadyPath(state.rootDir));
+      }
       await waitForHealth(state.baseUrl);
+      if (state.rootDir && state.mode !== "live-runtime") {
+        await waitForFile(resolvePerfReadyPath(state.rootDir));
+      }
       return {
         baseUrl: state.baseUrl,
         sessionToken: state.sessionToken,
@@ -189,68 +202,103 @@ async function ensureChatRelayMetric(baseUrl, sessionToken) {
   const authHeaders = sessionToken
     ? { Cookie: `droidagent_session=${sessionToken}` }
     : {};
-  const sessionsResponse = await requestJson(
-    new URL("/api/sessions", baseUrl),
-    {
-      headers: authHeaders,
-    },
-  );
-  if (!sessionsResponse.ok || !Array.isArray(sessionsResponse.json)) {
-    throw new Error("Failed to load sessions for the perf relay probe.");
+  const createdSession = await requestJson(new URL("/api/sessions", baseUrl), {
+    method: "POST",
+    headers: authHeaders,
+  });
+  if (!createdSession.ok || !createdSession.json?.id) {
+    throw new Error("Failed to create a session for the perf relay probe.");
   }
+  const sessionId = createdSession.json.id;
 
-  let sessionId = sessionsResponse.json[0]?.id ?? null;
-  if (!sessionId) {
-    const createdSession = await requestJson(
-      new URL("/api/sessions", baseUrl),
+  try {
+    const sendStartedAtMs = Date.now();
+    const sendResponse = await request(
+      new URL(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, baseUrl),
       {
         method: "POST",
-        headers: authHeaders,
+        headers: {
+          ...authHeaders,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          text: "Reply with exactly OK.",
+          attachments: [],
+        }),
       },
     );
-    if (!createdSession.ok || !createdSession.json?.id) {
-      throw new Error("Failed to create a session for the perf relay probe.");
+    if (!sendResponse.ok) {
+      throw new Error(
+        `Perf relay probe returned ${sendResponse.status} while sending a chat message.`,
+      );
     }
-    sessionId = createdSession.json.id;
-  }
 
-  const sendResponse = await request(
-    new URL(`/api/sessions/${encodeURIComponent(sessionId)}/messages`, baseUrl),
-    {
-      method: "POST",
-      headers: {
-        ...authHeaders,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        text: "perf-server-relay",
-        attachments: [],
-      }),
-    },
-  );
-  if (!sendResponse.ok) {
+    const relayAttempts =
+      process.env.DROIDAGENT_E2E_REAL_RUNTIME === "1" ? 240 : 40;
+    const relayIntervalMs =
+      process.env.DROIDAGENT_E2E_REAL_RUNTIME === "1" ? 500 : 250;
+    for (let attempt = 0; attempt < relayAttempts; attempt += 1) {
+      const diagnosticsResponse = await requestJson(
+        new URL("/api/diagnostics/performance", baseUrl),
+        {
+          headers: authHeaders,
+        },
+      );
+      const metrics = diagnosticsResponse.json?.metrics ?? [];
+      const findRecentSample = (name) => {
+        const metric = metrics.find((entry) => entry.name === name);
+        return metric?.recentSamples?.find((sample) => {
+          if (sample.context?.sessionId !== sessionId) {
+            return false;
+          }
+          const endedAtMs = sample.endedAt
+            ? Date.parse(sample.endedAt)
+            : Number.NaN;
+          return Number.isFinite(endedAtMs) && endedAtMs >= sendStartedAtMs;
+        });
+      };
+
+      const firstDeltaForward = findRecentSample("chat.stream.firstDeltaForward");
+      if (firstDeltaForward?.durationMs != null) {
+        return;
+      }
+
+      const firstDelta = findRecentSample("chat.stream.acceptedToFirstDelta");
+      const completion = findRecentSample("chat.stream.acceptedToCompleteRelay");
+      if (firstDelta?.context?.outcome === "error") {
+        throw new Error(
+          `Perf relay probe failed before first delta for ${sessionId}.`,
+        );
+      }
+      if (completion?.context?.outcome === "error") {
+        throw new Error(`Perf relay probe failed for ${sessionId}.`);
+      }
+      if (
+        firstDelta?.context?.outcome === "no-delta" &&
+        completion?.context?.outcome === "done"
+      ) {
+        return;
+      }
+
+      await sleep(relayIntervalMs);
+    }
+
     throw new Error(
-      `Perf relay probe returned ${sendResponse.status} while sending a chat message.`,
+      `Timed out waiting for the server chat relay metric for ${sessionId}.`,
     );
-  }
-
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const diagnosticsResponse = await requestJson(
-      new URL("/api/diagnostics/performance", baseUrl),
+  } finally {
+    await request(
+      new URL(`/api/sessions/${encodeURIComponent(sessionId)}/archive`, baseUrl),
       {
-        headers: authHeaders,
+        method: "POST",
+        headers: {
+          ...authHeaders,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({}),
       },
-    );
-    const relayMetric = diagnosticsResponse.json?.metrics?.find(
-      (entry) => entry.name === "chat.stream.firstDeltaForward",
-    );
-    if (relayMetric?.summary?.lastDurationMs != null) {
-      return;
-    }
-    await sleep(250);
+    ).catch(() => undefined);
   }
-
-  throw new Error("Timed out waiting for the server chat relay metric.");
 }
 
 async function main() {

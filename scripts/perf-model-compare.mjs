@@ -153,6 +153,7 @@ async function main() {
       DROIDAGENT_E2E_REAL_RUNTIME: "1",
       DROIDAGENT_E2E_OLLAMA_MODEL: profile.modelId,
       DROIDAGENT_E2E_OLLAMA_CONTEXT_WINDOW: String(profile.contextWindow),
+      DROIDAGENT_OPENCLAW_PORT: String(profile.openclawPort),
       DROIDAGENT_PERF_ARTIFACT_DIR: laneArtifactDir,
       DROIDAGENT_PERF_PROFILE_ID: profile.id,
     };
