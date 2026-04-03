@@ -62,6 +62,11 @@ const OllamaProfileRequestSchema = z.object({
   pull: z.boolean().optional(),
 });
 
+const LlamaCppProfileRequestSchema = z.object({
+  hfRepo: z.string().trim().min(1),
+  contextWindow: z.number().int().min(2048).max(262144).optional(),
+});
+
 function buildSignalRegistrationRequest(body: {
   phoneNumber: string;
   autoInstall?: boolean;
@@ -556,6 +561,28 @@ export function registerOperationsRoutes(
     await runtimeService.configureOllamaProfile({
       modelId: body.modelId,
       ensureModel: body.pull === true,
+      ...(body.contextWindow === undefined
+        ? {}
+        : { contextWindow: body.contextWindow }),
+    });
+    await websocketHub.publishUpdates(
+      "setup",
+      "runtime",
+      "providers",
+      "memory",
+      "context",
+    );
+    return c.json(await runtimeService.listProviderProfiles());
+  });
+
+  app.post("/api/runtime/llamacpp/profile", async (c) => {
+    const blocked = await mutationGuard(c);
+    if (blocked) return blocked;
+    const unauthorized = await requireUser(c);
+    if (unauthorized) return unauthorized;
+    const body = LlamaCppProfileRequestSchema.parse(await c.req.json());
+    await runtimeService.configureLlamaCppProfile({
+      hfRepo: body.hfRepo,
       ...(body.contextWindow === undefined
         ? {}
         : { contextWindow: body.contextWindow }),

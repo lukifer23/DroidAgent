@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 
 import { RuntimeStatusSchema, nowIso } from "@droidagent/shared";
 
@@ -14,11 +15,21 @@ import { appStateService } from "./app-state-service.js";
 import {
   GATEWAY_READY_DELAY_MS,
   GATEWAY_READY_RETRIES,
+  OPENCLAW_GATEWAY_CALL_TIMEOUT_MS,
 } from "./openclaw-service-support.js";
 import type { OpenClawService } from "./openclaw-service.js";
 
 type OpenClawGatewayService = OpenClawService & {
   gatewayProcess: import("node:child_process").ChildProcess | null;
+  liveGatewayClient: GatewayClient | null;
+  liveGatewayClientReadyPromise: Promise<GatewayClient> | null;
+  liveGatewayEventListeners: Set<
+    (event: {
+      event: string;
+      payload: unknown;
+      seq?: number;
+    }) => void
+  >;
   gatewayHealthProbe(): Promise<{ version?: string }>;
   inspectGatewayPortOwner(): Promise<{ pid: number; command: string } | null>;
   isManagedOpenClawCommand(command: string): boolean;
@@ -53,9 +64,188 @@ type OpenClawGatewayService = OpenClawService & {
     allowFailure?: boolean,
     timeoutMs?: number,
   ): Promise<string>;
+  emitLiveGatewayEvent(event: {
+    event: string;
+    payload: unknown;
+    seq?: number;
+  }): void;
+  subscribeToLiveGatewayEvents(
+    listener: (event: {
+      event: string;
+      payload: unknown;
+      seq?: number;
+    }) => void,
+  ): () => void;
+  ensureLiveGatewayClient(): Promise<GatewayClient>;
+  resetLiveGatewayClient(): Promise<void>;
+  requestLiveGateway<T>(
+    method: string,
+    params?: unknown,
+    opts?: {
+      expectFinal?: boolean;
+      timeoutMs?: number | null;
+    },
+  ): Promise<T>;
 };
 
 export const openClawGatewayMethods = {
+  emitLiveGatewayEvent(
+    this: OpenClawService,
+    event: {
+      event: string;
+      payload: unknown;
+      seq?: number;
+    },
+  ): void {
+    const service = this as unknown as OpenClawGatewayService;
+    for (const listener of [...service.liveGatewayEventListeners]) {
+      try {
+        listener(event);
+      } catch (error) {
+        console.error("OpenClaw gateway event listener failed", error);
+      }
+    }
+  },
+
+  subscribeToLiveGatewayEvents(
+    this: OpenClawService,
+    listener: (event: {
+      event: string;
+      payload: unknown;
+      seq?: number;
+    }) => void,
+  ): () => void {
+    const service = this as unknown as OpenClawGatewayService;
+    service.liveGatewayEventListeners.add(listener);
+    return () => {
+      service.liveGatewayEventListeners.delete(listener);
+    };
+  },
+
+  async resetLiveGatewayClient(this: OpenClawService): Promise<void> {
+    const service = this as unknown as OpenClawGatewayService;
+    const client = service.liveGatewayClient;
+    service.liveGatewayClient = null;
+    service.liveGatewayClientReadyPromise = null;
+    if (!client) {
+      return;
+    }
+    try {
+      await client.stopAndWait({ timeoutMs: 2_000 });
+    } catch {
+      client.stop();
+    }
+  },
+
+  async ensureLiveGatewayClient(this: OpenClawService): Promise<GatewayClient> {
+    const service = this as unknown as OpenClawGatewayService;
+    if (service.liveGatewayClientReadyPromise) {
+      return await service.liveGatewayClientReadyPromise;
+    }
+
+    await service.startGateway();
+    const token = await service.ensureGatewayToken();
+
+    const readyPromise = new Promise<GatewayClient>((resolve, reject) => {
+      let settled = false;
+      const fail = (error: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        service.liveGatewayClientReadyPromise = null;
+        service.liveGatewayClient = null;
+        client.stop();
+        reject(
+          error instanceof Error
+            ? error
+            : new Error("OpenClaw gateway client failed to connect."),
+        );
+      };
+
+      const client = new GatewayClient({
+        url: OPENCLAW_GATEWAY_URL,
+        token,
+        deviceIdentity: null,
+        clientName: "gateway-client",
+        clientDisplayName: "droidagent-server",
+        clientVersion: "droidagent",
+        platform: process.platform,
+        mode: "backend",
+        role: "operator",
+        scopes: ["operator.read", "operator.write", "operator.approvals"],
+        caps: ["tool-events"],
+        requestTimeoutMs: OPENCLAW_GATEWAY_CALL_TIMEOUT_MS,
+        onHelloOk: () => {
+          settled = true;
+          resolve(client);
+        },
+        onEvent: (event) => {
+          service.emitLiveGatewayEvent({
+            event: event.event,
+            payload: event.payload,
+            ...(typeof event.seq === "number" ? { seq: event.seq } : {}),
+          });
+        },
+        onConnectError: (error) => {
+          fail(error);
+        },
+        onClose: (code, reason) => {
+          if (!settled) {
+            fail(
+              new Error(
+                `OpenClaw gateway client closed before ready (${code}): ${reason || "no reason"}`,
+              ),
+            );
+          }
+        },
+      });
+
+      service.liveGatewayClient = client;
+      client.start();
+    });
+
+    service.liveGatewayClientReadyPromise = readyPromise;
+    return await readyPromise;
+  },
+
+  async requestLiveGateway<T>(
+    this: OpenClawService,
+    method: string,
+    params: unknown = {},
+    opts: {
+      expectFinal?: boolean;
+      timeoutMs?: number | null;
+    } = {},
+  ): Promise<T> {
+    const service = this as unknown as OpenClawGatewayService;
+
+    const requestOnce = async () => {
+      const client = await service.ensureLiveGatewayClient();
+      return await client.request<T>(method, params, {
+        ...(opts.expectFinal === undefined
+          ? {}
+          : { expectFinal: opts.expectFinal }),
+        ...(opts.timeoutMs == null ? {} : { timeoutMs: opts.timeoutMs }),
+      });
+    };
+
+    try {
+      return await requestOnce();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        !/gateway not connected|gateway closed|connect failed|before ready/i.test(
+          message,
+        )
+      ) {
+        throw error;
+      }
+      await service.resetLiveGatewayClient();
+      return await requestOnce();
+    }
+  },
+
   async gatewayHealthProbe(this: OpenClawService): Promise<{ version?: string }> {
     const service = this as unknown as OpenClawGatewayService;
     const output = await service.execOpenClaw([
@@ -416,6 +606,7 @@ export const openClawGatewayMethods = {
 
   async stopGateway(this: OpenClawService): Promise<void> {
     const service = this as unknown as OpenClawGatewayService;
+    await service.resetLiveGatewayClient();
     if (service.gatewayProcess && service.gatewayProcess.exitCode === null) {
       service.gatewayProcess.kill("SIGTERM");
       service.gatewayProcess = null;

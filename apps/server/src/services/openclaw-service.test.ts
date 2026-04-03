@@ -12,17 +12,75 @@ const {
   runCommand,
   findProcesses,
   terminateProcesses,
-} = vi.hoisted(() => ({
-  getRuntimeSettings: vi.fn(),
-  updateRuntimeSettings: vi.fn(),
-  getJsonSetting: vi.fn(),
-  setJsonSetting: vi.fn(),
-  getMemoryPrepareStatus: vi.fn(),
-  getProcessEnv: vi.fn(),
-  runCommand: vi.fn(),
-  findProcesses: vi.fn(),
-  terminateProcesses: vi.fn(),
-}));
+  gatewayClientRequest,
+  gatewayClientInstances,
+  MockGatewayClient,
+} = vi.hoisted(() => {
+  const gatewayClientRequest = vi.fn();
+  const gatewayClientInstances: Array<{
+    opts: {
+      onHelloOk?: ((hello: unknown) => void) | undefined;
+      onEvent?: ((event: { event: string; payload: unknown; seq?: number }) => void) | undefined;
+    };
+    emitEvent: (event: string, payload: unknown, seq?: number) => void;
+  }> = [];
+
+  class MockGatewayClient {
+    readonly opts: {
+      onHelloOk?: ((hello: unknown) => void) | undefined;
+      onEvent?: ((event: { event: string; payload: unknown; seq?: number }) => void) | undefined;
+    };
+
+    constructor(
+      opts: {
+        onHelloOk?: ((hello: unknown) => void) | undefined;
+        onEvent?: ((event: { event: string; payload: unknown; seq?: number }) => void) | undefined;
+      },
+    ) {
+      this.opts = opts;
+      gatewayClientInstances.push(this);
+    }
+
+    start(): void {
+      this.opts.onHelloOk?.({});
+    }
+
+    stop(): void {}
+
+    async stopAndWait(): Promise<void> {}
+
+    async request<T = unknown>(
+      method: string,
+      params?: unknown,
+      opts?: unknown,
+    ): Promise<T> {
+      return await gatewayClientRequest(method, params, opts);
+    }
+
+    emitEvent(event: string, payload: unknown, seq?: number): void {
+      this.opts.onEvent?.({
+        event,
+        payload,
+        ...(typeof seq === "number" ? { seq } : {}),
+      });
+    }
+  }
+
+  return {
+    getRuntimeSettings: vi.fn(),
+    updateRuntimeSettings: vi.fn(),
+    getJsonSetting: vi.fn(),
+    setJsonSetting: vi.fn(),
+    getMemoryPrepareStatus: vi.fn(),
+    getProcessEnv: vi.fn(),
+    runCommand: vi.fn(),
+    findProcesses: vi.fn(),
+    terminateProcesses: vi.fn(),
+    gatewayClientRequest,
+    gatewayClientInstances,
+    MockGatewayClient,
+  };
+});
 
 vi.mock("./app-state-service.js", () => ({
   DEFAULT_OLLAMA_VISION_MODEL: "qwen2.5vl:3b",
@@ -57,7 +115,18 @@ vi.mock("../lib/process.js", () => ({
   },
 }));
 
+vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
+  GatewayClient: MockGatewayClient,
+}));
+
 import { openclawService } from "./openclaw-service.js";
+
+type RelaySpies = {
+  onDelta: ReturnType<typeof vi.fn>;
+  onDone: ReturnType<typeof vi.fn>;
+  onError: ReturnType<typeof vi.fn>;
+  onState: ReturnType<typeof vi.fn>;
+};
 
 describe("OpenClaw context management policy", () => {
   let runtimeSettings: {
@@ -81,12 +150,32 @@ describe("OpenClaw context management policy", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    gatewayClientRequest.mockReset();
+    gatewayClientRequest.mockResolvedValue({});
+    gatewayClientInstances.length = 0;
     (
       openclawService as unknown as { gatewayToken: string | null }
     ).gatewayToken = null;
     (
       openclawService as unknown as { gatewayProcess: unknown | null }
     ).gatewayProcess = null;
+    (
+      openclawService as unknown as {
+        liveGatewayClient: unknown | null;
+        liveGatewayClientReadyPromise: Promise<unknown> | null;
+      }
+    ).liveGatewayClient = null;
+    (
+      openclawService as unknown as {
+        liveGatewayClient: unknown | null;
+        liveGatewayClientReadyPromise: Promise<unknown> | null;
+      }
+    ).liveGatewayClientReadyPromise = null;
+    (
+      openclawService as unknown as {
+        liveGatewayEventListeners: Set<unknown>;
+      }
+    ).liveGatewayEventListeners = new Set();
     (
       openclawService as unknown as { activeRuns: Map<string, unknown> }
     ).activeRuns = new Map();
@@ -277,6 +366,60 @@ describe("OpenClaw context management policy", () => {
       ]),
     );
     expect(providerConfig.models).toHaveLength(1);
+  });
+
+  it("reuses the active llama.cpp model for image and pdf work when the selected repo supports vision", async () => {
+    runtimeSettings.activeProviderId = "llamacpp-default";
+    runtimeSettings.llamaCppModel = "unsloth/gemma-4-E4B-it-GGUF:Q4_K_M";
+    vi.spyOn(
+      openclawService as never,
+      "readCurrentConfig" as never,
+    ).mockReturnValue(null);
+    const execSpy = vi
+      .spyOn(openclawService as never, "execOpenClaw" as never)
+      .mockResolvedValue("");
+
+    await openclawService.ensureConfigured();
+
+    const imageModelArgs = execSpy.mock.calls.find(
+      (call) => (call[0] as string[])[2] === "agents.defaults.imageModel.primary",
+    )?.[0] as string[] | undefined;
+    const pdfModelArgs = execSpy.mock.calls.find(
+      (call) => (call[0] as string[])[2] === "agents.defaults.pdfModel.primary",
+    )?.[0] as string[] | undefined;
+
+    expect(JSON.parse(imageModelArgs?.[3] ?? '""')).toBe(
+      "llamacpp/gemma-4-e4b-it-gguf:q4_k_m",
+    );
+    expect(JSON.parse(pdfModelArgs?.[3] ?? '""')).toBe(
+      "llamacpp/gemma-4-e4b-it-gguf:q4_k_m",
+    );
+  });
+
+  it("registers llama.cpp multimodal providers with text-and-image input when vision is enabled", async () => {
+    const execSpy = vi
+      .spyOn(openclawService as never, "execOpenClaw" as never)
+      .mockResolvedValue("");
+
+    await openclawService.registerLlamaCppProvider(
+      "gemma-4-e4b-it-gguf:q4_k_m",
+      65536,
+      true,
+    );
+
+    const providerArgs = execSpy.mock.calls.find(
+      (call) => (call[0] as string[])[2] === "models.providers.llamacpp",
+    )?.[0] as string[] | undefined;
+    const providerConfig = JSON.parse(providerArgs?.[3] ?? "{}") as {
+      models?: Array<{ id: string; input: string[] }>;
+    };
+
+    expect(providerConfig.models).toEqual([
+      expect.objectContaining({
+        id: "gemma-4-e4b-it-gguf:q4_k_m",
+        input: ["text", "image"],
+      }),
+    ]);
   });
 
   it("skips config writes when the desired OpenClaw config is already present", async () => {
@@ -1285,5 +1428,219 @@ Inspect the attached files.`,
     expect(abortMessageSpy).toHaveBeenCalledTimes(1);
     expect(abortMessageSpy).toHaveBeenCalledWith("web:operator");
     expect(streamMessageRunSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps abort non-fatal and forwards the active run id to the gateway abort request", async () => {
+    vi.spyOn(openclawService as never, "startGateway" as never).mockResolvedValue(
+      undefined,
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const throwingController = {
+      abort: vi.fn(() => {
+        throw new DOMException("This operation was aborted", "AbortError");
+      }),
+    };
+
+    (
+      openclawService as unknown as {
+        activeRuns: Map<string, { controller: { abort: () => void }; runId: string }>;
+      }
+    ).activeRuns.set("web:operator", {
+      runId: "run-123",
+      controller: throwingController,
+    });
+
+    await openclawService.abortMessage("web:operator");
+
+    expect(throwingController.abort).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(gatewayClientRequest).toHaveBeenCalledWith(
+      "chat.abort",
+      {
+        sessionKey: "web:operator",
+        runId: "run-123",
+      },
+      {},
+    );
+    expect(
+      (
+        openclawService as unknown as {
+          activeRuns: Map<string, unknown>;
+        }
+      ).activeRuns.has("web:operator"),
+    ).toBe(false);
+  });
+
+  it("streams chat over the gateway event client and relays tool updates", async () => {
+    vi.spyOn(openclawService as never, "startGateway" as never).mockResolvedValue(
+      undefined,
+    );
+    gatewayClientRequest.mockImplementation(async (method, params) => {
+      if (method === "chat.send") {
+        return {
+          runId: (params as { idempotencyKey: string }).idempotencyKey,
+          status: "started",
+        };
+      }
+      return {};
+    });
+
+    const relay: RelaySpies = {
+      onDelta: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+      onState: vi.fn(),
+    };
+
+    const streamPromise = (
+      openclawService as unknown as {
+        streamMessageRun: (
+          sessionKey: string,
+          message: string,
+          runId: string,
+          controller: AbortController,
+          relay: RelaySpies,
+        ) => Promise<void>;
+      }
+    ).streamMessageRun(
+      "web:operator",
+      "Reply with exactly OK.",
+      "run-1",
+      new AbortController(),
+      relay,
+    );
+
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const client = gatewayClientInstances.at(-1);
+    expect(client).toBeDefined();
+
+    client?.emitEvent("agent", {
+      runId: "run-1",
+      stream: "tool",
+      data: {
+        phase: "start",
+        toolCallId: "tool-1",
+        name: "exec",
+      },
+    });
+    client?.emitEvent("chat", {
+      runId: "run-1",
+      sessionKey: "web:operator",
+      seq: 1,
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hel" }],
+      },
+    });
+    client?.emitEvent("chat", {
+      runId: "run-1",
+      sessionKey: "web:operator",
+      seq: 2,
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+      },
+    });
+    client?.emitEvent("agent", {
+      runId: "run-1",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolCallId: "tool-1",
+        name: "exec",
+        isError: false,
+      },
+    });
+    client?.emitEvent("chat", {
+      runId: "run-1",
+      sessionKey: "web:operator",
+      seq: 3,
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Hello" }],
+        stopReason: "stop",
+      },
+    });
+
+    await streamPromise;
+
+    expect(gatewayClientRequest).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "web:operator",
+        idempotencyKey: "run-1",
+        deliver: false,
+      }),
+      expect.any(Object),
+    );
+    expect(relay.onDelta.mock.calls.map(([delta]) => delta)).toEqual([
+      "Hel",
+      "lo",
+    ]);
+    expect(relay.onDone).toHaveBeenCalledTimes(1);
+    expect(relay.onError).not.toHaveBeenCalled();
+    expect(relay.onState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "tool_call",
+        toolName: "exec",
+      }),
+    );
+    expect(relay.onState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "streaming",
+      }),
+    );
+    expect(relay.onState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "tool_result",
+        toolName: "exec",
+      }),
+    );
+  });
+
+  it("ends the relay cleanly when the local controller aborts", async () => {
+    vi.spyOn(openclawService as never, "startGateway" as never).mockResolvedValue(
+      undefined,
+    );
+    gatewayClientRequest.mockResolvedValue({
+      runId: "run-2",
+      status: "started",
+    });
+
+    const controller = new AbortController();
+    const relay: RelaySpies = {
+      onDelta: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+      onState: vi.fn(),
+    };
+
+    const streamPromise = (
+      openclawService as unknown as {
+        streamMessageRun: (
+          sessionKey: string,
+          message: string,
+          runId: string,
+          controller: AbortController,
+          relay: RelaySpies,
+        ) => Promise<void>;
+      }
+    ).streamMessageRun("web:operator", "stop", "run-2", controller, relay);
+
+    controller.abort(new Error("operator aborted"));
+    await streamPromise;
+
+    expect(relay.onDone).toHaveBeenCalledTimes(1);
+    expect(relay.onError).not.toHaveBeenCalled();
+    expect(relay.onState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: "completed",
+        label: "Run stopped",
+      }),
+    );
   });
 });

@@ -27,6 +27,12 @@ async function main() {
   const env = {
     DROIDAGENT_PERF_LIVE: "1",
     DROIDAGENT_E2E_REAL_RUNTIME: "1",
+    ...(process.env.DROIDAGENT_E2E_RUNTIME_PROVIDER?.trim()
+      ? {
+          DROIDAGENT_E2E_RUNTIME_PROVIDER:
+            process.env.DROIDAGENT_E2E_RUNTIME_PROVIDER.trim(),
+        }
+      : {}),
     DROIDAGENT_OPENCLAW_PORT:
       process.env.DROIDAGENT_OPENCLAW_PORT ?? "18890",
     DROIDAGENT_PERF_ARTIFACT_DIR:

@@ -11,6 +11,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock": "^3.916.0",
     "@droidagent/shared": "workspace:*",
     "@hono/node-server": "^1.19.11",
     "@lydell/node-pty": "1.2.0-beta.3",

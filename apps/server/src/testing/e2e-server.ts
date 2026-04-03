@@ -19,8 +19,11 @@ import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   DEFAULT_OLLAMA_MODEL,
 } from "../services/app-state-service.js";
+import { llamaCppProfileModelId } from "../services/llamacpp-profile-service.js";
 
 const OPENCLAW_GATEWAY_TOKEN = "droidagent-e2e-token";
+const DEFAULT_LLAMACPP_MODEL = "ggml-org/gemma-3-1b-it-GGUF";
+const DEFAULT_LLAMACPP_CONTEXT_WINDOW = 8192;
 
 const SERVER_PORT = Number(process.env.DROIDAGENT_E2E_PORT ?? 4418);
 const USE_REAL_RUNTIME = process.env.DROIDAGENT_E2E_REAL_RUNTIME === "1";
@@ -29,6 +32,19 @@ const thisDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(thisDir, "..", "..", "..", "..");
 const artifactDir = path.join(repoRoot, "artifacts", "e2e");
 const statePath = path.join(artifactDir, `state-${SERVER_PORT}.json`);
+
+type LiveRuntimeProvider = "ollama" | "llamaCpp";
+
+function resolveLiveRuntimeProvider(): LiveRuntimeProvider {
+  const raw = process.env.DROIDAGENT_E2E_RUNTIME_PROVIDER?.trim();
+  if (raw === "llamaCpp" || raw === "ollama") {
+    return raw;
+  }
+  if (process.env.DROIDAGENT_E2E_LLAMACPP_MODEL?.trim()) {
+    return "llamaCpp";
+  }
+  return "ollama";
+}
 
 function resolveOllamaModel(): string {
   return (
@@ -42,6 +58,20 @@ function resolveOllamaContextWindow(): number {
     return Math.floor(raw);
   }
   return DEFAULT_OLLAMA_CONTEXT_WINDOW;
+}
+
+function resolveLlamaCppModel(): string {
+  return (
+    process.env.DROIDAGENT_E2E_LLAMACPP_MODEL?.trim() || DEFAULT_LLAMACPP_MODEL
+  );
+}
+
+function resolveLlamaCppContextWindow(): number {
+  const raw = Number(process.env.DROIDAGENT_E2E_LLAMACPP_CONTEXT_WINDOW ?? "");
+  if (Number.isFinite(raw) && raw >= 2048) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_LLAMACPP_CONTEXT_WINDOW;
 }
 
 function hashToken(token: string): string {
@@ -134,6 +164,34 @@ async function ollamaModelInstalled(modelId: string): Promise<boolean> {
   });
 }
 
+async function waitForHarnessProfile(
+  baseUrl: string,
+  sessionToken: string,
+  expectedActiveModel: string,
+  contextWindow: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    const harnessResponse = await requestJson(baseUrl, "/api/runtime/harness", {
+      sessionToken,
+    });
+    const harnessSummary = harnessResponse.json as {
+      activeModel?: string | null;
+      contextWindow?: number | null;
+    } | null;
+    if (
+      harnessSummary?.activeModel === expectedActiveModel &&
+      harnessSummary.contextWindow === contextWindow
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(
+    `Timed out waiting for live harness profile ${expectedActiveModel} at ${contextWindow}.`,
+  );
+}
+
 async function configureLiveOllamaProfile(
   baseUrl: string,
   sessionToken: string,
@@ -141,21 +199,19 @@ async function configureLiveOllamaProfile(
   contextWindow: number,
 ): Promise<void> {
   const installed = await ollamaModelInstalled(modelId);
-  if (!installed) {
-    const response = await requestJson(baseUrl, "/api/runtime/ollama/profile", {
-      method: "POST",
-      sessionToken,
-      body: {
-        modelId,
-        contextWindow,
-        pull: true,
-      },
-    });
-    if (!response.ok) {
-      throw new Error(
-        `Failed to configure live Ollama profile: ${response.status} ${response.text ?? ""}`.trim(),
-      );
-    }
+  const response = await requestJson(baseUrl, "/api/runtime/ollama/profile", {
+    method: "POST",
+    sessionToken,
+    body: {
+      modelId,
+      contextWindow,
+      ...(installed ? {} : { pull: true }),
+    },
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Failed to configure live Ollama profile: ${response.status} ${response.text ?? ""}`.trim(),
+    );
   }
 
   const openclawStartResponse = await requestJson(
@@ -173,29 +229,69 @@ async function configureLiveOllamaProfile(
     );
   }
 
-  for (let attempt = 0; attempt < 240; attempt += 1) {
-    const harnessResponse = await requestJson(
-      baseUrl,
-      "/api/runtime/harness",
-      {
-        sessionToken,
-      },
+  await waitForHarnessProfile(
+    baseUrl,
+    sessionToken,
+    `ollama/${modelId}`,
+    contextWindow,
+  );
+}
+
+async function configureLiveLlamaCppProfile(
+  baseUrl: string,
+  sessionToken: string,
+  hfRepo: string,
+  contextWindow: number,
+): Promise<void> {
+  const response = await requestJson(baseUrl, "/api/runtime/llamacpp/profile", {
+    method: "POST",
+    sessionToken,
+    body: {
+      hfRepo,
+      contextWindow,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Failed to configure live llama.cpp profile: ${response.status} ${response.text ?? ""}`.trim(),
     );
-    const harnessSummary = harnessResponse.json as {
-      activeModel?: string | null;
-      contextWindow?: number | null;
-    } | null;
-    if (
-      harnessSummary?.activeModel === `ollama/${modelId}` &&
-      harnessSummary.contextWindow === contextWindow
-    ) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
   }
 
-  throw new Error(
-    `Timed out waiting for live harness profile ollama/${modelId} at ${contextWindow}.`,
+  const llamaCppStartResponse = await requestJson(
+    baseUrl,
+    "/api/runtime/llamaCpp/start",
+    {
+      method: "POST",
+      sessionToken,
+      body: {},
+    },
+  );
+  if (!llamaCppStartResponse.ok) {
+    throw new Error(
+      `Failed to start live llama.cpp runtime: ${llamaCppStartResponse.status} ${llamaCppStartResponse.text ?? ""}`.trim(),
+    );
+  }
+
+  const openclawStartResponse = await requestJson(
+    baseUrl,
+    "/api/runtime/openclaw/start",
+    {
+      method: "POST",
+      sessionToken,
+      body: {},
+    },
+  );
+  if (!openclawStartResponse.ok) {
+    throw new Error(
+      `Failed to start live OpenClaw runtime: ${openclawStartResponse.status} ${openclawStartResponse.text ?? ""}`.trim(),
+    );
+  }
+
+  await waitForHarnessProfile(
+    baseUrl,
+    sessionToken,
+    `llamacpp/${llamaCppProfileModelId(hfRepo)}`,
+    contextWindow,
   );
 }
 
@@ -279,8 +375,11 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
   const sessionId = randomUUID();
   const resetToken = randomUUID();
   const now = new Date().toISOString();
+  const liveRuntimeProvider = resolveLiveRuntimeProvider();
   const ollamaModel = resolveOllamaModel();
   const ollamaContextWindow = resolveOllamaContextWindow();
+  const llamaCppModel = resolveLlamaCppModel();
+  const llamaCppContextWindow = resolveLlamaCppContextWindow();
   const workspaceFiles: E2EWorkspaceFile[] = [
     {
       path: "AGENTS.md",
@@ -478,13 +577,16 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
     );
 
   const runtimeSettings: RuntimeSettings = {
-    selectedRuntime: "ollama",
-    activeProviderId: "ollama-default",
+    selectedRuntime: liveRuntimeProvider,
+    activeProviderId:
+      liveRuntimeProvider === "llamaCpp"
+        ? "llamacpp-default"
+        : "ollama-default",
     ollamaModel,
     ollamaEmbeddingModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
     ollamaContextWindow,
-    llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
-    llamaCppContextWindow: 8192,
+    llamaCppModel,
+    llamaCppContextWindow,
     workspaceRoot,
     remoteAccessEnabled: false,
     launchAgentInstalled: false,
@@ -539,8 +641,9 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
     currentStep: "remoteAccess",
     passkeyConfigured: true,
     workspaceRoot,
-    selectedRuntime: "ollama",
-    selectedModel: ollamaModel,
+    selectedRuntime: liveRuntimeProvider,
+    selectedModel:
+      liveRuntimeProvider === "llamaCpp" ? llamaCppModel : ollamaModel,
     remoteAccessEnabled: false,
     signalEnabled: false,
   };
@@ -665,12 +768,21 @@ async function main() {
 
   await waitForHealth(state.baseUrl, perfMode ? "/api/auth/me" : "/api/health");
   if (perfMode && USE_REAL_RUNTIME) {
-    await configureLiveOllamaProfile(
-      state.baseUrl,
-      state.sessionToken,
-      state.seed.runtimeSettings.ollamaModel,
-      state.seed.runtimeSettings.ollamaContextWindow,
-    );
+    if (state.seed.runtimeSettings.selectedRuntime === "llamaCpp") {
+      await configureLiveLlamaCppProfile(
+        state.baseUrl,
+        state.sessionToken,
+        state.seed.runtimeSettings.llamaCppModel,
+        state.seed.runtimeSettings.llamaCppContextWindow,
+      );
+    } else {
+      await configureLiveOllamaProfile(
+        state.baseUrl,
+        state.sessionToken,
+        state.seed.runtimeSettings.ollamaModel,
+        state.seed.runtimeSettings.ollamaContextWindow,
+      );
+    }
     await waitForLiveChatReady(state.baseUrl, state.sessionToken);
   }
   if (perfMode) {

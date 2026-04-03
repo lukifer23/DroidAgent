@@ -83,6 +83,31 @@ function deltaSummary(baselineValue, candidateValue) {
   };
 }
 
+function profileEnv(profile, laneArtifactDir) {
+  const env = {
+    DROIDAGENT_PERF_LIVE: "1",
+    DROIDAGENT_E2E_REAL_RUNTIME: "1",
+    DROIDAGENT_E2E_RUNTIME_PROVIDER: profile.provider,
+    DROIDAGENT_PERF_PORT: String(profile.appPort),
+    DROIDAGENT_E2E_PORT: String(profile.appPort),
+    DROIDAGENT_OPENCLAW_PORT: String(profile.openclawPort),
+    DROIDAGENT_PERF_ARTIFACT_DIR: laneArtifactDir,
+    DROIDAGENT_PERF_PROFILE_ID: profile.id,
+  };
+  if (profile.provider === "llamaCpp") {
+    return {
+      ...env,
+      DROIDAGENT_E2E_LLAMACPP_MODEL: profile.modelRef,
+      DROIDAGENT_E2E_LLAMACPP_CONTEXT_WINDOW: String(profile.contextWindow),
+    };
+  }
+  return {
+    ...env,
+    DROIDAGENT_E2E_OLLAMA_MODEL: profile.modelRef,
+    DROIDAGENT_E2E_OLLAMA_CONTEXT_WINDOW: String(profile.contextWindow),
+  };
+}
+
 async function readLaneMetrics(profile) {
   const laneDir = path.resolve(repoRoot, profileArtifactDir(profile));
   const serverArtifact = await readJson(
@@ -148,15 +173,7 @@ async function main() {
 
   for (const profile of profiles) {
     const laneArtifactDir = profileArtifactDir(profile);
-    const env = {
-      DROIDAGENT_PERF_LIVE: "1",
-      DROIDAGENT_E2E_REAL_RUNTIME: "1",
-      DROIDAGENT_E2E_OLLAMA_MODEL: profile.modelId,
-      DROIDAGENT_E2E_OLLAMA_CONTEXT_WINDOW: String(profile.contextWindow),
-      DROIDAGENT_OPENCLAW_PORT: String(profile.openclawPort),
-      DROIDAGENT_PERF_ARTIFACT_DIR: laneArtifactDir,
-      DROIDAGENT_PERF_PROFILE_ID: profile.id,
-    };
+    const env = profileEnv(profile, laneArtifactDir);
     console.log(`\nRunning ${formatPerfModelProfile(profile)}`);
     await run("pnpm", ["perf:server"], env);
     await run("pnpm", ["perf:e2e"], env);

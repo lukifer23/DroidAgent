@@ -57,7 +57,8 @@ pnpm verify:full
   - writes to `artifacts/perf/live/current/`
 - `pnpm perf:model-compare`
   - benchmarks the maintained local live model profiles side by side
-  - current maintained pair: `qwen3.5:4b` and `gemma4:e4b`, both at `65k`
+  - current maintained pair: `qwen3.5:4b` and `gemma4:e4b`, both on Ollama at `65k`
+  - optional llama.cpp GGUF fallback lane: `gemma4_e4b_hf_65k`
   - writes lane artifacts under `artifacts/perf/model-compare/`
 
 ## Perf And Diagnostics
@@ -73,7 +74,7 @@ pnpm verify:full
 - `pnpm perf:report`
   - prints the latest server and E2E perf artifacts
 - the route-switch perf artifact is measured from in-browser route activation to first visible destination control, not from Playwright's outer click timing
-- live perf and model-compare now run a seeded authenticated server without `DROIDAGENT_TEST_MODE`, then apply the requested Ollama profile through the same runtime-selection path used by the product before the perf lane is marked ready
+- live perf and model-compare now run a seeded authenticated server without `DROIDAGENT_TEST_MODE`, then apply the requested runtime profile through the same runtime-selection path used by the product before the perf lane is marked ready
 
 ## Release Workflow
 

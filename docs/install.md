@@ -64,8 +64,9 @@ The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailsc
 6. Use a one-time bootstrap link only when you need to enroll a new device-specific passkey after the canonical URL is healthy.
 7. Use the canonical remote URL for daily phone access after enrollment; bootstrap links are only for adding a device.
 8. The default local model path is `qwen3.5:4b` at `65k` context with thinking disabled, smart context management enabled, the same primary model handling image/PDF chat attachments whenever Ollama reports `vision`, `qwen2.5vl:3b` only as the fallback attachment model for text-only primaries, and `embeddinggemma:300m-qat-q8_0` handling semantic memory locally.
-9. The current staged local comparison candidate is `gemma4:e4b` at the same `65k` context budget; evaluate it with `pnpm perf:model-compare` before changing the default runtime path.
-10. The running host reports its own build/version line in Settings and diagnostics so screenshots, docs, and support notes stay aligned.
+9. The current staged local comparison candidate is `gemma4:e4b` on Ollama at the same `65k` context budget; it requires Ollama `0.20.0+` and should be evaluated with `pnpm perf:model-compare` before changing the default runtime path.
+10. The optional GGUF fallback lane for that same candidate remains available through llama.cpp as `gemma4_e4b_hf_65k` when you need to compare provider/runtime behavior directly.
+11. The running host reports its own build/version line in Settings and diagnostics so screenshots, docs, and support notes stay aligned.
 
 ## Manual setup
 

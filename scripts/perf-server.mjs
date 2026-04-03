@@ -4,7 +4,7 @@ import http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 import {
   repoRoot,
@@ -46,6 +46,23 @@ async function ensureHarnessServer() {
   }
 
   const harnessPort = process.env.DROIDAGENT_PERF_PORT ?? String(4420);
+  const cleanupResult = spawnSync(
+    "node",
+    [path.join(repoRoot, "scripts", "cleanup-e2e-server.mjs")],
+    {
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        DROIDAGENT_E2E_PORT: harnessPort,
+      },
+      encoding: "utf8",
+    },
+  );
+  if (cleanupResult.status !== 0) {
+    throw new Error(
+      `Failed to clean up the perf harness on port ${harnessPort}: ${cleanupResult.stderr || cleanupResult.stdout || "unknown error"}`.trim(),
+    );
+  }
   const e2eStatePath = resolveE2EStatePath(harnessPort);
   await fs.rm(e2eStatePath, { force: true }).catch(() => undefined);
   const child = spawn(
@@ -62,30 +79,40 @@ async function ensureHarnessServer() {
     },
   );
 
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    try {
-      const state = JSON.parse(await fs.readFile(e2eStatePath, "utf8"));
-      if (state.rootDir && state.mode === "live-runtime") {
-        await waitForFile(resolvePerfReadyPath(state.rootDir));
+  try {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      try {
+        const state = JSON.parse(await fs.readFile(e2eStatePath, "utf8"));
+        if (state.rootDir && state.mode === "live-runtime") {
+          await waitForFile(resolvePerfReadyPath(state.rootDir));
+        }
+        await waitForHealth(state.baseUrl);
+        if (state.rootDir && state.mode !== "live-runtime") {
+          await waitForFile(resolvePerfReadyPath(state.rootDir));
+        }
+        return {
+          baseUrl: state.baseUrl,
+          sessionToken: state.sessionToken,
+          stop: async () => {
+            if (child.exitCode === null) {
+              child.kill("SIGTERM");
+            }
+          },
+        };
+      } catch {
+        await sleep(250);
       }
-      await waitForHealth(state.baseUrl);
-      if (state.rootDir && state.mode !== "live-runtime") {
-        await waitForFile(resolvePerfReadyPath(state.rootDir));
-      }
-      return {
-        baseUrl: state.baseUrl,
-        sessionToken: state.sessionToken,
-        stop: async () => {
-          if (child.exitCode === null) {
-            child.kill("SIGTERM");
-          }
-        },
-      };
-    } catch {
-      await sleep(250);
     }
+  } catch (error) {
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+    }
+    throw error;
   }
 
+  if (child.exitCode === null) {
+    child.kill("SIGTERM");
+  }
   throw new Error("Timed out waiting for the deterministic perf harness.");
 }
 

@@ -61,6 +61,10 @@ const oversizedAllowlist = new Map([
     "apps/web/src/screens/settings-screen.tsx",
     "Settings orchestration remains centralized while canonical maintenance recovery actions settle.",
   ],
+  [
+    "apps/server/src/services/openclaw-service.ts",
+    "OpenClaw service remains the compatibility boundary while gateway/chat/runtime extraction is still in progress.",
+  ],
 ]);
 
 async function collectFiles(entryPath) {

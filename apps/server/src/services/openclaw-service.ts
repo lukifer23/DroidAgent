@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
+import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 
 import {
   ChannelConfigSummarySchema,
@@ -59,6 +60,15 @@ import type { HarnessRuntimeModelConfig } from "./harness-service.js";
 
 export class OpenClawService {
   gatewayProcess: ChildProcess | null = null;
+  liveGatewayClient: GatewayClient | null = null;
+  liveGatewayClientReadyPromise: Promise<GatewayClient> | null = null;
+  liveGatewayEventListeners = new Set<
+    (event: {
+      event: string;
+      payload: unknown;
+      seq?: number;
+    }) => void
+  >();
   private gatewayLogStream: fs.WriteStream | null = null;
   private gatewayLogQueue: Promise<void> = Promise.resolve();
   private gatewayToken: string | null = null;
@@ -851,6 +861,7 @@ export class OpenClawService {
   async registerLlamaCppProvider(
     modelId: string,
     contextWindow: number,
+    supportsVision = false,
   ): Promise<void> {
     const provider = {
       baseUrl: `http://127.0.0.1:${process.env.DROIDAGENT_LLAMA_CPP_PORT ?? 8012}/v1`,
@@ -861,7 +872,7 @@ export class OpenClawService {
           id: modelId,
           name: modelId,
           reasoning: false,
-          input: ["text"],
+          input: supportsVision ? ["text", "image"] : ["text"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow,
           maxTokens: contextWindow,

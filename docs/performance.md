@@ -27,13 +27,14 @@ pnpm hygiene:check
   - route-switch timing starts at in-browser route activation and ends when the destination control is visible
   - writes one artifact per Playwright project under `artifacts/perf/`
 - `pnpm perf:live`
-  - runs the same server + E2E perf probes with `DROIDAGENT_PERF_LIVE=1` against a seeded real OpenClaw/Ollama lane
+  - runs the same server + E2E perf probes with `DROIDAGENT_PERF_LIVE=1` against a seeded real runtime lane
   - writes live artifacts to `artifacts/perf/live/current/` instead of clobbering the deterministic artifacts
-  - intended for opt-in OpenClaw/Ollama validation; not used as the deterministic CI regression gate
-  - honors `DROIDAGENT_E2E_OLLAMA_MODEL` and `DROIDAGENT_E2E_OLLAMA_CONTEXT_WINDOW` when you want a specific live local profile
+  - intended for opt-in OpenClaw/local-runtime validation; not used as the deterministic CI regression gate
+  - honors `DROIDAGENT_E2E_RUNTIME_PROVIDER`, `DROIDAGENT_E2E_OLLAMA_MODEL`, `DROIDAGENT_E2E_OLLAMA_CONTEXT_WINDOW`, `DROIDAGENT_E2E_LLAMACPP_MODEL`, and `DROIDAGENT_E2E_LLAMACPP_CONTEXT_WINDOW` when you want a specific live local profile
 - `pnpm perf:model-compare`
   - benchmarks the maintained live local model profiles side by side
-  - current maintained comparison is `qwen3.5:4b` vs `gemma4:e4b`, both at `65536`
+  - current maintained comparison is `qwen3.5:4b` vs `gemma4:e4b`, both on Ollama at `65536`
+  - the fallback GGUF lane remains available as `gemma4_e4b_hf_65k` when you want to compare the llama.cpp path explicitly
   - writes per-profile artifacts under `artifacts/perf/model-compare/<profile-id>/`
   - writes the aggregate comparison report to `artifacts/perf/model-compare/compare-summary.json`
 - `pnpm perf:report`
@@ -118,8 +119,8 @@ Notable implementation guardrails in this pass:
 - the `Files` route stays hot in the shell while the other secondary operator routes warm during idle, which trims route-switch churn without forcing every screen into the unauthenticated bootstrap path
 - deterministic `route_switch_ms` now starts inside the browser at route activation instead of before Playwright actionability checks, which keeps the gate tied to app route work
 - shared bundle budgets now gate app-shell, React vendor, markdown, and xterm chunks instead of only the main entry and terminal leaf route
-- live perf now boots a seeded authenticated server without `DROIDAGENT_TEST_MODE`, applies the requested Ollama profile through the same runtime selection path the product uses, and records the active model/context in both server and E2E artifacts
-- local model comparison now runs in isolated artifact lanes so baseline Qwen and candidate Gemma results can be reviewed side by side without overwriting the deterministic CI artifacts
+- live perf now boots a seeded authenticated server without `DROIDAGENT_TEST_MODE`, applies the requested runtime profile through the same runtime selection path the product uses, and records the active model/context in both server and E2E artifacts
+- local model comparison now runs in isolated artifact lanes with isolated app/OpenClaw ports, so baseline Qwen and candidate Gemma results can be reviewed side by side without overwriting deterministic artifacts or reusing stale live servers
 
 The Settings diagnostics view now shows p95, last sample, sample count, `ok`/`warn`/`error` counts, and sample age so old or unhealthy latency numbers are easier to spot before they mislead an operator.
 
@@ -164,7 +165,9 @@ OpenClaw is configured with `agents.defaults.thinkingDefault = "off"` by default
 
 The deterministic local baseline still assumes `qwen3.5:4b` on Ollama with a `65k` context budget, the same primary model handling local image/PDF analysis whenever Ollama reports `vision`, `qwen2.5vl:3b` only as the fallback attachment model for text-only primaries, `embeddinggemma:300m-qat-q8_0` for local semantic memory, smart context management enabled, and workspace memory search enabled.
 
-The current maintained live comparison candidate is `gemma4:e4b` at the same `65k` context budget. The benchmark workflow keeps that candidate in the live comparison lane until the side-by-side artifacts show it should replace the default path.
+The current maintained live comparison candidate is `gemma4:e4b` on Ollama at the same `65k` context budget. `ollama show gemma4:e4b` on the maintained backend now reports `vision`, `audio`, `tools`, and `thinking`, so the benchmark lane exercises the same local multimodal/runtime path we would ship if it replaces Qwen.
+
+The maintained Gemma 4 candidate requires Ollama `0.20.0+`. The optional llama.cpp fallback lane remains available for explicit GGUF comparisons as `gemma4_e4b_hf_65k`.
 
 ## Baseline Procedure
 
@@ -177,7 +180,7 @@ The current maintained live comparison candidate is `gemma4:e4b` at the same `65
 
 ## Live Model Comparison
 
-1. Confirm Ollama is running locally.
+1. Confirm the local runtime is running.
 2. Run `pnpm perf:model-compare`.
 3. Review `artifacts/perf/model-compare/compare-summary.json`.
 4. Review each per-profile lane under `artifacts/perf/model-compare/<profile-id>/`.

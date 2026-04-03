@@ -62,13 +62,14 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - browser traffic never talks directly to OpenClaw
 - single owner, multiple passkeys
 - Ollama is the default local runtime path
+- Ollama `0.20.0+` is required for the maintained `gemma4:e4b` comparison lane
 - the default local Ollama context budget is `65k`
 - the default local semantic-memory embedding model is `embeddinggemma:300m-qat-q8_0` on Ollama
 - `qwen3.5:4b` is the default local chat model at a `65k` working context budget, and DroidAgent now reuses that same model for image/PDF work when Ollama reports `vision` capability
-- `gemma4:e4b` at the same `65k` context budget is the current staged comparison candidate and is exercised through the live benchmark lane before any default swap
+- `gemma4:e4b` at the same `65k` context budget is the current staged comparison candidate on Ollama, and `ollama show` now reports `vision`, `audio`, `tools`, and `thinking` for that local profile
 - `qwen2.5vl:3b` remains the fallback local attachment model only when the selected primary model is text-only
 - semantic memory stays local-first with fallback disabled, so embeddings do not silently drift to a cloud provider
-- llama.cpp remains the advanced local runtime path
+- llama.cpp remains the advanced local runtime path, and the Gemma 4 E4B GGUF lane stays available as an explicit fallback profile for provider-flexible perf comparisons
 - Tailscale Serve is the primary and only remote path exposed in the main UI right now
 - Tailscale may run through the system daemon or a DroidAgent-managed userspace daemon on macOS when the system daemon is unavailable
 - Signal stays optional and secondary to the web shell
@@ -125,7 +126,7 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - Hot server consumers now import focused OpenClaw facets for dashboard status, websocket fanout, owner operations, memory/workspace flows, runtime/bootstrap restore, and channel integration, leaving direct `openclawService` usage isolated to the harness layer plus the facet module.
 - Performance artifacts are now actively budgeted. `pnpm perf:baseline` refreshes the baseline snapshot and `pnpm perf:check` enforces `perf-budgets.json` against the latest artifacts and baseline thresholds.
 - Performance validation now has a dual track: deterministic harness metrics remain the CI regression gate (`perf:server`, `perf:e2e`, `perf:check`), while `perf:live` now runs a seeded real OpenClaw/Ollama lane and writes to `artifacts/perf/live/current/`.
-- `pnpm perf:model-compare` benchmarks the maintained local model profiles side by side, currently `qwen3.5:4b` vs `gemma4:e4b` at `65k`, and writes isolated artifacts plus `compare-summary.json` under `artifacts/perf/model-compare/`.
+- `pnpm perf:model-compare` benchmarks the maintained local model profiles side by side, currently `qwen3.5:4b` vs `gemma4:e4b` at `65k` on Ollama with isolated app/OpenClaw ports per lane, and writes isolated artifacts plus `compare-summary.json` under `artifacts/perf/model-compare/`.
 - File APIs are workspace-relative and text-only.
 - Chat attachments support local images, PDFs, Markdown, JSON, logs, and common code/text files through the real OpenClaw tool path.
 - The chat route is the primary operator surface: live run state, OpenClaw approval cards, unified decision context, tool summaries, attachments, markdown/code rendering, editable durable-memory capture actions, suggested command promotion, and per-run client timings are all surfaced there.

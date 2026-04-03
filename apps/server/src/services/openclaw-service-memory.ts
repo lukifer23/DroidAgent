@@ -10,6 +10,7 @@ import {
 } from "@droidagent/shared";
 
 import { OPENCLAW_GATEWAY_PORT, OPENCLAW_GATEWAY_URL, paths } from "../env.js";
+import { llamaCppModelSupportsVision } from "../lib/llamacpp.js";
 import {
   getConfigPathValue,
   hashConfigFingerprint,
@@ -104,6 +105,7 @@ type OpenClawMemoryService = OpenClawService & {
   registerLlamaCppProvider(
     modelId: string,
     contextWindow: number,
+    supportsVision?: boolean,
   ): Promise<void>;
 };
 
@@ -343,6 +345,12 @@ export const openClawMemoryMethods = {
     await service.ensureWorkspaceScaffold(workspaceRoot);
     const multimodalConfig =
       await service.resolveOllamaMultimodalConfig(runtimeSettings);
+    const llamaCppSupportsVision =
+      runtimeSettings.activeProviderId === "llamacpp-default" &&
+      llamaCppModelSupportsVision(runtimeSettings.llamaCppModel);
+    const attachmentModelRef = llamaCppSupportsVision
+      ? service.resolvePrimaryModel(runtimeSettings)
+      : `ollama/${multimodalConfig.attachmentModelId}`;
     const gatewayToken = await service.ensureGatewayToken();
 
     const desiredConfig: Array<[string, unknown]> = [
@@ -360,11 +368,11 @@ export const openClawMemoryMethods = {
       ],
       [
         "agents.defaults.imageModel.primary",
-        `ollama/${multimodalConfig.attachmentModelId}`,
+        attachmentModelRef,
       ],
       [
         "agents.defaults.pdfModel.primary",
-        `ollama/${multimodalConfig.attachmentModelId}`,
+        attachmentModelRef,
       ],
       ["agents.defaults.thinkingDefault", "off"],
       ["tools.profile", "coding"],
@@ -715,9 +723,31 @@ export const openClawMemoryMethods = {
     }
 
     if (config.providerId === "llamacpp-default") {
+      const runtimeSettings = await appStateService.getRuntimeSettings();
+      const supportsVision = llamaCppModelSupportsVision(
+        runtimeSettings.llamaCppModel,
+      );
+      const fallbackMultimodalConfig = await service.resolveOllamaMultimodalConfig(
+        runtimeSettings,
+      );
+      const attachmentModelRef = supportsVision
+        ? `llamacpp/${config.modelId}`
+        : `ollama/${fallbackMultimodalConfig.attachmentModelId}`;
+      let nextConfig = service.readCurrentConfig();
+      nextConfig = await service.setConfigValueIfNeeded(
+        nextConfig,
+        "agents.defaults.imageModel.primary",
+        attachmentModelRef,
+      );
+      nextConfig = await service.setConfigValueIfNeeded(
+        nextConfig,
+        "agents.defaults.pdfModel.primary",
+        attachmentModelRef,
+      );
       await service.registerLlamaCppProvider(
         config.modelId,
         config.contextWindow ?? 8192,
+        supportsVision,
       );
       await service.applyContextManagementPolicy({
         providerId: "llamacpp-default",

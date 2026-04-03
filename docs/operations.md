@@ -86,9 +86,11 @@ pnpm perf:check
 - Durable memory capture is owner-reviewed. Chat messages and file selections create drafts first, then Settings edits the draft while the shared decision inbox stays authoritative for apply or dismiss.
 - Suggested shell blocks from assistant replies can become `Run in Chat` or `Open in Terminal`. In-chat runs stay inside the workspace job jail; terminal suggestions are inserted but never auto-executed.
 - The default local chat model is `qwen3.5:4b` with a `65k` context budget and thinking disabled.
-- `gemma4:e4b` at the same `65k` context budget is the current staged comparison candidate and should stay in the benchmark lane until the live compare artifacts justify a default swap.
+- `gemma4:e4b` on Ollama at the same `65k` context budget is the current staged comparison candidate and should stay in the benchmark lane until the live compare artifacts justify a default swap.
+- The maintained Gemma 4 candidate requires Ollama `0.20.0+`; `ollama show gemma4:e4b` now reports `vision`, `audio`, `tools`, and `thinking` on that backend.
 - When Ollama reports `vision` for the selected primary model, DroidAgent reuses that same model for image and PDF analysis inside the chat composer.
 - `qwen2.5vl:3b` only stays as the fallback multimodal model when the selected primary model is text-only.
+- Vision-capable llama.cpp repos now also keep image/PDF analysis on the same local primary model instead of forcing everything back through the Ollama fallback path.
 - Semantic memory defaults to local Ollama embeddings with `embeddinggemma:300m-qat-q8_0`; DroidAgent keeps fallback disabled so memory stays on-device instead of silently drifting to a cloud provider.
 - Keep durable personalization in `PREFERENCES.md`; DroidAgent includes it in semantic recall so smaller local models can stay more useful and more operator-specific over time.
 - Use the canonical remote URL for daily access when the same passkey provider already syncs to the phone.
@@ -105,8 +107,9 @@ pnpm perf:check
 - Chat timing is split into accept, first-delta wait, first-delta forward, and full relay duration so model latency and DroidAgent overhead are not conflated.
 - Diagnostics now also include websocket patch flush latency, chat history resync latency, and session-switch latency so live-path churn is visible.
 - Perf artifacts now also track the first authenticated cold dashboard request, browser cold dashboard fetch, route switch, visible first token, memory prepare accepted/completion, and shared bundle chunks. Use `pnpm perf:baseline` to refresh the checked-in local baseline and `pnpm perf:check` to enforce the budgets.
-- `pnpm perf:live` is the opt-in live OpenClaw/Ollama validation lane, now runs against a seeded real runtime, and writes to `artifacts/perf/live/current/` instead of overwriting the deterministic artifacts.
-- `pnpm perf:model-compare` runs the maintained live model comparison set, currently `qwen3.5:4b` vs `gemma4:e4b` at `65k`, and writes the side-by-side summary to `artifacts/perf/model-compare/compare-summary.json`.
+- `pnpm perf:live` is the opt-in live OpenClaw/local-runtime validation lane, now runs against a seeded real runtime, and writes to `artifacts/perf/live/current/` instead of overwriting the deterministic artifacts.
+- `pnpm perf:model-compare` runs the maintained live model comparison set, currently `qwen3.5:4b` vs `gemma4:e4b` at `65k` on Ollama, and writes the side-by-side summary to `artifacts/perf/model-compare/compare-summary.json`.
+- The optional llama.cpp Gemma lane remains available as `gemma4_e4b_hf_65k` when you want a provider/runtime comparison instead of the maintained Ollama-vs-Ollama candidate test.
 - The Settings route also shows the running build/version identity so the live host, screenshots, logs, and repo all stay on the same release line.
 - The chat route now accepts local images, PDFs, Markdown, JSON, logs, and common code/text files. DroidAgent stores them under `~/.droidagent/uploads` and passes them through the real OpenClaw tool path instead of a parallel mock transcript.
 - The chat route is the operator console: it surfaces live run state, OpenClaw approval cards, session-scoped decision context, tool summaries, attachments, code blocks, and client-side per-run timings.

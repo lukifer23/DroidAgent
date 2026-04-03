@@ -29,6 +29,7 @@ import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 import { harnessService } from "./harness-service.js";
 import { keychainService } from "./keychain-service.js";
+import { applyLlamaCppProfile } from "./llamacpp-profile-service.js";
 import { applyOllamaProfile } from "./ollama-profile-service.js";
 import { openclawRuntimeFacet } from "./openclaw-service-facets.js";
 import { signalService } from "./signal-service.js";
@@ -58,6 +59,12 @@ const LLAMA_CPP_PRESETS: LlamaModelPreset[] = [
     label: "Qwen3 8B Instruct GGUF",
     hfRepo: "bartowski/Qwen3-8B-GGUF",
     contextWindow: 32768,
+  },
+  {
+    id: "gemma-4-e4b-it-q4-k-m",
+    label: "Gemma 4 E4B IT GGUF Q4_K_M",
+    hfRepo: "unsloth/gemma-4-E4B-it-GGUF:Q4_K_M",
+    contextWindow: 65536,
   },
 ];
 
@@ -445,22 +452,10 @@ export class RuntimeService {
       const preset =
         LLAMA_CPP_PRESETS.find((entry) => entry.id === modelId) ??
         LLAMA_CPP_PRESETS[0]!;
-      await appStateService.updateRuntimeSettings({
-        selectedRuntime: "llamaCpp",
-        activeProviderId: "llamacpp-default",
-        llamaCppModel: preset.hfRepo,
-        llamaCppContextWindow: preset.contextWindow,
-      });
-      await harnessService.configureRuntimeModel({
-        providerId: "llamacpp-default",
-        modelId: path.basename(preset.hfRepo).toLowerCase(),
+      await this.configureLlamaCppProfile({
+        hfRepo: preset.hfRepo,
         contextWindow: preset.contextWindow,
       });
-      await appStateService.markSetupStepCompleted("models", {
-        selectedRuntime: "llamaCpp",
-        selectedModel: preset.hfRepo,
-      });
-      this.invalidateCaches();
       return;
     }
   }
@@ -495,6 +490,31 @@ export class RuntimeService {
         this.invalidateCaches();
       },
     });
+  }
+
+  async configureLlamaCppProfile(config: {
+    hfRepo: string;
+    contextWindow?: number | null;
+  }): Promise<{ hfRepo: string; contextWindow: number; modelId: string }> {
+    const currentSettings = await appStateService.getRuntimeSettings();
+    const wasRunning = (await this.llamaCppStatus()).state === "running";
+    const result = await applyLlamaCppProfile({
+      hfRepo: config.hfRepo,
+      ...(config.contextWindow === undefined
+        ? {}
+        : { contextWindow: config.contextWindow }),
+      afterApply: () => {
+        this.invalidateCaches();
+      },
+    });
+    const profileChanged =
+      currentSettings.llamaCppModel !== result.hfRepo ||
+      currentSettings.llamaCppContextWindow !== result.contextWindow;
+    if (wasRunning && profileChanged) {
+      await this.stopRuntime("llamaCpp");
+      await this.startRuntime("llamaCpp");
+    }
+    return result;
   }
 
   async listProviderProfiles(): Promise<ProviderProfile[]> {
@@ -595,7 +615,7 @@ export class RuntimeService {
     const child = spawn(
       binaryPath,
       [
-        "-hf",
+        "--hf-repo",
         settings.llamaCppModel,
         "--host",
         "127.0.0.1",

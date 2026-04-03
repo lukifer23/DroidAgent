@@ -5,8 +5,9 @@ export const perfModelProfiles = [
     id: "qwen35_4b_65k",
     label: "Qwen 3.5 4B",
     provider: "ollama",
-    modelId: "qwen3.5:4b",
+    modelRef: "qwen3.5:4b",
     contextWindow: 65536,
+    appPort: 4520,
     openclawPort: 18891,
     baseline: true,
   },
@@ -14,9 +15,22 @@ export const perfModelProfiles = [
     id: "gemma4_e4b_65k",
     label: "Gemma 4 E4B",
     provider: "ollama",
-    modelId: "gemma4:e4b",
+    modelRef: "gemma4:e4b",
     contextWindow: 65536,
+    appPort: 4530,
     openclawPort: 18892,
+    baseline: false,
+    sourceUrl:
+      "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf?download=true",
+  },
+  {
+    id: "gemma4_e4b_hf_65k",
+    label: "Gemma 4 E4B Q4_K_M",
+    provider: "llamaCpp",
+    modelRef: "unsloth/gemma-4-E4B-it-GGUF:Q4_K_M",
+    contextWindow: 65536,
+    appPort: 4540,
+    openclawPort: 18893,
     baseline: false,
     sourceUrl:
       "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf?download=true",
@@ -61,7 +75,7 @@ export function profileArtifactDir(profile) {
 }
 
 export function formatPerfModelProfile(profile) {
-  return `${profile.label} (${profile.modelId}, ${Math.round(
+  return `${profile.label} (${profile.provider}/${profile.modelRef}, ${Math.round(
     profile.contextWindow / 1024,
   )}k)`;
 }

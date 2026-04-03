@@ -8,10 +8,7 @@ import {
   type ChatSendRequest,
 } from "@droidagent/shared";
 
-import {
-  OPENCLAW_GATEWAY_HTTP_URL,
-  OPENCLAW_GATEWAY_URL,
-} from "../env.js";
+import { OPENCLAW_GATEWAY_URL } from "../env.js";
 import { attachmentService } from "./attachment-service.js";
 import type { StreamRelayCallbacks } from "./harness-service.js";
 import {
@@ -21,14 +18,9 @@ import {
 } from "./openclaw-message-parts.js";
 import { performanceService } from "./performance-service.js";
 import {
-  CHAT_COMPLETIONS_PATH,
   DEFAULT_WEB_SESSION_ID,
   OPENCLAW_STREAM_TIMEOUT_MS,
   RELAY_QUEUE_SOFT_LIMIT,
-  extractDeltaText,
-  extractDeltaToolNames,
-  extractEventData,
-  extractStreamError,
   isInternalSessionRecord,
   operatorSession,
   parseHistoryMessage,
@@ -39,7 +31,6 @@ import type { OpenClawService } from "./openclaw-service.js";
 
 type OpenClawChatService = OpenClawService & {
   activeRuns: Map<string, { controller: AbortController; runId: string }>;
-  gatewayHeaders(sessionKey: string): Promise<HeadersInit>;
   ensureConfigured(): Promise<void>;
   ensureOperatorExecAllowlist(): Promise<void>;
   callGateway<T>(
@@ -53,6 +44,21 @@ type OpenClawChatService = OpenClawService & {
     timeoutMs?: number,
   ): Promise<string>;
   ensureGatewayToken(): Promise<string>;
+  subscribeToLiveGatewayEvents(
+    listener: (event: {
+      event: string;
+      payload: unknown;
+      seq?: number;
+    }) => void,
+  ): () => void;
+  requestLiveGateway<T>(
+    method: string,
+    params?: unknown,
+    opts?: {
+      expectFinal?: boolean;
+      timeoutMs?: number | null;
+    },
+  ): Promise<T>;
   streamMessageRun(
     sessionKey: string,
     message: string,
@@ -61,6 +67,115 @@ type OpenClawChatService = OpenClawService & {
     relay: StreamRelayCallbacks,
   ): Promise<void>;
 };
+
+type GatewayChatEventRecord = {
+  runId?: unknown;
+  sessionKey?: unknown;
+  state?: unknown;
+  message?: unknown;
+  errorMessage?: unknown;
+};
+
+type GatewayAgentEventRecord = {
+  runId?: unknown;
+  stream?: unknown;
+  data?: unknown;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function collectStringBlocks(
+  content: unknown,
+  blockType: string,
+  valueKey: string,
+): string[] {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const parts: string[] = [];
+  for (const block of content) {
+    const record = asRecord(block);
+    if (!record || record.type !== blockType) {
+      continue;
+    }
+    const value = record[valueKey];
+    if (typeof value === "string" && value.trim()) {
+      parts.push(value.trim());
+    }
+  }
+
+  return parts;
+}
+
+function extractTextFromGatewayMessage(message: unknown): string {
+  const record = asRecord(message);
+  if (!record) {
+    return "";
+  }
+
+  const content = record.content;
+  if (typeof content === "string") {
+    return content.trim();
+  }
+
+  const textBlocks = collectStringBlocks(content, "text", "text");
+  if (textBlocks.length > 0) {
+    return textBlocks.join("\n").trim();
+  }
+
+  if (record.stopReason === "error" && typeof record.errorMessage === "string") {
+    return record.errorMessage.trim();
+  }
+
+  return "";
+}
+
+function isCommandMessage(message: unknown): boolean {
+  const record = asRecord(message);
+  return record?.command === true;
+}
+
+function approvalIdFromText(text: string): string | null {
+  return text.match(/Approval required\s+\(id\s+([^)]+)\)/i)?.[1]?.trim() ?? null;
+}
+
+class GatewayStreamAssembler {
+  private readonly runs = new Map<string, string>();
+
+  ingestDelta(runId: string, message: unknown): string | null {
+    const previous = this.runs.get(runId) ?? "";
+    const next = extractTextFromGatewayMessage(message);
+    if (!next || next === previous) {
+      return null;
+    }
+    this.runs.set(runId, next);
+    if (next.startsWith(previous)) {
+      const delta = next.slice(previous.length);
+      return delta || null;
+    }
+    return null;
+  }
+
+  finalize(runId: string, message: unknown): string | null {
+    const previous = this.runs.get(runId) ?? "";
+    const next = extractTextFromGatewayMessage(message);
+    this.runs.delete(runId);
+    if (!next || next === previous) {
+      return null;
+    }
+    if (next.startsWith(previous)) {
+      const delta = next.slice(previous.length);
+      return delta || null;
+    }
+    return null;
+  }
+}
 
 export const openClawChatMethods = {
   async streamMessageRun(
@@ -72,38 +187,127 @@ export const openClawChatMethods = {
     relay: StreamRelayCallbacks,
   ): Promise<void> {
     const service = this as unknown as OpenClawChatService;
+    const streamAssembler = new GatewayStreamAssembler();
     const seenToolNames = new Set<string>();
     let firstDeltaSeen = false;
     let approvalRaised = false;
-    let activeToolWaitMetric: ReturnType<typeof performanceService.start> | null =
-      null;
-    let activeToolName: string | null = null;
+    const toolWaitMetrics = new Map<
+      string,
+      {
+        metric: ReturnType<typeof performanceService.start>;
+        toolName: string;
+      }
+    >();
 
     const finishToolWaitMetric = (
+      toolCallId: string,
       outcome: "ok" | "warn" | "error",
-      phase: "delta" | "done" | "replaced" | "abort" | "error",
+      phase: "done" | "abort" | "error",
     ) => {
-      activeToolWaitMetric?.finish({
+      const entry = toolWaitMetrics.get(toolCallId);
+      if (!entry) {
+        return;
+      }
+      entry.metric.finish({
         outcome,
         phase,
-        toolName: activeToolName,
+        toolName: entry.toolName,
       });
-      activeToolWaitMetric = null;
-      activeToolName = null;
+      toolWaitMetrics.delete(toolCallId);
     };
 
-    const startToolWaitMetric = (toolName: string) => {
-      if (activeToolWaitMetric) {
-        finishToolWaitMetric("warn", "replaced");
+    const finishAllToolWaitMetrics = (
+      outcome: "ok" | "warn" | "error",
+      phase: "done" | "abort" | "error",
+    ) => {
+      for (const toolCallId of [...toolWaitMetrics.keys()]) {
+        finishToolWaitMetric(toolCallId, outcome, phase);
       }
-      activeToolName = toolName;
-      activeToolWaitMetric = performanceService.start(
-        "server",
-        "chat.run.toolWait",
-        {
-          sessionId: sessionKey,
-          toolName,
-        },
+    };
+
+    const startToolWaitMetric = (toolCallId: string, toolName: string) => {
+      finishToolWaitMetric(toolCallId, "warn", "abort");
+      toolWaitMetrics.set(toolCallId, {
+        toolName,
+        metric: performanceService.start(
+          "server",
+          "chat.run.toolWait",
+          {
+            sessionId: sessionKey,
+            toolName,
+          },
+        ),
+      });
+    };
+
+    let relayQueue = Promise.resolve();
+    let relayQueueDepth = 0;
+    let relayFailure: Error | null = null;
+    const enqueueRelay = (work: () => Promise<void> | void): Promise<void> => {
+      relayQueueDepth += 1;
+      relayQueue = relayQueue
+        .then(async () => {
+          if (relayFailure) {
+            return;
+          }
+          try {
+            await work();
+          } catch (error) {
+            relayFailure =
+              error instanceof Error
+                ? error
+                : new Error("OpenClaw relay callback failed.");
+          } finally {
+            relayQueueDepth = Math.max(0, relayQueueDepth - 1);
+          }
+        })
+        .catch(() => {});
+
+      if (relayQueueDepth >= RELAY_QUEUE_SOFT_LIMIT) {
+        return relayQueue;
+      }
+      return Promise.resolve();
+    };
+    const throwIfRelayFailed = () => {
+      if (relayFailure) {
+        throw relayFailure;
+      }
+    };
+
+    const emitStreamingState = async () => {
+      if (firstDeltaSeen) {
+        return;
+      }
+      firstDeltaSeen = true;
+      await enqueueRelay(() =>
+        relay.onState?.({
+          stage: "streaming",
+          label:
+            seenToolNames.size > 0
+              ? "Working through tool output"
+              : "Reply streaming",
+          detail:
+            seenToolNames.size > 0
+              ? "The live harness is returning output."
+              : "The model started replying.",
+          active: true,
+        }),
+      );
+    };
+
+    const emitApprovalIfNeeded = async (text: string) => {
+      if (approvalRaised || !/Approval required/i.test(text)) {
+        return;
+      }
+      approvalRaised = true;
+      await enqueueRelay(() =>
+        relay.onState?.({
+          stage: "approval_required",
+          label: "Approval required",
+          detail: text.trim(),
+          approvalId: approvalIdFromText(text),
+          active: true,
+        }),
       );
     };
 
@@ -117,190 +321,89 @@ export const openClawChatMethods = {
     }, OPENCLAW_STREAM_TIMEOUT_MS);
     timeoutHandle.unref?.();
 
-    try {
-      const streamSignal = AbortSignal.any([
-        controller.signal,
-        timeoutController.signal,
-      ]);
-      let relayQueue = Promise.resolve();
-      let relayQueueDepth = 0;
-      let relayFailure: Error | null = null;
-      const enqueueRelay = (work: () => Promise<void> | void): Promise<void> => {
-        relayQueueDepth += 1;
-        relayQueue = relayQueue
-          .then(async () => {
-            if (relayFailure) {
-              return;
-            }
-            try {
-              await work();
-            } catch (error) {
-              relayFailure =
-                error instanceof Error
-                  ? error
-                  : new Error("OpenClaw relay callback failed.");
-            } finally {
-              relayQueueDepth = Math.max(0, relayQueueDepth - 1);
-            }
-          })
-          .catch(() => {});
-
-        if (relayQueueDepth >= RELAY_QUEUE_SOFT_LIMIT) {
-          return relayQueue;
-        }
-        return Promise.resolve();
-      };
-      const throwIfRelayFailed = () => {
-        if (relayFailure) {
-          throw relayFailure;
-        }
-      };
-
-      const response = await fetch(
-        `${OPENCLAW_GATEWAY_HTTP_URL}${CHAT_COMPLETIONS_PATH}`,
-        {
-          method: "POST",
-          headers: await service.gatewayHeaders(sessionKey),
-          body: JSON.stringify({
-            model: "openclaw",
-            stream: true,
-            messages: [
-              {
-                role: "user",
-                content: message,
-              },
-            ],
-          }),
-          signal: streamSignal,
-        },
-      );
-
-      if (!response.ok) {
-        const responseText = await response.text().catch(() => response.statusText);
-        throw new Error(
-          responseText || `OpenClaw stream failed with ${response.status}.`,
-        );
+    let resolveStream: (() => void) | null = null;
+    let rejectStream: ((error: Error) => void) | null = null;
+    let settled = false;
+    const finishStream = (work: () => Promise<void>): void => {
+      if (settled) {
+        return;
       }
+      settled = true;
+      void (async () => {
+        await work();
+        await relayQueue;
+        throwIfRelayFailed();
+      })()
+        .then(() => {
+          resolveStream?.();
+        })
+        .catch((error) => {
+          rejectStream?.(
+            error instanceof Error
+              ? error
+              : new Error("OpenClaw stream finalization failed."),
+          );
+        });
+    };
 
-      if (!response.body) {
-        throw new Error("OpenClaw stream did not provide a response body.");
-      }
+    let gatewayEventQueue = Promise.resolve();
+    const queueGatewayEvent = (work: () => Promise<void> | void): void => {
+      gatewayEventQueue = gatewayEventQueue
+        .then(async () => {
+          if (settled) {
+            return;
+          }
+          await work();
+        })
+        .catch((error) => {
+          finishStream(async () => {
+            finishAllToolWaitMetrics("error", "error");
+            const errorMessage =
+              error instanceof Error
+                ? error.message
+                : "OpenClaw gateway event handling failed.";
+            await enqueueRelay(() =>
+              relay.onState?.({
+                stage: "failed",
+                label: "Run failed",
+                detail: errorMessage,
+                active: false,
+              }),
+            );
+            await enqueueRelay(() => relay.onError(errorMessage));
+          });
+        });
+    };
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) {
-          buffer += decoder.decode();
-          break;
+    const unsubscribe = service.subscribeToLiveGatewayEvents((event) => {
+      queueGatewayEvent(async () => {
+        const payload = asRecord(event.payload);
+        if (!payload) {
+          return;
         }
 
-        buffer += decoder.decode(value, { stream: true });
-        const blocks = buffer.split(/\r?\n\r?\n/);
-        buffer = blocks.pop() ?? "";
-
-        for (const block of blocks) {
-          const rawData = extractEventData(block);
-          if (!rawData || rawData === "[DONE]") {
-            continue;
+        if (event.event === "agent") {
+          const agentEvent = payload as GatewayAgentEventRecord;
+          if (agentEvent.runId !== runId || agentEvent.stream !== "tool") {
+            return;
+          }
+          const data = asRecord(agentEvent.data);
+          const phase = typeof data?.phase === "string" ? data.phase : "";
+          const toolCallId =
+            typeof data?.toolCallId === "string" && data.toolCallId.trim()
+              ? data.toolCallId.trim()
+              : null;
+          const toolName =
+            typeof data?.name === "string" && data.name.trim()
+              ? data.name.trim()
+              : "tool";
+          if (!toolCallId) {
+            return;
           }
 
-          try {
-            const parsed = JSON.parse(rawData) as unknown;
-            const streamError = extractStreamError(parsed);
-            if (streamError) {
-              throw new Error(streamError);
-            }
-
-            const toolNames = extractDeltaToolNames(parsed);
-            for (const toolName of toolNames) {
-              if (seenToolNames.has(toolName)) {
-                continue;
-              }
-              seenToolNames.add(toolName);
-              startToolWaitMetric(toolName);
-              await enqueueRelay(() =>
-                relay.onState?.({
-                  stage: "tool_call",
-                  label: `Using ${toolName}`,
-                  detail: `OpenClaw called the ${toolName} tool.`,
-                  toolName,
-                  active: true,
-                }),
-              );
-              throwIfRelayFailed();
-            }
-
-            const delta = extractDeltaText(parsed);
-            if (delta) {
-              if (activeToolWaitMetric) {
-                finishToolWaitMetric("ok", "delta");
-              }
-              if (!firstDeltaSeen) {
-                firstDeltaSeen = true;
-                await enqueueRelay(() =>
-                  relay.onState?.({
-                    stage: "streaming",
-                    label:
-                      seenToolNames.size > 0
-                        ? "Working through tool output"
-                        : "Reply streaming",
-                    detail:
-                      seenToolNames.size > 0
-                        ? "The live harness is returning output."
-                        : "The model started replying.",
-                    active: true,
-                  }),
-                );
-                throwIfRelayFailed();
-              }
-
-              if (!approvalRaised && /Approval required/i.test(delta)) {
-                approvalRaised = true;
-                const approvalId =
-                  delta.match(/Approval required\s+\(id\s+([^)]+)\)/i)?.[1] ??
-                  null;
-                await enqueueRelay(() =>
-                  relay.onState?.({
-                    stage: "approval_required",
-                    label: "Approval required",
-                    detail: delta.trim(),
-                    approvalId,
-                    active: true,
-                  }),
-                );
-                throwIfRelayFailed();
-              }
-              await enqueueRelay(() => relay.onDelta(delta));
-              throwIfRelayFailed();
-            }
-          } catch (error) {
-            if (error instanceof SyntaxError) {
-              continue;
-            }
-            throw error;
-          }
-        }
-      }
-
-      const trailing = extractEventData(buffer);
-      if (trailing && trailing !== "[DONE]") {
-        try {
-          const parsed = JSON.parse(trailing) as unknown;
-          const streamError = extractStreamError(parsed);
-          if (streamError) {
-            throw new Error(streamError);
-          }
-
-          const toolNames = extractDeltaToolNames(parsed);
-          for (const toolName of toolNames) {
-            if (seenToolNames.has(toolName)) {
-              continue;
-            }
+          if (phase === "start") {
             seenToolNames.add(toolName);
-            startToolWaitMetric(toolName);
+            startToolWaitMetric(toolCallId, toolName);
             await enqueueRelay(() =>
               relay.onState?.({
                 stage: "tool_call",
@@ -310,82 +413,234 @@ export const openClawChatMethods = {
                 active: true,
               }),
             );
-            throwIfRelayFailed();
+            return;
           }
 
-          const delta = extractDeltaText(parsed);
-          if (delta) {
-            if (activeToolWaitMetric) {
-              finishToolWaitMetric("ok", "delta");
-            }
-            if (!firstDeltaSeen) {
-              firstDeltaSeen = true;
-              await enqueueRelay(() =>
-                relay.onState?.({
-                  stage: "streaming",
-                  label: "Reply streaming",
-                  detail: "The model started replying.",
-                  active: true,
-                }),
-              );
-              throwIfRelayFailed();
-            }
-            await enqueueRelay(() => relay.onDelta(delta));
-            throwIfRelayFailed();
+          if (phase === "result") {
+            finishToolWaitMetric(
+              toolCallId,
+              data?.isError === true ? "error" : "ok",
+              data?.isError === true ? "error" : "done",
+            );
+            await enqueueRelay(() =>
+              relay.onState?.({
+                stage: "tool_result",
+                label: `${toolName} finished`,
+                detail:
+                  data?.isError === true
+                    ? `OpenClaw reported an error from ${toolName}.`
+                    : `OpenClaw received output from ${toolName}.`,
+                toolName,
+                active: false,
+              }),
+            );
           }
-        } catch (error) {
-          if (!(error instanceof SyntaxError)) {
-            throw error;
-          }
+          return;
         }
+
+        if (event.event !== "chat") {
+          return;
+        }
+
+        const chatEvent = payload as GatewayChatEventRecord;
+        if (chatEvent.runId !== runId || chatEvent.sessionKey !== sessionKey) {
+          return;
+        }
+
+        if (chatEvent.state === "delta") {
+          const delta = streamAssembler.ingestDelta(runId, chatEvent.message);
+          if (!delta) {
+            return;
+          }
+          await emitStreamingState();
+          await emitApprovalIfNeeded(delta);
+          await enqueueRelay(() => relay.onDelta(delta));
+          return;
+        }
+
+        if (chatEvent.state === "final") {
+          finishStream(async () => {
+            const finalDelta = isCommandMessage(chatEvent.message)
+              ? null
+              : streamAssembler.finalize(runId, chatEvent.message);
+            if (finalDelta) {
+              await emitStreamingState();
+              await emitApprovalIfNeeded(finalDelta);
+              await enqueueRelay(() => relay.onDelta(finalDelta));
+            }
+            finishAllToolWaitMetrics("ok", "done");
+            await enqueueRelay(() =>
+              relay.onState?.({
+                stage: seenToolNames.size > 0 ? "tool_result" : "completed",
+                label:
+                  seenToolNames.size > 0
+                    ? "Tool output received"
+                    : "Reply complete",
+                detail:
+                  seenToolNames.size > 0
+                    ? "OpenClaw finished the tool-assisted reply."
+                    : "The live run completed successfully.",
+                active: false,
+              }),
+            );
+            await enqueueRelay(() => relay.onDone());
+          });
+          return;
+        }
+
+        if (chatEvent.state === "aborted") {
+          finishStream(async () => {
+            finishAllToolWaitMetrics("warn", "abort");
+            await enqueueRelay(() =>
+              relay.onState?.({
+                stage: "completed",
+                label: "Run stopped",
+                detail: "The active run was cancelled.",
+                active: false,
+              }),
+            );
+            await enqueueRelay(() => relay.onDone());
+          });
+          return;
+        }
+
+        if (chatEvent.state === "error") {
+          finishStream(async () => {
+            finishAllToolWaitMetrics("error", "error");
+            const errorMessage =
+              typeof chatEvent.errorMessage === "string" &&
+              chatEvent.errorMessage.trim()
+                ? chatEvent.errorMessage.trim()
+                : "OpenClaw stream failed.";
+            await enqueueRelay(() =>
+              relay.onState?.({
+                stage: "failed",
+                label: "Run failed",
+                detail: errorMessage,
+                active: false,
+              }),
+            );
+            await enqueueRelay(() => relay.onError(errorMessage));
+          });
+        }
+      });
+    });
+
+    const abortPromise = new Promise<never>((_, reject) => {
+      const rejectFromSignal = (signal: AbortSignal) => {
+        reject(
+          signal.reason instanceof Error
+            ? signal.reason
+            : new Error("OpenClaw stream aborted."),
+        );
+      };
+
+      if (controller.signal.aborted) {
+        rejectFromSignal(controller.signal);
+      } else {
+        controller.signal.addEventListener(
+          "abort",
+          () => {
+            rejectFromSignal(controller.signal);
+          },
+          { once: true },
+        );
       }
 
-      if (activeToolWaitMetric) {
-        finishToolWaitMetric("ok", "done");
+      if (timeoutController.signal.aborted) {
+        rejectFromSignal(timeoutController.signal);
+      } else {
+        timeoutController.signal.addEventListener(
+          "abort",
+          () => {
+            rejectFromSignal(timeoutController.signal);
+          },
+          { once: true },
+        );
       }
-      await enqueueRelay(() =>
-        relay.onState?.({
-          stage: seenToolNames.size > 0 ? "tool_result" : "completed",
-          label: seenToolNames.size > 0 ? "Tool output received" : "Reply complete",
-          detail:
-            seenToolNames.size > 0
-              ? "OpenClaw finished the tool-assisted reply."
-              : "The live run completed successfully.",
-          active: false,
-        }),
-      );
-      await relayQueue;
-      throwIfRelayFailed();
-      await relay.onDone();
+    });
+
+    const streamPromise = new Promise<void>((resolve, reject) => {
+      resolveStream = resolve;
+      rejectStream = reject;
+    });
+
+    try {
+      await service.requestLiveGateway("chat.send", {
+        sessionKey,
+        message,
+        deliver: false,
+        timeoutMs: OPENCLAW_STREAM_TIMEOUT_MS,
+        idempotencyKey: runId,
+      });
+      await Promise.race([streamPromise, abortPromise]);
     } catch (error) {
-      if ((error as { name?: string }).name === "AbortError") {
-        if (activeToolWaitMetric) {
-          finishToolWaitMetric("warn", "abort");
-        }
-        await relay.onState?.({
-          stage: "completed",
-          label: "Run stopped",
-          detail: "The active run was cancelled.",
-          active: false,
-        });
-        await relay.onDone();
+      if (settled) {
+        await streamPromise;
         return;
       }
 
-      if (activeToolWaitMetric) {
-        finishToolWaitMetric("error", "error");
+      if (controller.signal.aborted) {
+        finishAllToolWaitMetrics("warn", "abort");
+        await enqueueRelay(() =>
+          relay.onState?.({
+            stage: "completed",
+            label: "Run stopped",
+            detail: "The active run was cancelled.",
+            active: false,
+          }),
+        );
+        await enqueueRelay(() => relay.onDone());
+        await relayQueue;
+        throwIfRelayFailed();
+        return;
       }
-      await relay.onState?.({
-        stage: "failed",
-        label: "Run failed",
-        detail: error instanceof Error ? error.message : "OpenClaw stream failed.",
-        active: false,
-      });
-      await relay.onError(
-        error instanceof Error ? error.message : "OpenClaw stream failed.",
+
+      if (timeoutController.signal.aborted) {
+        finishAllToolWaitMetrics("error", "error");
+        try {
+          await service.requestLiveGateway("chat.abort", {
+            sessionKey,
+            runId,
+          });
+        } catch {
+          // Best effort only. The local relay still closes and the next resync converges history.
+        }
+        const timeoutMessage =
+          error instanceof Error
+            ? error.message
+            : "OpenClaw stream timed out before completing.";
+        await enqueueRelay(() =>
+          relay.onState?.({
+            stage: "failed",
+            label: "Run timed out",
+            detail: timeoutMessage,
+            active: false,
+          }),
+        );
+        await enqueueRelay(() => relay.onError(timeoutMessage));
+        await relayQueue;
+        throwIfRelayFailed();
+        return;
+      }
+
+      finishAllToolWaitMetrics("error", "error");
+      const errorMessage =
+        error instanceof Error ? error.message : "OpenClaw stream failed.";
+      await enqueueRelay(() =>
+        relay.onState?.({
+          stage: "failed",
+          label: "Run failed",
+          detail: errorMessage,
+          active: false,
+        }),
       );
+      await enqueueRelay(() => relay.onError(errorMessage));
+      await relayQueue;
+      throwIfRelayFailed();
     } finally {
       clearTimeout(timeoutHandle);
+      unsubscribe();
       const active = service.activeRuns.get(sessionKey);
       if (active?.runId === runId) {
         service.activeRuns.delete(sessionKey);
@@ -502,14 +757,14 @@ export const openClawChatMethods = {
 
   async sendChat(this: OpenClawService, sessionKey: string, message: string) {
     const service = this as unknown as OpenClawChatService;
-    await service.callGateway(
+    await service.requestLiveGateway(
       "chat.send",
       {
         sessionKey,
         message,
         idempotencyKey: randomUUID(),
       },
-      true,
+      { expectFinal: true },
     );
   },
 
@@ -517,12 +772,19 @@ export const openClawChatMethods = {
     const service = this as unknown as OpenClawChatService;
     const active = service.activeRuns.get(sessionKey);
     if (active) {
-      active.controller.abort();
       service.activeRuns.delete(sessionKey);
+      try {
+        active.controller.abort();
+      } catch (error) {
+        console.warn("Failed to abort the local OpenClaw run controller", error);
+      }
     }
 
     try {
-      await service.callGateway("chat.abort", { sessionKey }, true);
+      await service.requestLiveGateway("chat.abort", {
+        sessionKey,
+        ...(active ? { runId: active.runId } : {}),
+      });
     } catch {
       // Some gateway builds may not expose chat.abort; the local abort controller still ends the relay.
     }
