@@ -6,7 +6,10 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { readE2EState, signInSeededOwner } from "../e2e/support";
 
-const artifactDir = path.resolve(process.cwd(), "artifacts", "perf");
+const artifactDir = path.resolve(
+  process.cwd(),
+  process.env.DROIDAGENT_PERF_ARTIFACT_DIR?.trim() || "artifacts/perf",
+);
 
 async function measureBrowserRouteSwitch(
   page: Page,
@@ -14,8 +17,9 @@ async function measureBrowserRouteSwitch(
   readyLocator: Locator,
 ): Promise<number> {
   await trigger.evaluate((element) => {
-    (window as typeof window & { __droidagentRouteSwitchStart?: number })
-      .__droidagentRouteSwitchStart = performance.now();
+    (
+      window as typeof window & { __droidagentRouteSwitchStart?: number }
+    ).__droidagentRouteSwitchStart = performance.now();
     (element as HTMLElement).click();
   });
   await expect(readyLocator).toBeVisible();
@@ -30,9 +34,13 @@ async function measureBrowserRouteSwitch(
   );
 }
 
-test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) => {
+test("captures end-to-end UX timings", async ({
+  page,
+  browserName,
+}, testInfo) => {
   const projectName = testInfo.project.name;
   const liveMode = process.env.DROIDAGENT_PERF_LIVE === "1";
+  testInfo.setTimeout(liveMode ? 120_000 : 45_000);
   const metrics = [];
 
   await signInSeededOwner(page.context());
@@ -53,11 +61,13 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   await expect(page.locator(".topbar-copy h1")).toBeVisible();
   metrics.push({
     name: "initial_load_ms",
-    durationMs: Number((performance.now() - loadStart).toFixed(2))
+    durationMs: Number((performance.now() - loadStart).toFixed(2)),
   });
 
   await page.getByRole("link", { name: "Files" }).click();
-  await expect(page.getByRole("button", { name: "Create Directory" })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Create Directory" }),
+  ).toBeVisible();
   await page.getByRole("link", { name: "Chat" }).click();
   await expect(
     page.getByPlaceholder(
@@ -79,7 +89,7 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   await expect(page.locator(".editor-textarea")).toBeVisible();
   metrics.push({
     name: "file_open_ms",
-    durationMs: Number((performance.now() - fileOpenStart).toFixed(2))
+    durationMs: Number((performance.now() - fileOpenStart).toFixed(2)),
   });
 
   const fileSaveStart = performance.now();
@@ -88,7 +98,7 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   await expect(page.getByText(/Saved|File saved/i).first()).toBeVisible();
   metrics.push({
     name: "file_save_ms",
-    durationMs: Number((performance.now() - fileSaveStart).toFixed(2))
+    durationMs: Number((performance.now() - fileSaveStart).toFixed(2)),
   });
 
   await page.getByRole("link", { name: "Settings" }).click();
@@ -144,7 +154,8 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   ).toBeVisible();
 
   const prompt = liveMode
-    ? `live-perf-${projectName}-${Date.now()}`
+    ? process.env.DROIDAGENT_PERF_CHAT_PROMPT?.trim() ||
+      "Summarize the current DroidAgent benchmark workspace in one short sentence."
     : `perf-${projectName}`;
   const sendButton = page.getByRole("button", { name: "Send" });
   await page
@@ -157,28 +168,36 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   await sendButton.click();
   const responseLocator = liveMode
     ? page.locator(".message-card.assistant .message-markdown").last()
-    : page.getByText(`Test harness reply: ${prompt}`, {
-        exact: true,
-      }).last();
+    : page
+        .getByText(`Test harness reply: ${prompt}`, {
+          exact: true,
+        })
+        .last();
   const streamingResponseLocator = page
     .locator(".message-card.assistant.streaming .message-markdown")
     .last();
+  const firstTokenTimeoutMs = liveMode ? 20_000 : 5_000;
   await Promise.any([
-    streamingResponseLocator.waitFor({ state: "visible", timeout: 5_000 }),
-    responseLocator.waitFor({ state: "visible", timeout: 5_000 }),
+    streamingResponseLocator.waitFor({
+      state: "visible",
+      timeout: firstTokenTimeoutMs,
+    }),
+    responseLocator.waitFor({ state: "visible", timeout: firstTokenTimeoutMs }),
   ]);
   metrics.push({
     name: "chat_first_token_visible_ms",
-    durationMs: Number((performance.now() - sendStart).toFixed(2))
+    durationMs: Number((performance.now() - sendStart).toFixed(2)),
   });
   await expect(responseLocator).toBeVisible();
   metrics.push({
     name: "chat_done_ms",
-    durationMs: Number((performance.now() - sendStart).toFixed(2))
+    durationMs: Number((performance.now() - sendStart).toFixed(2)),
   });
 
   const reconnectStart = performance.now();
-  const reconnectBanner = page.getByText(/You are offline|Reconnecting to DroidAgent/i);
+  const reconnectBanner = page.getByText(
+    /You are offline|Reconnecting to DroidAgent/i,
+  );
   await page.context().setOffline(true);
   await page.evaluate(() => {
     window.dispatchEvent(new Event("offline"));
@@ -191,7 +210,7 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   await expect(reconnectBanner).toHaveCount(0);
   metrics.push({
     name: "reconnect_resync_ms",
-    durationMs: Number((performance.now() - reconnectStart).toFixed(2))
+    durationMs: Number((performance.now() - reconnectStart).toFixed(2)),
   });
 
   const serverSnapshot = await page.evaluate(async () => {
@@ -213,24 +232,22 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
   ] as const;
   for (const [metricName, artifactName] of serverMetricNames) {
     const metric = serverSnapshot?.metrics?.find(
-      (
-        entry: {
-          name?: string;
-          summary?: { lastDurationMs?: number | null };
-          recentSamples?: Array<{
-            durationMs?: number | null;
-            endedAt?: string;
-            context?: Record<string, string | undefined>;
-          }>;
-        },
-      ) =>
-        entry.name === metricName,
+      (entry: {
+        name?: string;
+        summary?: { lastDurationMs?: number | null };
+        recentSamples?: Array<{
+          durationMs?: number | null;
+          endedAt?: string;
+          context?: Record<string, string | undefined>;
+        }>;
+      }) => entry.name === metricName,
     );
     const preferredSample =
-      metricName === "memory.prepare" || metricName === "memory.prepare.complete"
-        ? [...(metric?.recentSamples ?? [])]
+      metricName === "memory.prepare" ||
+      metricName === "memory.prepare.complete"
+        ? ([...(metric?.recentSamples ?? [])]
             .reverse()
-            .find((sample) => sample.context?.source === "operator") ?? null
+            .find((sample) => sample.context?.source === "operator") ?? null)
         : null;
     const durationMs =
       typeof preferredSample?.durationMs === "number"
@@ -244,8 +261,18 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
     }
   }
 
+  const healthSnapshotResponse = await page.request.get(
+    new URL("/api/health", state.baseUrl).toString(),
+  );
+  const healthSnapshot = healthSnapshotResponse.ok()
+    ? await healthSnapshotResponse.json()
+    : null;
+
   await fs.mkdir(artifactDir, { recursive: true });
-  const outputPath = path.join(artifactDir, `e2e-${browserName}-${projectName}.json`);
+  const outputPath = path.join(
+    artifactDir,
+    `e2e-${browserName}-${projectName}.json`,
+  );
   await fs.writeFile(
     outputPath,
     JSON.stringify(
@@ -253,11 +280,17 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
         generatedAt: new Date().toISOString(),
         browserName,
         project: projectName,
-        metrics
+        profileId:
+          process.env.DROIDAGENT_PERF_PROFILE_ID?.trim() ||
+          state.profileId ||
+          null,
+        mode: state.mode ?? null,
+        harnessSummary: healthSnapshot?.harnessSummary ?? null,
+        metrics,
       },
       null,
-      2
+      2,
     ),
-    "utf8"
+    "utf8",
   );
 });

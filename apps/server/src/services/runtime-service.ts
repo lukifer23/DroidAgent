@@ -29,6 +29,7 @@ import { TtlCache } from "../lib/ttl-cache.js";
 import { appStateService } from "./app-state-service.js";
 import { harnessService } from "./harness-service.js";
 import { keychainService } from "./keychain-service.js";
+import { applyOllamaProfile } from "./ollama-profile-service.js";
 import { openclawRuntimeFacet } from "./openclaw-service-facets.js";
 import { signalService } from "./signal-service.js";
 
@@ -71,8 +72,14 @@ export class RuntimeService {
   private readonly hostAccelerationCache = new TtlCache<
     Record<string, string | number | boolean>
   >(86_400_000);
-  private readonly binaryPathCaches = new Map<string, TtlCache<string | null>>();
-  private readonly binaryVersionCaches = new Map<string, TtlCache<string | null>>();
+  private readonly binaryPathCaches = new Map<
+    string,
+    TtlCache<string | null>
+  >();
+  private readonly binaryVersionCaches = new Map<
+    string,
+    TtlCache<string | null>
+  >();
 
   invalidateCaches(): void {
     this.runtimeStatusesCache.invalidate();
@@ -109,14 +116,18 @@ export class RuntimeService {
     });
   }
 
-  private async binaryVersion(binaryPath: string | null): Promise<string | null> {
+  private async binaryVersion(
+    binaryPath: string | null,
+  ): Promise<string | null> {
     if (!binaryPath) {
       return null;
     }
 
     return await this.binaryVersionCacheFor(binaryPath).get(async () => {
       try {
-        return (await runCommand(binaryPath, ["--version"])).stdout.trim() || null;
+        return (
+          (await runCommand(binaryPath, ["--version"])).stdout.trim() || null
+        );
       } catch {
         return null;
       }
@@ -424,20 +435,9 @@ export class RuntimeService {
   async pullModel(runtimeId: RuntimeId, modelId: string): Promise<void> {
     if (runtimeId === "ollama") {
       await runCommand("ollama", ["pull", modelId]);
-      await appStateService.updateRuntimeSettings({
-        selectedRuntime: "ollama",
-        activeProviderId: "ollama-default",
-        ollamaModel: modelId,
-      });
-      await harnessService.configureRuntimeModel({
-        providerId: "ollama-default",
+      await this.configureOllamaProfile({
         modelId,
       });
-      await appStateService.markSetupStepCompleted("models", {
-        selectedRuntime: "ollama",
-        selectedModel: modelId,
-      });
-      this.invalidateCaches();
       return;
     }
 
@@ -474,6 +474,27 @@ export class RuntimeService {
     await runCommand("ollama", ["pull", modelId]);
     this.invalidateCaches();
     return true;
+  }
+
+  async configureOllamaProfile(config: {
+    modelId: string;
+    contextWindow?: number | null;
+    ensureModel?: boolean;
+  }): Promise<{ modelId: string; contextWindow: number }> {
+    return await applyOllamaProfile({
+      modelId: config.modelId,
+      ...(config.contextWindow === undefined
+        ? {}
+        : { contextWindow: config.contextWindow }),
+      ensureModel: config.ensureModel
+        ? async (modelId) => {
+            await this.ensureOllamaModel(modelId);
+          }
+        : null,
+      afterApply: () => {
+        this.invalidateCaches();
+      },
+    });
   }
 
   async listProviderProfiles(): Promise<ProviderProfile[]> {

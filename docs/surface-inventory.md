@@ -13,50 +13,52 @@ This file is the canonical inventory for public surfaces and major internal data
 
 ## REST Surfaces
 
-| Surface | Canonical internal owner | Ownership |
-| --- | --- | --- |
-| `/api/dashboard` | `dashboardService` slice caches | DroidAgent-only value |
-| `/api/access`, `/api/bootstrap/*` | `accessService` | DroidAgent-only value |
-| `/api/auth/*`, `/api/passkeys/*` | `authService` | DroidAgent-only value |
-| `/api/sessions/*`, `/api/chat/*`, `/api/approvals/*` | `harnessService` + `decisionService` | DroidAgent wrapper |
-| `/api/decisions`, `/api/decisions/:decisionId/resolve` | `decisionService` | DroidAgent-only value |
-| `/api/memory/*`, `/api/memory/drafts/*` | `memoryPrepareService` + `memoryDraftService` + `decisionService` | DroidAgent-only value |
-| `/api/channels/*`, `/api/channels/signal/pairing/resolve` | `signalService` + `decisionService` + `openclawService` | DroidAgent wrapper |
-| `/api/files/*`, `/api/jobs/*`, `/api/terminal/*` | `fileService`, `jobService`, `terminalService` | DroidAgent-only value |
-| `/api/maintenance/*`, `/api/launch-agent/*` | `maintenanceService`, `launchAgentService` | DroidAgent-only value |
-| `/api/diagnostics/performance` | `performanceService` | DroidAgent-only value |
+| Surface                                                               | Canonical internal owner                                          | Ownership             |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------- |
+| `/api/dashboard`                                                      | `dashboardService` slice caches                                   | DroidAgent-only value |
+| `/api/access`, `/api/bootstrap/*`                                     | `accessService`                                                   | DroidAgent-only value |
+| `/api/auth/*`, `/api/passkeys/*`                                      | `authService`                                                     | DroidAgent-only value |
+| `/api/sessions/*`, `/api/chat/*`, `/api/approvals/*`                  | `harnessService` + `decisionService`                              | DroidAgent wrapper    |
+| `/api/decisions`, `/api/decisions/:decisionId/resolve`                | `decisionService`                                                 | DroidAgent-only value |
+| `/api/memory/*`, `/api/memory/drafts/*`                               | `memoryPrepareService` + `memoryDraftService` + `decisionService` | DroidAgent-only value |
+| `/api/channels/*`, `/api/channels/signal/pairing/resolve`             | `signalService` + `decisionService` + `openclawService`           | DroidAgent wrapper    |
+| `/api/files/*`, `/api/jobs/*`, `/api/terminal/*`                      | `fileService`, `jobService`, `terminalService`                    | DroidAgent-only value |
+| `/api/runtime/*`, `/api/providers/*`, `/api/models/*`, `/api/setup/*` | `runtimeService`, `quickstartService`, `keychainService`          | DroidAgent-only value |
+| `/api/maintenance/*`, `/api/launch-agent/*`                           | `maintenanceService`, `launchAgentService`                        | DroidAgent-only value |
+| `/api/diagnostics/performance`                                        | `performanceService`                                              | DroidAgent-only value |
 
 ## WebSocket Events
 
-| Event family | Canonical publisher | Notes |
-| --- | --- | --- |
-| `decision.updated`, `decisions.updated` | `decisionService` resolution path + `publishDecisionEffects` | authoritative owner-action stream |
-| `approval.updated`, `approvals.updated` | compatibility alias over exec-approval decisions | keep public compatibility intact |
-| `memory.updated`, `memoryDrafts.updated` | memory services + decision side-effects | draft review still resolves through the decision ledger |
-| `channel.updated` | channel/pairing updates | pairing truth stays OpenClaw-owned |
-| `chat.*`, `session.*` | `websocketHub` + harness relay | wrapper over OpenClaw session/chat truth |
-| `jobs.*`, `terminal.*`, `maintenance.*`, `performance.updated` | DroidAgent services | DroidAgent-native surfaces |
+| Event family                                                   | Canonical publisher                                          | Notes                                                   |
+| -------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
+| `decision.updated`, `decisions.updated`                        | `decisionService` resolution path + `publishDecisionEffects` | authoritative owner-action stream                       |
+| `approval.updated`, `approvals.updated`                        | compatibility alias over exec-approval decisions             | keep public compatibility intact                        |
+| `memory.updated`, `memoryDrafts.updated`                       | memory services + decision side-effects                      | draft review still resolves through the decision ledger |
+| `channel.updated`                                              | channel/pairing updates                                      | pairing truth stays OpenClaw-owned                      |
+| `chat.*`, `session.*`                                          | `websocketHub` + harness relay                               | wrapper over OpenClaw session/chat truth                |
+| `jobs.*`, `terminal.*`, `maintenance.*`, `performance.updated` | DroidAgent services                                          | DroidAgent-native surfaces                              |
 
 ## Canonical Internal Modules
 
-| Concern | Canonical location |
-| --- | --- |
-| owner decision ledger + compatibility routing | `apps/server/src/services/decision-service.ts` |
-| post-resolution decision fanout | `apps/server/src/lib/decision-updates.ts` |
-| chat relay timing | `apps/server/src/lib/chat-relay-metrics.ts` |
-| canonical chat send/abort orchestration | `apps/server/src/services/chat-run-coordinator.ts` |
-| shared output flush batching for jobs/terminal | `apps/server/src/lib/buffered-output-pipeline.ts` |
-| OpenClaw status cache ownership | `apps/server/src/services/openclaw-service-caches.ts` |
-| OpenClaw config helpers | `apps/server/src/services/openclaw-config.ts` |
-| OpenClaw workspace/bootstrap constants | `apps/server/src/services/openclaw-workspace.ts` |
-| OpenClaw attachment/message parsing | `apps/server/src/services/openclaw-message-parts.ts` |
-| dashboard/decision selectors | `apps/web/src/lib/dashboard-selectors.ts` |
-| shared display formatting | `apps/web/src/lib/formatters.ts` |
-| owner decision mutations | `apps/web/src/hooks/use-decision-actions.ts` |
-| session-scoped chat state assembly | `apps/web/src/hooks/use-chat-session-state.ts` |
-| shared chat session actions | `apps/web/src/lib/chat-session-actions.ts` |
-| script-side host/process helpers | `scripts/lib/common.mjs` |
-| shared decision contracts | `packages/shared/src/decisions.ts` re-exported by `packages/shared/src/index.ts` |
+| Concern                                        | Canonical location                                                               |
+| ---------------------------------------------- | -------------------------------------------------------------------------------- |
+| owner decision ledger + compatibility routing  | `apps/server/src/services/decision-service.ts`                                   |
+| post-resolution decision fanout                | `apps/server/src/lib/decision-updates.ts`                                        |
+| chat relay timing                              | `apps/server/src/lib/chat-relay-metrics.ts`                                      |
+| canonical chat send/abort orchestration        | `apps/server/src/services/chat-run-coordinator.ts`                               |
+| shared output flush batching for jobs/terminal | `apps/server/src/lib/buffered-output-pipeline.ts`                                |
+| OpenClaw status cache ownership                | `apps/server/src/services/openclaw-service-caches.ts`                            |
+| OpenClaw config helpers                        | `apps/server/src/services/openclaw-config.ts`                                    |
+| OpenClaw workspace/bootstrap constants         | `apps/server/src/services/openclaw-workspace.ts`                                 |
+| OpenClaw attachment/message parsing            | `apps/server/src/services/openclaw-message-parts.ts`                             |
+| dashboard/decision selectors                   | `apps/web/src/lib/dashboard-selectors.ts`                                        |
+| shared display formatting                      | `apps/web/src/lib/formatters.ts`                                                 |
+| owner decision mutations                       | `apps/web/src/hooks/use-decision-actions.ts`                                     |
+| session-scoped chat state assembly             | `apps/web/src/hooks/use-chat-session-state.ts`                                   |
+| shared chat session actions                    | `apps/web/src/lib/chat-session-actions.ts`                                       |
+| script-side host/process helpers               | `scripts/lib/common.mjs`                                                         |
+| maintained live model benchmark profiles       | `scripts/perf-model-profiles.mjs`                                                |
+| shared decision contracts                      | `packages/shared/src/decisions.ts` re-exported by `packages/shared/src/index.ts` |
 
 ## Compatibility Aliases Kept Public
 
@@ -78,16 +80,16 @@ This file is the canonical inventory for public surfaces and major internal data
 
 ## Durable Data Paths
 
-| Data | Source of truth | Ownership |
-| --- | --- | --- |
-| owner users, passkeys, auth sessions | SQLite under `~/.droidagent` | DroidAgent-only value |
-| decision audit records | `decision_records` SQLite table | DroidAgent-only value |
-| memory drafts | `memory_drafts` SQLite table | DroidAgent-only value |
-| maintenance operations | `maintenance_operations` SQLite table plus JSON mirror | DroidAgent-only value |
-| workspace durable memory files | workspace `MEMORY.md`, `PREFERENCES.md`, `memory/YYYY-MM-DD.md` | DroidAgent-only value |
-| semantic-memory engine status and pairing truth | OpenClaw Gateway/CLI | OpenClaw-owned truth |
-| session/chat routing and exec approval semantics | OpenClaw Gateway | OpenClaw-owned truth |
-| job logs, terminal transcripts, uploaded attachments | `~/.droidagent/logs` and `~/.droidagent/uploads` | DroidAgent-only value |
+| Data                                                 | Source of truth                                                 | Ownership             |
+| ---------------------------------------------------- | --------------------------------------------------------------- | --------------------- |
+| owner users, passkeys, auth sessions                 | SQLite under `~/.droidagent`                                    | DroidAgent-only value |
+| decision audit records                               | `decision_records` SQLite table                                 | DroidAgent-only value |
+| memory drafts                                        | `memory_drafts` SQLite table                                    | DroidAgent-only value |
+| maintenance operations                               | `maintenance_operations` SQLite table plus JSON mirror          | DroidAgent-only value |
+| workspace durable memory files                       | workspace `MEMORY.md`, `PREFERENCES.md`, `memory/YYYY-MM-DD.md` | DroidAgent-only value |
+| semantic-memory engine status and pairing truth      | OpenClaw Gateway/CLI                                            | OpenClaw-owned truth  |
+| session/chat routing and exec approval semantics     | OpenClaw Gateway                                                | OpenClaw-owned truth  |
+| job logs, terminal transcripts, uploaded attachments | `~/.droidagent/logs` and `~/.droidagent/uploads`                | DroidAgent-only value |
 
 ## Guardrails
 

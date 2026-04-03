@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { paths } from "../env.js";
+import { OPENCLAW_GATEWAY_URL, paths } from "../env.js";
 
 const {
   getRuntimeSettings,
@@ -291,6 +291,10 @@ describe("OpenClaw context management policy", () => {
           mode: "token",
           token: "existing-token",
         },
+        remote: {
+          url: OPENCLAW_GATEWAY_URL,
+          token: "existing-token",
+        },
         http: {
           endpoints: {
             chatCompletions: {
@@ -538,6 +542,10 @@ describe("OpenClaw context management policy", () => {
         auth: {
           token: "existing-token",
           mode: "token",
+        },
+        remote: {
+          url: OPENCLAW_GATEWAY_URL,
+          token: "existing-token",
         },
         http: {
           endpoints: {

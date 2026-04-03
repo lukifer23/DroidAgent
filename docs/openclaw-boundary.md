@@ -36,6 +36,7 @@ The concrete route, websocket, script, and data-path inventory that applies this
 - If OpenClaw already owns the underlying truth, DroidAgent should surface, filter, or audit it instead of recreating it.
 - Server consumers that only need OpenClaw memory/context/gateway status should depend on focused internal facets rather than the full `openclawService` orchestration surface.
 - Direct `openclawService` imports outside the harness adapter and facet module should be treated as boundary exceptions and reduced again when touched.
+- Local Ollama model/context changes should converge through the canonical DroidAgent runtime profile path so quickstart, manual runtime selection, and benchmark setup do not fork separate OpenClaw configuration flows.
 - New DroidAgent-native flows are justified only when they add owner control, mobile usability, workspace safety, or auditability that OpenClaw does not already provide.
 - Internal refactors that consolidate transport orchestration, status-cache ownership, or diagnostics are valid only when they preserve this boundary and do not migrate OpenClaw-owned semantics into DroidAgent.
 

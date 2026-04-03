@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export const repoRoot = process.cwd();
-export const artifactDir = path.join(repoRoot, "artifacts", "perf");
+const configuredArtifactDir = process.env.DROIDAGENT_PERF_ARTIFACT_DIR?.trim();
+export const artifactDir = path.resolve(
+  repoRoot,
+  configuredArtifactDir || path.join("artifacts", "perf"),
+);
 export const budgetsPath = path.join(repoRoot, "perf-budgets.json");
 export const baselinePath = path.join(artifactDir, "baseline.json");
 export const buildManifestPath = path.join(

@@ -19,6 +19,14 @@ async function main() {
   try {
     const server = await readJson(serverPath);
     console.log("Server benchmarks");
+    if (server.profileId) {
+      console.log(`- profile: ${server.profileId}`);
+    }
+    if (server.harnessSummary?.activeModel) {
+      console.log(
+        `- harness: ${server.harnessSummary.activeModel} @ ${server.harnessSummary.contextWindow ?? "unknown"} context`,
+      );
+    }
     for (const metric of server.coldMetrics ?? []) {
       console.log(`- ${metric.pathname} cold: ${metric.durationMs} ms`);
     }
@@ -47,6 +55,14 @@ async function main() {
     console.log("E2E benchmarks");
     for (const artifact of e2eArtifacts) {
       console.log(`- ${artifact.project} (${artifact.browserName})`);
+      if (artifact.profileId) {
+        console.log(`  profile: ${artifact.profileId}`);
+      }
+      if (artifact.harnessSummary?.activeModel) {
+        console.log(
+          `  harness: ${artifact.harnessSummary.activeModel} @ ${artifact.harnessSummary.contextWindow ?? "unknown"} context`,
+        );
+      }
       for (const metric of artifact.metrics ?? []) {
         console.log(`  ${metric.name}: ${metric.durationMs} ms`);
       }

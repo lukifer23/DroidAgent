@@ -12,6 +12,7 @@ The benchmark commands use isolated seeded ports so `perf:server`, `perf:e2e`, a
 pnpm perf:server
 pnpm perf:e2e
 pnpm perf:live
+pnpm perf:model-compare
 pnpm perf:report
 pnpm perf:baseline
 pnpm perf:check
@@ -26,9 +27,15 @@ pnpm hygiene:check
   - route-switch timing starts at in-browser route activation and ends when the destination control is visible
   - writes one artifact per Playwright project under `artifacts/perf/`
 - `pnpm perf:live`
-  - runs the same server + E2E perf probes with `DROIDAGENT_PERF_LIVE=1`
+  - runs the same server + E2E perf probes with `DROIDAGENT_PERF_LIVE=1` against a seeded real OpenClaw/Ollama lane
+  - writes live artifacts to `artifacts/perf/live/current/` instead of clobbering the deterministic artifacts
   - intended for opt-in OpenClaw/Ollama validation; not used as the deterministic CI regression gate
-  - additive reporting lane; keep deterministic budgets as the required gate
+  - honors `DROIDAGENT_E2E_OLLAMA_MODEL` and `DROIDAGENT_E2E_OLLAMA_CONTEXT_WINDOW` when you want a specific live local profile
+- `pnpm perf:model-compare`
+  - benchmarks the maintained live local model profiles side by side
+  - current maintained comparison is `qwen3.5:4b` vs `gemma4:e4b`, both at `65536`
+  - writes per-profile artifacts under `artifacts/perf/model-compare/<profile-id>/`
+  - writes the aggregate comparison report to `artifacts/perf/model-compare/compare-summary.json`
 - `pnpm perf:report`
   - prints the latest server and E2E summaries
 - `pnpm perf:baseline`
@@ -111,6 +118,8 @@ Notable implementation guardrails in this pass:
 - the `Files` route stays hot in the shell while the other secondary operator routes warm during idle, which trims route-switch churn without forcing every screen into the unauthenticated bootstrap path
 - deterministic `route_switch_ms` now starts inside the browser at route activation instead of before Playwright actionability checks, which keeps the gate tied to app route work
 - shared bundle budgets now gate app-shell, React vendor, markdown, and xterm chunks instead of only the main entry and terminal leaf route
+- live perf now boots a seeded authenticated server without `DROIDAGENT_TEST_MODE`, applies the requested Ollama profile through the same runtime selection path the product uses, and records the active model/context in both server and E2E artifacts
+- local model comparison now runs in isolated artifact lanes so baseline Qwen and candidate Gemma results can be reviewed side by side without overwriting the deterministic CI artifacts
 
 The Settings diagnostics view now shows p95, last sample, sample count, `ok`/`warn`/`error` counts, and sample age so old or unhealthy latency numbers are easier to spot before they mislead an operator.
 
@@ -153,7 +162,9 @@ Model generation time is recorded separately from DroidAgent relay overhead. Rei
 
 OpenClaw is configured with `agents.defaults.thinkingDefault = "off"` by default in DroidAgent to reduce avoidable latency on models that expose a reasoning or thinking mode.
 
-The default local baseline also assumes `qwen3.5:4b` on Ollama with a `65k` context budget, the same primary model handling local image/PDF analysis whenever Ollama reports `vision`, `qwen2.5vl:3b` only as the fallback attachment model for text-only primaries, `embeddinggemma:300m-qat-q8_0` for local semantic memory, smart context management enabled, and workspace memory search enabled.
+The deterministic local baseline still assumes `qwen3.5:4b` on Ollama with a `65k` context budget, the same primary model handling local image/PDF analysis whenever Ollama reports `vision`, `qwen2.5vl:3b` only as the fallback attachment model for text-only primaries, `embeddinggemma:300m-qat-q8_0` for local semantic memory, smart context management enabled, and workspace memory search enabled.
+
+The current maintained live comparison candidate is `gemma4:e4b` at the same `65k` context budget. The benchmark workflow keeps that candidate in the live comparison lane until the side-by-side artifacts show it should replace the default path.
 
 ## Baseline Procedure
 
@@ -164,31 +175,39 @@ The default local baseline also assumes `qwen3.5:4b` on Ollama with a `65k` cont
 5. Run `pnpm perf:baseline`.
 6. Run `pnpm perf:check`.
 
+## Live Model Comparison
+
+1. Confirm Ollama is running locally.
+2. Run `pnpm perf:model-compare`.
+3. Review `artifacts/perf/model-compare/compare-summary.json`.
+4. Review each per-profile lane under `artifacts/perf/model-compare/<profile-id>/`.
+5. Keep the checked-in default model unchanged until the live comparison results are acceptable on first-token latency, done latency, reconnect behavior, and the general shell budgets.
+
 Warm-path p95 is still the main review target for `access` and `dashboard`, but the budget set now also tracks the first real dashboard request, visible first-token latency, reconnect-visible downtime, background memory prepare behavior, and bundle-size drift across shared chunks.
 
 ## Current Targets
 
 This table is the maintained target set for the perf workflow.
 
-| Metric | Target |
-|--------|--------|
-| `GET /api/access` p95 | `<= 250 ms` |
-| `GET /api/dashboard` p95 | `<= 250 ms` |
-| First authenticated `GET /api/dashboard` | `<= 750 ms` |
-| Cold dashboard browser fetch p95 | `<= 1200 ms` |
-| Route switch p95 | `<= 180 ms` |
-| Chat first token visible p95 | `<= 200 ms` |
-| Reconnect to resync p95 | `<= 2000 ms` |
-| Memory prepare accepted p95 | `<= 250 ms` |
-| Memory prepare completion p95 | `<= 35000 ms` |
-| File save p95 | `<= 500 ms` |
-| Main entry JS | `<= 350 kB` |
-| Shared app-shell JS | `<= 260 kB` |
-| Shared React vendor JS | `<= 190 kB` |
-| Shared router vendor JS | `<= 20 kB` |
-| Shared markdown JS | `<= 130 kB` |
-| Terminal route JS | `<= 300 kB` |
-| xterm JS | `<= 360 kB` |
+| Metric                                   | Target        |
+| ---------------------------------------- | ------------- |
+| `GET /api/access` p95                    | `<= 250 ms`   |
+| `GET /api/dashboard` p95                 | `<= 250 ms`   |
+| First authenticated `GET /api/dashboard` | `<= 750 ms`   |
+| Cold dashboard browser fetch p95         | `<= 1200 ms`  |
+| Route switch p95                         | `<= 180 ms`   |
+| Chat first token visible p95             | `<= 200 ms`   |
+| Reconnect to resync p95                  | `<= 2000 ms`  |
+| Memory prepare accepted p95              | `<= 250 ms`   |
+| Memory prepare completion p95            | `<= 35000 ms` |
+| File save p95                            | `<= 500 ms`   |
+| Main entry JS                            | `<= 350 kB`   |
+| Shared app-shell JS                      | `<= 260 kB`   |
+| Shared React vendor JS                   | `<= 190 kB`   |
+| Shared router vendor JS                  | `<= 20 kB`    |
+| Shared markdown JS                       | `<= 130 kB`   |
+| Terminal route JS                        | `<= 300 kB`   |
+| xterm JS                                 | `<= 360 kB`   |
 
 ## Latest Validated Local Run
 

@@ -80,7 +80,8 @@ export class OpenClawService {
     channelStatusTtlMs: CHANNEL_STATUS_TTL_MS,
     memoryStatusTtlMs: MEMORY_STATUS_TTL_MS,
   });
-  private readonly channelStatusesCache = this.statusCaches.channelStatusesCache;
+  private readonly channelStatusesCache =
+    this.statusCaches.channelStatusesCache;
   readonly memoryStatusCache = this.statusCaches.memoryStatusCache;
 
   invalidateChannelStatusCache(): void {
@@ -95,10 +96,13 @@ export class OpenClawService {
     if (this.gatewayLogStream) {
       return this.gatewayLogStream;
     }
-    this.gatewayLogStream = fs.createWriteStream(`${paths.logsDir}/openclaw.log`, {
-      flags: "a",
-      encoding: "utf8",
-    });
+    this.gatewayLogStream = fs.createWriteStream(
+      `${paths.logsDir}/openclaw.log`,
+      {
+        flags: "a",
+        encoding: "utf8",
+      },
+    );
     this.gatewayLogStream.on("error", () => {
       // Ignore log stream errors; they should not crash the gateway.
     });
@@ -172,10 +176,14 @@ export class OpenClawService {
     timeoutMs?: number,
   ): Promise<string> {
     try {
-      const result = await runCommand(this.openclawBin, this.profileArgs(args), {
-        env: await this.openclawEnv(),
-        ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
-      });
+      const result = await runCommand(
+        this.openclawBin,
+        this.profileArgs(args),
+        {
+          env: await this.openclawEnv(),
+          ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
+        },
+      );
       return result.stdout;
     } catch (error) {
       if (allowFailure && error instanceof CommandError) {
@@ -209,23 +217,21 @@ export class OpenClawService {
     }
 
     const token = await this.ensureGatewayToken();
-    await Promise.all(
-      OPERATOR_EXEC_ALLOWLIST_PATTERNS.map(async (pattern) => {
-        await this.execOpenClaw([
-          "approvals",
-          "allowlist",
-          "add",
-          pattern,
-          "--agent",
-          "main",
-          "--gateway",
-          "--url",
-          OPENCLAW_GATEWAY_URL,
-          "--token",
-          token,
-        ]);
-      }),
-    );
+    for (const pattern of OPERATOR_EXEC_ALLOWLIST_PATTERNS) {
+      await this.execOpenClaw([
+        "approvals",
+        "allowlist",
+        "add",
+        pattern,
+        "--agent",
+        "main",
+        "--gateway",
+        "--url",
+        OPENCLAW_GATEWAY_URL,
+        "--token",
+        token,
+      ]);
+    }
 
     await appStateService.setJsonSetting(
       "openclawExecAllowlistSeedVersion",
@@ -253,7 +259,9 @@ export class OpenClawService {
   }
 
   resolveWorkspaceRoot(
-    runtimeSettings: Awaited<ReturnType<typeof appStateService.getRuntimeSettings>>,
+    runtimeSettings: Awaited<
+      ReturnType<typeof appStateService.getRuntimeSettings>
+    >,
   ): string {
     return path.resolve(runtimeSettings.workspaceRoot ?? paths.workspaceRoot);
   }
@@ -277,7 +285,9 @@ export class OpenClawService {
   }
 
   async resolveOllamaMultimodalConfig(
-    runtimeSettings: Awaited<ReturnType<typeof appStateService.getRuntimeSettings>>,
+    runtimeSettings: Awaited<
+      ReturnType<typeof appStateService.getRuntimeSettings>
+    >,
   ): Promise<{
     attachmentModelId: string;
     providerConfig: Record<string, unknown>;
@@ -324,12 +334,16 @@ export class OpenClawService {
   }
 
   buildMemorySearchConfig(
-    runtimeSettings: Awaited<ReturnType<typeof appStateService.getRuntimeSettings>>,
+    runtimeSettings: Awaited<
+      ReturnType<typeof appStateService.getRuntimeSettings>
+    >,
   ) {
     return buildMemorySearchConfigFromSettings(runtimeSettings);
   }
 
-  private parseMemoryStatusEntry(raw: string): OpenClawMemoryStatusEntry | null {
+  private parseMemoryStatusEntry(
+    raw: string,
+  ): OpenClawMemoryStatusEntry | null {
     try {
       const parsed = JSON.parse(raw) as unknown;
       if (!Array.isArray(parsed)) {
@@ -377,7 +391,9 @@ export class OpenClawService {
   }
 
   resolvePrimaryModel(
-    runtimeSettings: Awaited<ReturnType<typeof appStateService.getRuntimeSettings>>,
+    runtimeSettings: Awaited<
+      ReturnType<typeof appStateService.getRuntimeSettings>
+    >,
   ): string {
     if (runtimeSettings.activeProviderId === "ollama-default") {
       return `ollama/${runtimeSettings.ollamaModel}`;
@@ -426,7 +442,10 @@ export class OpenClawService {
   }
 
   async ensureOpenClawEnvFile(content: string): Promise<void> {
-    if (this.cachedEnvContent === content && fs.existsSync(paths.openClawEnvPath)) {
+    if (
+      this.cachedEnvContent === content &&
+      fs.existsSync(paths.openClawEnvPath)
+    ) {
       return;
     }
 
@@ -509,7 +528,11 @@ export class OpenClawService {
   }
 
   pairingStorePath(channel = "signal"): string {
-    return path.join(paths.openClawStateDir, "credentials", `${channel}-pairing.json`);
+    return path.join(
+      paths.openClawStateDir,
+      "credentials",
+      `${channel}-pairing.json`,
+    );
   }
 
   async listPendingPairings(channel = "signal") {
@@ -539,10 +562,7 @@ export class OpenClawService {
     }
   }
 
-  async denyPendingPairingCode(
-    channel: string,
-    code: string,
-  ): Promise<void> {
+  async denyPendingPairingCode(channel: string, code: string): Promise<void> {
     const filePath = this.pairingStorePath(channel);
     const raw = await fs.promises.readFile(filePath, "utf8").catch(() => "");
     if (!raw) {
@@ -600,9 +620,9 @@ export class OpenClawService {
         const parsed = JSON.parse(output) as {
           channels?: Array<Record<string, unknown>>;
         };
-        const signalRows = (Array.isArray(parsed.channels) ? parsed.channels : []).filter(
-          (row) => row.channel === "signal",
-        );
+        const signalRows = (
+          Array.isArray(parsed.channels) ? parsed.channels : []
+        ).filter((row) => row.channel === "signal");
         statuses.push(
           ChannelStatusSchema.parse({
             id: "signal",
@@ -640,7 +660,8 @@ export class OpenClawService {
             configured: Boolean(runtimeSettings.signalAccountId),
             health: "warn",
             healthMessage:
-              runtimeSettings.signalLastError ?? "Signal is not configured yet.",
+              runtimeSettings.signalLastError ??
+              "Signal is not configured yet.",
             metadata: {
               daemonRunning: runtimeSettings.signalDaemonState === "running",
               hasAccount: Boolean(runtimeSettings.signalAccountId),
@@ -686,7 +707,8 @@ export class OpenClawService {
             runtimeSettings.signalDaemonState === "running" ? "ok" : "warn",
           message:
             runtimeSettings.signalDaemonState === "running"
-              ? (runtimeSettings.signalDaemonUrl ?? "Signal daemon is reachable.")
+              ? (runtimeSettings.signalDaemonUrl ??
+                "Signal daemon is reachable.")
               : (runtimeSettings.signalLastError ??
                 "Signal daemon is not running."),
         }),
@@ -869,9 +891,7 @@ export class OpenClawService {
 }
 
 export interface OpenClawService
-  extends OpenClawGatewayMethods,
-    OpenClawChatMethods,
-    OpenClawMemoryMethods {}
+  extends OpenClawGatewayMethods, OpenClawChatMethods, OpenClawMemoryMethods {}
 
 Object.assign(
   OpenClawService.prototype,

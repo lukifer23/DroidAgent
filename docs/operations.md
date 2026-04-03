@@ -51,6 +51,7 @@ pnpm hygiene:check
 pnpm perf:server
 pnpm perf:e2e
 pnpm perf:live
+pnpm perf:model-compare
 pnpm perf:report
 pnpm perf:baseline
 pnpm perf:check
@@ -85,6 +86,7 @@ pnpm perf:check
 - Durable memory capture is owner-reviewed. Chat messages and file selections create drafts first, then Settings edits the draft while the shared decision inbox stays authoritative for apply or dismiss.
 - Suggested shell blocks from assistant replies can become `Run in Chat` or `Open in Terminal`. In-chat runs stay inside the workspace job jail; terminal suggestions are inserted but never auto-executed.
 - The default local chat model is `qwen3.5:4b` with a `65k` context budget and thinking disabled.
+- `gemma4:e4b` at the same `65k` context budget is the current staged comparison candidate and should stay in the benchmark lane until the live compare artifacts justify a default swap.
 - When Ollama reports `vision` for the selected primary model, DroidAgent reuses that same model for image and PDF analysis inside the chat composer.
 - `qwen2.5vl:3b` only stays as the fallback multimodal model when the selected primary model is text-only.
 - Semantic memory defaults to local Ollama embeddings with `embeddinggemma:300m-qat-q8_0`; DroidAgent keeps fallback disabled so memory stays on-device instead of silently drifting to a cloud provider.
@@ -103,7 +105,8 @@ pnpm perf:check
 - Chat timing is split into accept, first-delta wait, first-delta forward, and full relay duration so model latency and DroidAgent overhead are not conflated.
 - Diagnostics now also include websocket patch flush latency, chat history resync latency, and session-switch latency so live-path churn is visible.
 - Perf artifacts now also track the first authenticated cold dashboard request, browser cold dashboard fetch, route switch, visible first token, memory prepare accepted/completion, and shared bundle chunks. Use `pnpm perf:baseline` to refresh the checked-in local baseline and `pnpm perf:check` to enforce the budgets.
-- `pnpm perf:live` is the opt-in live OpenClaw/Ollama validation lane and should be treated as additive reporting rather than the deterministic gate.
+- `pnpm perf:live` is the opt-in live OpenClaw/Ollama validation lane, now runs against a seeded real runtime, and writes to `artifacts/perf/live/current/` instead of overwriting the deterministic artifacts.
+- `pnpm perf:model-compare` runs the maintained live model comparison set, currently `qwen3.5:4b` vs `gemma4:e4b` at `65k`, and writes the side-by-side summary to `artifacts/perf/model-compare/compare-summary.json`.
 - The Settings route also shows the running build/version identity so the live host, screenshots, logs, and repo all stay on the same release line.
 - The chat route now accepts local images, PDFs, Markdown, JSON, logs, and common code/text files. DroidAgent stores them under `~/.droidagent/uploads` and passes them through the real OpenClaw tool path instead of a parallel mock transcript.
 - The chat route is the operator console: it surfaces live run state, OpenClaw approval cards, session-scoped decision context, tool summaries, attachments, code blocks, and client-side per-run timings.

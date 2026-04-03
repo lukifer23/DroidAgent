@@ -54,6 +54,11 @@ pnpm verify:full
   - runs advisory Playwright perf scenarios and writes artifacts under `artifacts/perf/`
 - `pnpm perf:live`
   - runs the opt-in live OpenClaw/Ollama perf lane without changing deterministic CI gates
+  - writes to `artifacts/perf/live/current/`
+- `pnpm perf:model-compare`
+  - benchmarks the maintained local live model profiles side by side
+  - current maintained pair: `qwen3.5:4b` and `gemma4:e4b`, both at `65k`
+  - writes lane artifacts under `artifacts/perf/model-compare/`
 
 ## Perf And Diagnostics
 
@@ -68,6 +73,7 @@ pnpm verify:full
 - `pnpm perf:report`
   - prints the latest server and E2E perf artifacts
 - the route-switch perf artifact is measured from in-browser route activation to first visible destination control, not from Playwright's outer click timing
+- live perf and model-compare now run a seeded authenticated server without `DROIDAGENT_TEST_MODE`, then apply the requested Ollama profile through the same runtime-selection path used by the product before the perf lane is marked ready
 
 ## Release Workflow
 
@@ -76,8 +82,9 @@ pnpm verify:full
 3. Run `pnpm perf:report`, `pnpm perf:baseline`, and `pnpm perf:check`.
 4. If you changed how a perf artifact is defined or added new tracked shared chunks, refresh the baseline in the same change instead of leaving the gate on stale semantics.
 5. Run `pnpm perf:live` when validating real OpenClaw/Ollama behavior on the live path.
-6. Review `artifacts/perf/` and the Settings diagnostics card for regressions.
-7. Update docs when commands, routes, supported operational flows, or perf budgets change.
+6. Run `pnpm perf:model-compare` when you are evaluating a local model candidate against the maintained baseline.
+7. Review `artifacts/perf/`, `artifacts/perf/live/current/`, and `artifacts/perf/model-compare/` plus the Settings diagnostics card for regressions.
+8. Update docs when commands, routes, supported operational flows, or perf budgets change.
 
 ## Boundary Review Checklist
 

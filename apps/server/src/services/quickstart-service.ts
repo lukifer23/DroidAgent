@@ -14,7 +14,6 @@ import {
 } from "./app-state-service.js";
 import { ollamaModelSupportsVision } from "../lib/ollama.js";
 import { accessService } from "./access-service.js";
-import { harnessService } from "./harness-service.js";
 import {
   openclawMemoryFacet,
   openclawRuntimeFacet,
@@ -150,19 +149,9 @@ export class QuickstartService {
       !providerSelected ||
       currentSettings.selectedRuntime !== "ollama"
     ) {
-      await appStateService.updateRuntimeSettings({
-        selectedRuntime: "ollama",
-        activeProviderId: "ollama-default",
-        ollamaModel: modelId,
-      });
-      await harnessService.configureRuntimeModel({
-        providerId: "ollama-default",
+      await runtimeService.configureOllamaProfile({
         modelId,
         contextWindow: currentSettings.ollamaContextWindow,
-      });
-      await appStateService.markSetupStepCompleted("models", {
-        selectedRuntime: "ollama",
-        selectedModel: modelId,
       });
       await appStateService.markSetupStepCompleted("providerRegistration", {
         selectedRuntime: "ollama",
@@ -180,15 +169,15 @@ export class QuickstartService {
       });
     }
 
-    const embeddingPrepared = await runtimeService.ensureOllamaModel(
-      embeddingModelId,
-    );
+    const embeddingPrepared =
+      await runtimeService.ensureOllamaModel(embeddingModelId);
     if (embeddingPrepared) {
       actions.push(`Prepared local embedding model ${embeddingModelId}.`);
     }
     const primarySupportsVision = await ollamaModelSupportsVision(modelId);
     if (!primarySupportsVision) {
-      const visionPrepared = await runtimeService.ensureOllamaModel(visionModelId);
+      const visionPrepared =
+        await runtimeService.ensureOllamaModel(visionModelId);
       if (visionPrepared) {
         actions.push(`Prepared local multimodal model ${visionModelId}.`);
       }

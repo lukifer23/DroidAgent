@@ -64,7 +64,8 @@ The v1 live acceptance target for this repo is `web/PWA + owner passkey + Tailsc
 6. Use a one-time bootstrap link only when you need to enroll a new device-specific passkey after the canonical URL is healthy.
 7. Use the canonical remote URL for daily phone access after enrollment; bootstrap links are only for adding a device.
 8. The default local model path is `qwen3.5:4b` at `65k` context with thinking disabled, smart context management enabled, the same primary model handling image/PDF chat attachments whenever Ollama reports `vision`, `qwen2.5vl:3b` only as the fallback attachment model for text-only primaries, and `embeddinggemma:300m-qat-q8_0` handling semantic memory locally.
-9. The running host reports its own build/version line in Settings and diagnostics so screenshots, docs, and support notes stay aligned.
+9. The current staged local comparison candidate is `gemma4:e4b` at the same `65k` context budget; evaluate it with `pnpm perf:model-compare` before changing the default runtime path.
+10. The running host reports its own build/version line in Settings and diagnostics so screenshots, docs, and support notes stay aligned.
 
 ## Manual setup
 
@@ -78,14 +79,14 @@ Then open `http://localhost:4318`.
 
 ## Recovery
 
-| Error                       | Recovery                                                                                                   |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Node.js not installed       | `brew install node`                                                                                        |
-| Node.js < 22                | `brew upgrade node`                                                                                        |
-| pnpm not found              | `npm install -g pnpm`                                                                                      |
-| Homebrew not found          | Install from https://brew.sh                                                                               |
-| Build failed                | Run `pnpm build` manually                                                                                  |
-| Docs or command drift       | Run `pnpm docs:check`                                                                                      |
-| Tailscale URL unavailable   | Install/sign in to Tailscale, or let DroidAgent start the userspace daemon, then enable Serve from the PWA |
-| Server did not become ready | Check `~/.droidagent/logs`, especially `maintenance.log` when a managed restart is active                  |
-| Agent blocked on host auth or permissions | Open the rescue terminal from the Host drawer or Settings and run the required recovery command directly |
+| Error                                     | Recovery                                                                                                   |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Node.js not installed                     | `brew install node`                                                                                        |
+| Node.js < 22                              | `brew upgrade node`                                                                                        |
+| pnpm not found                            | `npm install -g pnpm`                                                                                      |
+| Homebrew not found                        | Install from https://brew.sh                                                                               |
+| Build failed                              | Run `pnpm build` manually                                                                                  |
+| Docs or command drift                     | Run `pnpm docs:check`                                                                                      |
+| Tailscale URL unavailable                 | Install/sign in to Tailscale, or let DroidAgent start the userspace daemon, then enable Serve from the PWA |
+| Server did not become ready               | Check `~/.droidagent/logs`, especially `maintenance.log` when a managed restart is active                  |
+| Agent blocked on host auth or permissions | Open the rescue terminal from the Host drawer or Settings and run the required recovery command directly   |

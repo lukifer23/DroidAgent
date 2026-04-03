@@ -123,13 +123,14 @@ export const DEFAULT_CLOUD_PROVIDER_PREFERENCES: CloudProviderPreferences = {
 export const DEFAULT_OLLAMA_MODEL = "qwen3.5:4b";
 export const DEFAULT_OLLAMA_EMBEDDING_MODEL = "embeddinggemma:300m-qat-q8_0";
 export const DEFAULT_OLLAMA_VISION_MODEL = "qwen2.5vl:3b";
+export const DEFAULT_OLLAMA_CONTEXT_WINDOW = 65536;
 
 const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
   selectedRuntime: "ollama",
   activeProviderId: "ollama-default",
   ollamaModel: DEFAULT_OLLAMA_MODEL,
   ollamaEmbeddingModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
-  ollamaContextWindow: 65536,
+  ollamaContextWindow: DEFAULT_OLLAMA_CONTEXT_WINDOW,
   llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
   llamaCppContextWindow: 8192,
   workspaceRoot: null,

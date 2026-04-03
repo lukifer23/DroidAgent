@@ -54,6 +54,7 @@ The canonical public route, websocket, script, and data-path inventory lives in 
 - `Ollama`
   - default onboarding path
   - managed by Homebrew services
+  - local model and context selection now converge through one canonical Ollama profile path on the server so quickstart, manual runtime changes, and live benchmarks all update the same runtime + harness state
 - `llama.cpp`
   - advanced path
   - started as a supervised `llama-server` process
@@ -113,6 +114,7 @@ The canonical public route, websocket, script, and data-path inventory lives in 
 - websocket patch flush latency, chat history resync latency, and session-switch latency are now captured as additive diagnostics
 - the Settings route surfaces a compact diagnostics card
 - the benchmark scripts write JSON artifacts under `artifacts/perf/`
+- live OpenClaw/Ollama artifacts are isolated under `artifacts/perf/live/current/`, and maintained model comparisons are isolated under `artifacts/perf/model-compare/`
 - the dashboard snapshot is composed from independently cached slices for setup, access, runtimes, providers, channels, harness, memory, host pressure, memory drafts, context management, maintenance, launch-agent state, sessions, jobs, decisions, and approvals
 - server perf artifacts now record the first real authenticated `/api/dashboard` request separately from the internal `dashboard.snapshot.compose` timing so cold-path reporting reflects user-visible wait instead of warmed cache math
 - request-path warmup now waits for startup restore, then primes the main dashboard/access/runtime/provider caches before readiness completes so the first real dashboard request does not pay hidden restore work

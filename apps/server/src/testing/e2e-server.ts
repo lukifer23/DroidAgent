@@ -14,14 +14,35 @@ import type {
   AccessSettings,
   RuntimeSettings,
 } from "../services/app-state-service.js";
+import {
+  DEFAULT_OLLAMA_CONTEXT_WINDOW,
+  DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  DEFAULT_OLLAMA_MODEL,
+} from "../services/app-state-service.js";
 
 const OPENCLAW_GATEWAY_TOKEN = "droidagent-e2e-token";
 
 const SERVER_PORT = Number(process.env.DROIDAGENT_E2E_PORT ?? 4418);
+const USE_REAL_RUNTIME = process.env.DROIDAGENT_E2E_REAL_RUNTIME === "1";
+const PERF_PROFILE_ID = process.env.DROIDAGENT_PERF_PROFILE_ID?.trim() || null;
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(thisDir, "..", "..", "..", "..");
 const artifactDir = path.join(repoRoot, "artifacts", "e2e");
 const statePath = path.join(artifactDir, `state-${SERVER_PORT}.json`);
+
+function resolveOllamaModel(): string {
+  return (
+    process.env.DROIDAGENT_E2E_OLLAMA_MODEL?.trim() || DEFAULT_OLLAMA_MODEL
+  );
+}
+
+function resolveOllamaContextWindow(): number {
+  const raw = Number(process.env.DROIDAGENT_E2E_OLLAMA_CONTEXT_WINDOW ?? "");
+  if (Number.isFinite(raw) && raw >= 2048) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_OLLAMA_CONTEXT_WINDOW;
+}
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -47,6 +68,165 @@ async function waitForHealth(
   throw new Error(`Timed out waiting for ${baseUrl}${pathname}.`);
 }
 
+async function requestJson(
+  baseUrl: string,
+  pathname: string,
+  options: {
+    method?: string;
+    sessionToken?: string | null;
+    body?: unknown;
+  } = {},
+) {
+  const response = await fetch(new URL(pathname, baseUrl), {
+    method: options.method ?? "GET",
+    headers: {
+      ...(options.sessionToken
+        ? {
+            cookie: `droidagent_session=${options.sessionToken}`,
+          }
+        : {}),
+      ...(options.body === undefined
+        ? {}
+        : {
+            "content-type": "application/json",
+          }),
+    },
+    ...(options.body === undefined
+      ? {}
+      : {
+          body: JSON.stringify(options.body),
+        }),
+  });
+  return {
+    ok: response.ok,
+    status: response.status,
+    json: response.ok ? await response.json() : null,
+    text: response.ok ? null : await response.text(),
+  };
+}
+
+async function configureLiveOllamaProfile(
+  baseUrl: string,
+  sessionToken: string,
+  modelId: string,
+  contextWindow: number,
+): Promise<void> {
+  const response = await requestJson(baseUrl, "/api/runtime/ollama/profile", {
+    method: "POST",
+    sessionToken,
+    body: {
+      modelId,
+      contextWindow,
+      pull: true,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(
+      `Failed to configure live Ollama profile: ${response.status} ${response.text ?? ""}`.trim(),
+    );
+  }
+
+  const openclawStartResponse = await requestJson(
+    baseUrl,
+    "/api/runtime/openclaw/start",
+    {
+      method: "POST",
+      sessionToken,
+      body: {},
+    },
+  );
+  if (!openclawStartResponse.ok) {
+    throw new Error(
+      `Failed to start live OpenClaw runtime: ${openclawStartResponse.status} ${openclawStartResponse.text ?? ""}`.trim(),
+    );
+  }
+
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    const healthResponse = await requestJson(baseUrl, "/api/health");
+    const harnessSummary = healthResponse.json as {
+      harnessSummary?: {
+        activeModel?: string | null;
+        contextWindow?: number | null;
+      };
+    } | null;
+    if (
+      harnessSummary?.harnessSummary?.activeModel === `ollama/${modelId}` &&
+      harnessSummary.harnessSummary.contextWindow === contextWindow
+    ) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(
+    `Timed out waiting for live harness profile ollama/${modelId} at ${contextWindow}.`,
+  );
+}
+
+async function waitForLiveChatReady(
+  baseUrl: string,
+  sessionToken: string,
+): Promise<void> {
+  const createSessionResponse = await requestJson(baseUrl, "/api/sessions", {
+    method: "POST",
+    sessionToken,
+    body: {},
+  });
+  if (!createSessionResponse.ok || !createSessionResponse.json?.id) {
+    throw new Error(
+      `Failed to create a live perf probe session: ${createSessionResponse.status} ${createSessionResponse.text ?? ""}`.trim(),
+    );
+  }
+
+  const sessionId = createSessionResponse.json.id as string;
+  try {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const sendResponse = await requestJson(
+        baseUrl,
+        `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
+        {
+          method: "POST",
+          sessionToken,
+          body: {
+            text: "live perf readiness ping",
+            attachments: [],
+          },
+        },
+      );
+      if (sendResponse.ok && sendResponse.status === 202) {
+        await requestJson(
+          baseUrl,
+          `/api/sessions/${encodeURIComponent(sessionId)}/abort`,
+          {
+            method: "POST",
+            sessionToken,
+            body: {},
+          },
+        ).catch(() => undefined);
+        return;
+      }
+      if (sendResponse.status !== 423 && sendResponse.status !== 503) {
+        throw new Error(
+          `Live chat readiness probe failed: ${sendResponse.status} ${sendResponse.text ?? ""}`.trim(),
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    throw new Error("Timed out waiting for live chat send readiness.");
+  } finally {
+    await requestJson(
+      baseUrl,
+      `/api/sessions/${encodeURIComponent(sessionId)}/archive`,
+      {
+        method: "POST",
+        sessionToken,
+        body: {},
+      },
+    ).catch(() => undefined);
+  }
+}
+
 async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
   const homeDir = path.join(rootDir, "home");
   const appDir = path.join(homeDir, ".droidagent");
@@ -63,6 +243,8 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
   const sessionId = randomUUID();
   const resetToken = randomUUID();
   const now = new Date().toISOString();
+  const ollamaModel = resolveOllamaModel();
+  const ollamaContextWindow = resolveOllamaContextWindow();
   const workspaceFiles: E2EWorkspaceFile[] = [
     {
       path: "AGENTS.md",
@@ -262,9 +444,9 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
   const runtimeSettings: RuntimeSettings = {
     selectedRuntime: "ollama",
     activeProviderId: "ollama-default",
-    ollamaModel: "qwen3.5:4b",
-    ollamaEmbeddingModel: "embeddinggemma:300m-qat-q8_0",
-    ollamaContextWindow: 65536,
+    ollamaModel,
+    ollamaEmbeddingModel: DEFAULT_OLLAMA_EMBEDDING_MODEL,
+    ollamaContextWindow,
     llamaCppModel: "ggml-org/gemma-3-1b-it-GGUF",
     llamaCppContextWindow: 8192,
     workspaceRoot,
@@ -322,7 +504,7 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
     passkeyConfigured: true,
     workspaceRoot,
     selectedRuntime: "ollama",
-    selectedModel: "qwen3.5:4b",
+    selectedModel: ollamaModel,
     remoteAccessEnabled: false,
     signalEnabled: false,
   };
@@ -361,6 +543,8 @@ async function seedEnvironment(rootDir: string): Promise<E2EFixtureState> {
     homeDir,
     appDir,
     dbPath,
+    mode: USE_REAL_RUNTIME ? "live-runtime" : "test-harness",
+    profileId: PERF_PROFILE_ID,
     seed: {
       runtimeSettings,
       accessSettings,
@@ -391,7 +575,7 @@ async function main() {
         ...process.env,
         HOME: path.join(rootDir, "home"),
         DROIDAGENT_PORT: String(SERVER_PORT),
-        DROIDAGENT_TEST_MODE: "1",
+        ...(USE_REAL_RUNTIME ? {} : { DROIDAGENT_TEST_MODE: "1" }),
         DROIDAGENT_E2E_ROOT_DIR: rootDir,
         DROIDAGENT_E2E_RESET_TOKEN: state.resetToken,
         DROIDAGENT_E2E_STATE_PATH: statePath,
@@ -438,19 +622,28 @@ async function main() {
     void cleanup().finally(() => process.exit(code ?? 0));
   });
 
-  await waitForHealth(
-    state.baseUrl,
-    perfMode ? "/api/auth/me" : "/api/health",
-  );
+  await waitForHealth(state.baseUrl, perfMode ? "/api/auth/me" : "/api/health");
+  if (perfMode && USE_REAL_RUNTIME) {
+    await configureLiveOllamaProfile(
+      state.baseUrl,
+      state.sessionToken,
+      state.seed.runtimeSettings.ollamaModel,
+      state.seed.runtimeSettings.ollamaContextWindow,
+    );
+    await waitForLiveChatReady(state.baseUrl, state.sessionToken);
+  }
   if (perfMode) {
-    const response = await fetch(new URL("/api/memory/prepare", state.baseUrl), {
-      method: "POST",
-      headers: {
-        cookie: `droidagent_session=${state.sessionToken}`,
-        "content-type": "application/json",
+    const response = await fetch(
+      new URL("/api/memory/prepare", state.baseUrl),
+      {
+        method: "POST",
+        headers: {
+          cookie: `droidagent_session=${state.sessionToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({}),
       },
-      body: JSON.stringify({}),
-    });
+    );
     if (!response.ok) {
       throw new Error(`Failed to prewarm memory prepare: ${response.status}`);
     }

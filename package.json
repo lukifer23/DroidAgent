@@ -30,6 +30,7 @@
     "perf:server": "node ./scripts/perf-server.mjs",
     "perf:e2e": "node ./scripts/perf-e2e.mjs",
     "perf:live": "node ./scripts/perf-live.mjs",
+    "perf:model-compare": "node ./scripts/perf-model-compare.mjs",
     "perf:report": "node ./scripts/perf-report.mjs",
     "perf:baseline": "node ./scripts/perf-baseline.mjs",
     "perf:check": "node ./scripts/perf-check.mjs",

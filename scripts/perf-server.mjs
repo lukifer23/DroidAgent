@@ -297,11 +297,29 @@ async function main() {
     const diagnostics = diagnosticsResponse.ok
       ? JSON.parse(diagnosticsResponse.body)
       : null;
+    const healthResponse = await requestJson(
+      new URL("/api/health", harness.baseUrl),
+      harness.sessionToken
+        ? {
+            headers: {
+              Cookie: `droidagent_session=${harness.sessionToken}`,
+            },
+          }
+        : {},
+    );
 
     const artifact = {
       generatedAt: new Date().toISOString(),
-      mode: process.env.DROIDAGENT_PERF_BASE_URL ? "live" : "seeded-harness",
+      mode: process.env.DROIDAGENT_PERF_BASE_URL
+        ? "live-base-url"
+        : process.env.DROIDAGENT_E2E_REAL_RUNTIME === "1"
+          ? "live-runtime"
+          : "seeded-harness",
+      profileId: process.env.DROIDAGENT_PERF_PROFILE_ID?.trim() || null,
       baseUrl: harness.baseUrl,
+      harnessSummary: healthResponse.ok
+        ? (healthResponse.json?.harnessSummary ?? null)
+        : null,
       coldMetrics,
       metrics: [accessMetric, dashboardMetric],
       diagnostics,

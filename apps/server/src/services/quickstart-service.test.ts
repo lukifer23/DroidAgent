@@ -9,6 +9,7 @@ const {
   startRuntime,
   listProviderProfiles,
   pullModel,
+  configureOllamaProfile,
   ensureOllamaModel,
   getBootstrapState,
   enableTailscaleServe,
@@ -17,7 +18,6 @@ const {
   memoryStatus,
   prepareWorkspaceContext,
   prepareSemanticMemory,
-  configureRuntimeModel,
   ollamaModelSupportsVision,
 } = vi.hoisted(() => ({
   getRuntimeSettings: vi.fn(),
@@ -28,6 +28,7 @@ const {
   startRuntime: vi.fn(),
   listProviderProfiles: vi.fn(),
   pullModel: vi.fn(),
+  configureOllamaProfile: vi.fn(),
   ensureOllamaModel: vi.fn(),
   getBootstrapState: vi.fn(),
   enableTailscaleServe: vi.fn(),
@@ -36,7 +37,6 @@ const {
   memoryStatus: vi.fn(),
   prepareWorkspaceContext: vi.fn(),
   prepareSemanticMemory: vi.fn(),
-  configureRuntimeModel: vi.fn(),
   ollamaModelSupportsVision: vi.fn(),
 }));
 
@@ -56,6 +56,7 @@ vi.mock("./runtime-service.js", () => ({
     startRuntime,
     listProviderProfiles,
     pullModel,
+    configureOllamaProfile,
     ensureOllamaModel,
   },
 }));
@@ -74,12 +75,6 @@ vi.mock("./openclaw-service.js", () => ({
     memoryStatus,
     prepareWorkspaceContext,
     prepareSemanticMemory,
-  },
-}));
-
-vi.mock("./harness-service.js", () => ({
-  harnessService: {
-    configureRuntimeModel,
   },
 }));
 
@@ -218,6 +213,35 @@ describe("QuickstartService", () => {
         );
       },
     );
+    configureOllamaProfile.mockImplementation(
+      async ({
+        modelId,
+        contextWindow,
+      }: {
+        modelId: string;
+        contextWindow?: number;
+      }) => {
+        runtimeSettings = {
+          ...runtimeSettings,
+          selectedRuntime: "ollama",
+          activeProviderId: "ollama-default",
+          ollamaModel: modelId,
+          ollamaContextWindow:
+            typeof contextWindow === "number"
+              ? contextWindow
+              : runtimeSettings.ollamaContextWindow,
+        };
+        providerProfiles = providerProfiles.map((provider) =>
+          provider.id === "ollama-default"
+            ? {
+                ...provider,
+                model: modelId,
+                enabled: true,
+              }
+            : provider,
+        );
+      },
+    );
     ensureOllamaModel.mockResolvedValue(false);
     ollamaModelSupportsVision.mockResolvedValue(false);
     prepareSemanticMemory.mockResolvedValue({
@@ -317,7 +341,6 @@ describe("QuickstartService", () => {
       sourceCounts: [],
       contextWindow: 65536,
     });
-    configureRuntimeModel.mockResolvedValue(undefined);
   });
 
   it("prepares the default local runtime and creates the Tailscale phone URL", async () => {

@@ -56,6 +56,12 @@ const MaintenanceRecoveryActionSchema = z.enum([
   "restartAppShell",
 ]);
 
+const OllamaProfileRequestSchema = z.object({
+  modelId: z.string().trim().min(1),
+  contextWindow: z.number().int().min(2048).max(262144).optional(),
+  pull: z.boolean().optional(),
+});
+
 function buildSignalRegistrationRequest(body: {
   phoneNumber: string;
   autoInstall?: boolean;
@@ -222,9 +228,7 @@ export function registerOperationsRoutes(
     if (unauthorized) return unauthorized;
     const settings = await appStateService.getRuntimeSettings();
     const prepareSource =
-      perfReadyFile && !fs.existsSync(perfReadyFile)
-        ? "prewarm"
-        : "operator";
+      perfReadyFile && !fs.existsSync(perfReadyFile) ? "prewarm" : "operator";
     const metric = performanceService.start("server", "memory.prepare", {
       runtime: settings.selectedRuntime,
       embeddingModel: settings.ollamaEmbeddingModel,
@@ -242,11 +246,11 @@ export function registerOperationsRoutes(
         dirty: status.dirty,
         started,
       });
-      void Promise.all([
-        websocketHub.publishUpdates("memory", "setup"),
-      ]).catch((error) => {
-        console.error("Failed to publish memory prepare updates", error);
-      });
+      void Promise.all([websocketHub.publishUpdates("memory", "setup")]).catch(
+        (error) => {
+          console.error("Failed to publish memory prepare updates", error);
+        },
+      );
       return c.json(status, started ? 202 : 200);
     } catch (error) {
       metric.finish({
@@ -529,6 +533,29 @@ export function registerOperationsRoutes(
       "context",
     );
     return c.json({ ok: true });
+  });
+
+  app.post("/api/runtime/ollama/profile", async (c) => {
+    const blocked = await mutationGuard(c);
+    if (blocked) return blocked;
+    const unauthorized = await requireUser(c);
+    if (unauthorized) return unauthorized;
+    const body = OllamaProfileRequestSchema.parse(await c.req.json());
+    await runtimeService.configureOllamaProfile({
+      modelId: body.modelId,
+      ensureModel: body.pull === true,
+      ...(body.contextWindow === undefined
+        ? {}
+        : { contextWindow: body.contextWindow }),
+    });
+    await websocketHub.publishUpdates(
+      "setup",
+      "runtime",
+      "providers",
+      "memory",
+      "context",
+    );
+    return c.json(await runtimeService.listProviderProfiles());
   });
 
   app.post("/api/runtime/context-management", async (c) => {

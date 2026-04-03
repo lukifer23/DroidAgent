@@ -27,6 +27,7 @@ pnpm hygiene:check
 pnpm perf:server
 pnpm perf:e2e
 pnpm perf:live
+pnpm perf:model-compare
 pnpm perf:report
 pnpm perf:baseline
 pnpm perf:check
@@ -64,6 +65,7 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - the default local Ollama context budget is `65k`
 - the default local semantic-memory embedding model is `embeddinggemma:300m-qat-q8_0` on Ollama
 - `qwen3.5:4b` is the default local chat model at a `65k` working context budget, and DroidAgent now reuses that same model for image/PDF work when Ollama reports `vision` capability
+- `gemma4:e4b` at the same `65k` context budget is the current staged comparison candidate and is exercised through the live benchmark lane before any default swap
 - `qwen2.5vl:3b` remains the fallback local attachment model only when the selected primary model is text-only
 - semantic memory stays local-first with fallback disabled, so embeddings do not silently drift to a cloud provider
 - llama.cpp remains the advanced local runtime path
@@ -122,7 +124,8 @@ After the owner passkey is enrolled, `Setup` owns only the first-run path: works
 - Websocket reconnect now reopens the socket as soon as the browser comes back online and refreshes dashboard/access state in the background, which shortens reconnect-visible downtime without splitting transport ownership.
 - Hot server consumers now import focused OpenClaw facets for dashboard status, websocket fanout, owner operations, memory/workspace flows, runtime/bootstrap restore, and channel integration, leaving direct `openclawService` usage isolated to the harness layer plus the facet module.
 - Performance artifacts are now actively budgeted. `pnpm perf:baseline` refreshes the baseline snapshot and `pnpm perf:check` enforces `perf-budgets.json` against the latest artifacts and baseline thresholds.
-- Performance validation now has a dual track: deterministic harness metrics remain the CI regression gate (`perf:server`, `perf:e2e`, `perf:check`), while `perf:live` is opt-in reporting for real OpenClaw/Ollama behavior.
+- Performance validation now has a dual track: deterministic harness metrics remain the CI regression gate (`perf:server`, `perf:e2e`, `perf:check`), while `perf:live` now runs a seeded real OpenClaw/Ollama lane and writes to `artifacts/perf/live/current/`.
+- `pnpm perf:model-compare` benchmarks the maintained local model profiles side by side, currently `qwen3.5:4b` vs `gemma4:e4b` at `65k`, and writes isolated artifacts plus `compare-summary.json` under `artifacts/perf/model-compare/`.
 - File APIs are workspace-relative and text-only.
 - Chat attachments support local images, PDFs, Markdown, JSON, logs, and common code/text files through the real OpenClaw tool path.
 - The chat route is the primary operator surface: live run state, OpenClaw approval cards, unified decision context, tool summaries, attachments, markdown/code rendering, editable durable-memory capture actions, suggested command promotion, and per-run client timings are all surfaced there.

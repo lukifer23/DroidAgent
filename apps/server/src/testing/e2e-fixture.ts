@@ -32,6 +32,8 @@ export interface E2EFixtureState {
   homeDir: string;
   appDir: string;
   dbPath: string;
+  mode?: "test-harness" | "live-runtime";
+  profileId?: string | null;
   seed: E2EFixtureSeed;
 }
 
@@ -80,7 +82,11 @@ export async function writeE2EWorkspaceFiles(
       const targetPath = path.join(workspaceRoot, file.path);
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
       await fs.writeFile(targetPath, file.content, "utf8");
-      await fs.utimes(targetPath, E2E_FIXTURE_FILE_MTIME, E2E_FIXTURE_FILE_MTIME);
+      await fs.utimes(
+        targetPath,
+        E2E_FIXTURE_FILE_MTIME,
+        E2E_FIXTURE_FILE_MTIME,
+      );
     }),
   );
 }
