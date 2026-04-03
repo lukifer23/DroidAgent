@@ -128,6 +128,7 @@ The canonical public route, websocket, script, and data-path inventory lives in 
 - viewport CSS vars (`--app-topbar-h`, `--app-bottom-nav-h`, `--app-viewport-h`) are measured through a shared hook and updated via `ResizeObserver` plus `visualViewport` listeners, with rAF scheduling to avoid resize thrash
 - Chat and Terminal shells now share unified viewport-height formulas so sticky composers, PTY surfaces, and status stacks stay aligned on Fold-sized and phone-sized viewports
 - the `Files` route is kept hot in the shell, while `Settings`, `Jobs`, `Models`, `Channels`, and `Terminal` warm during idle after auth so route switches stay responsive without inflating the first unauthenticated bootstrap path
+- deterministic route-switch perf timing now starts at in-browser route activation and completes when the destination control becomes visible, so the gate tracks route work instead of Playwright actionability overhead
 - hot route surfaces trim expensive blur/animation work, and markdown rendering is lazy-loaded only when a message actually needs rich markdown semantics
 - transcript scroll anchoring stays rAF-batched and viewport measurement now stays armed regardless of initial ref timing, which removes a fragile mount-order dependency in the shared shell chrome measurement path
 - build budgets now track shared shell/vendor chunks as first-class perf gates instead of only the main entry and terminal route leaf chunks

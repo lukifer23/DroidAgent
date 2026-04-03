@@ -2,11 +2,33 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { readE2EState, signInSeededOwner } from "../e2e/support";
 
 const artifactDir = path.resolve(process.cwd(), "artifacts", "perf");
+
+async function measureBrowserRouteSwitch(
+  page: Page,
+  trigger: Locator,
+  readyLocator: Locator,
+): Promise<number> {
+  await trigger.evaluate((element) => {
+    (window as typeof window & { __droidagentRouteSwitchStart?: number })
+      .__droidagentRouteSwitchStart = performance.now();
+    (element as HTMLElement).click();
+  });
+  await expect(readyLocator).toBeVisible();
+  return await page.evaluate(() =>
+    Number(
+      (
+        performance.now() -
+        ((window as typeof window & { __droidagentRouteSwitchStart?: number })
+          .__droidagentRouteSwitchStart ?? performance.now())
+      ).toFixed(2),
+    ),
+  );
+}
 
 test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) => {
   const projectName = testInfo.project.name;
@@ -42,12 +64,14 @@ test("captures end-to-end UX timings", async ({ page, browserName }, testInfo) =
       "Ask DroidAgent to inspect code, summarize a PDF, analyze an image, edit files, or run a command...",
     ),
   ).toBeVisible();
-  const routeStart = performance.now();
-  await page.getByRole("link", { name: "Files" }).click();
-  await expect(page.getByRole("button", { name: "Create Directory" })).toBeVisible();
+  const routeDurationMs = await measureBrowserRouteSwitch(
+    page,
+    page.getByRole("link", { name: "Files" }),
+    page.getByRole("button", { name: "Create Directory" }),
+  );
   metrics.push({
     name: "route_switch_ms",
-    durationMs: Number((performance.now() - routeStart).toFixed(2))
+    durationMs: routeDurationMs,
   });
 
   const fileOpenStart = performance.now();

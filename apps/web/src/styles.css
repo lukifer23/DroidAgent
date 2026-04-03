@@ -571,6 +571,14 @@ small {
   will-change: transform, opacity;
 }
 
+.route-cache-pane {
+  min-width: 0;
+}
+
+.route-cache-pane[hidden] {
+  display: none !important;
+}
+
 .app-shell.chat-route-shell .route-frame,
 .app-shell.files-route-shell .route-frame,
 .app-shell.terminal-route-shell .route-frame {

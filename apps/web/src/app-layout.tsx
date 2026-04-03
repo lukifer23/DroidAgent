@@ -36,6 +36,7 @@ import {
   getResolvedDecisions,
 } from "./lib/dashboard-selectors";
 import { isOperatorReady } from "./lib/operator-readiness";
+import { FilesScreen } from "./screens/files-screen";
 
 const AuthScreen = lazy(async () => ({
   default: (await import("./screens/auth-screen")).AuthScreen,
@@ -118,6 +119,7 @@ export function AppLayout() {
   const isChatRoute = location.pathname === "/chat";
   const isFilesRoute = location.pathname === "/files";
   const isTerminalRoute = location.pathname === "/terminal";
+  const keepFilesWarm = operatorReady && !isSetupRoute;
   const activeProvider = providers.find((provider) => provider.enabled);
   const runtimeCount = runtimes.filter(
     (runtime) => runtime.state === "running",
@@ -385,7 +387,16 @@ export function AppLayout() {
       <section className="main-layout routed-layout">
         <div className="content-panel">
           <div className="route-frame">
-            <Outlet />
+            {!isFilesRoute || !keepFilesWarm ? <Outlet /> : null}
+            {keepFilesWarm ? (
+              <div
+                className={`route-cache-pane${isFilesRoute ? " active" : ""}`}
+                hidden={!isFilesRoute}
+                aria-hidden={!isFilesRoute}
+              >
+                <FilesScreen />
+              </div>
+            ) : null}
           </div>
         </div>
 

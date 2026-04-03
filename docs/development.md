@@ -65,6 +65,7 @@ pnpm verify:full
   - enforces `perf-budgets.json` and baseline regression thresholds, including shared shell/vendor chunks
 - `pnpm perf:report`
   - prints the latest server and E2E perf artifacts
+- the route-switch perf artifact is measured from in-browser route activation to first visible destination control, not from Playwright's outer click timing
 
 ## Release Workflow
 

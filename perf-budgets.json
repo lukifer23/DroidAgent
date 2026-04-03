@@ -43,7 +43,7 @@
       "source": "e2e",
       "name": "route_switch_ms",
       "aggregate": "p95",
-      "budgetMs": 220
+      "budgetMs": 180
     },
     {
       "id": "e2e.reconnect.resync.p95",
