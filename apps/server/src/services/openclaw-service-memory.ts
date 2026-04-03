@@ -335,6 +335,7 @@ export const openClawMemoryMethods = {
 
   async ensureConfiguredInternal(this: OpenClawService): Promise<void> {
     const service = this as unknown as OpenClawMemoryService;
+    fs.mkdirSync(paths.openClawHomeDir, { recursive: true });
     fs.mkdirSync(paths.openClawStateDir, { recursive: true });
     await service.ensureOpenClawEnvFile("OLLAMA_API_KEY=ollama-local\n");
     const runtimeSettings = await appStateService.getRuntimeSettings();

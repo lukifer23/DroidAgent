@@ -21,6 +21,11 @@ export const LAUNCH_AGENT_LABEL = "com.droidagent.server";
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
 const serverRoot = path.resolve(thisDir, "..");
 const workspaceRoot = path.resolve(serverRoot, "..", "..");
+const openClawHomeDir = path.join(os.homedir(), `.openclaw-${OPENCLAW_PROFILE}`);
+const openClawProfileDir = path.join(
+  openClawHomeDir,
+  `.openclaw-${OPENCLAW_PROFILE}`,
+);
 
 export const paths = {
   workspaceRoot,
@@ -41,9 +46,10 @@ export const paths = {
   tailscaleSocketPath: path.join(os.homedir(), ".droidagent", "tailscale", "tailscaled.sock"),
   tailscaleStatePath: path.join(os.homedir(), ".droidagent", "tailscale", "tailscaled.state"),
   tailscaleLogPath: path.join(os.homedir(), ".droidagent", "logs", "tailscaled.log"),
-  openClawStateDir: path.join(os.homedir(), `.openclaw-${OPENCLAW_PROFILE}`),
-  openClawConfigPath: path.join(os.homedir(), `.openclaw-${OPENCLAW_PROFILE}`, "openclaw.json"),
-  openClawEnvPath: path.join(os.homedir(), `.openclaw-${OPENCLAW_PROFILE}`, ".env"),
+  openClawHomeDir,
+  openClawStateDir: openClawProfileDir,
+  openClawConfigPath: path.join(openClawProfileDir, "openclaw.json"),
+  openClawEnvPath: path.join(openClawHomeDir, ".env"),
   signalCliConfigDir: path.join(os.homedir(), ".droidagent", "signal-cli"),
   signalDaemonLogPath: path.join(os.homedir(), ".droidagent", "logs", "signal-daemon.log"),
   appsServerBin: path.join(workspaceRoot, "apps", "server", "node_modules", ".bin", "openclaw"),
@@ -78,6 +84,7 @@ export function baseEnv(): NodeJS.ProcessEnv {
     ...process.env,
     HOME: os.homedir(),
     PATH: process.env.PATH ?? "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    OPENCLAW_HOME: paths.openClawHomeDir,
     OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN
   };
 }

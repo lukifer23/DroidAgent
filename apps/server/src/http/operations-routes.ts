@@ -153,6 +153,12 @@ export function registerOperationsRoutes(
     return c.json(await openclawOperationsFacet.prepareWorkspaceContext());
   });
 
+  app.get("/api/memory/prepare-status", async (c) => {
+    const unauthorized = await requireUser(c);
+    if (unauthorized) return unauthorized;
+    return c.json(await appStateService.getMemoryPrepareStatus());
+  });
+
   app.get("/api/memory/drafts", async (c) => {
     const unauthorized = await requireUser(c);
     if (unauthorized) return unauthorized;

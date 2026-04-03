@@ -690,34 +690,53 @@ async function main() {
     }
 
     let prewarmed = false;
-    for (let attempt = 0; attempt < 240; attempt += 1) {
-      const dashboardResponse = await fetch(
-        new URL("/api/dashboard", state.baseUrl),
+    const prewarmAttempts = USE_REAL_RUNTIME ? 480 : 240;
+    const prewarmIntervalMs = USE_REAL_RUNTIME ? 500 : 250;
+    for (let attempt = 0; attempt < prewarmAttempts; attempt += 1) {
+      const prepareStatusResponse = await requestJson(
+        state.baseUrl,
+        "/api/memory/prepare-status",
         {
-          headers: {
-            cookie: `droidagent_session=${state.sessionToken}`,
-          },
+          sessionToken: state.sessionToken,
         },
       );
-      if (!dashboardResponse.ok) {
+      if (!prepareStatusResponse.ok || !prepareStatusResponse.json) {
         throw new Error(
-          `Failed to read prewarmed dashboard: ${dashboardResponse.status}`,
+          `Failed to read prewarm prepare status: ${prepareStatusResponse.status} ${prepareStatusResponse.text ?? ""}`.trim(),
         );
       }
-      const dashboard = (await dashboardResponse.json()) as {
-        memory?: {
-          semanticReady?: boolean;
-          prepareState?: string | null;
-        };
+      const prepareStatus = prepareStatusResponse.json as {
+        state?: string | null;
+        error?: string | null;
       };
-      if (
-        dashboard.memory?.semanticReady &&
-        dashboard.memory?.prepareState === "completed"
-      ) {
-        prewarmed = true;
-        break;
+      if (prepareStatus.state === "failed") {
+        throw new Error(
+          prepareStatus.error?.trim() ||
+            "Semantic memory prepare failed during perf prewarm.",
+        );
       }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      if (prepareStatus.state === "completed") {
+        const memoryStatusResponse = await requestJson(
+          state.baseUrl,
+          "/api/memory/status",
+          {
+            sessionToken: state.sessionToken,
+          },
+        );
+        if (!memoryStatusResponse.ok || !memoryStatusResponse.json) {
+          throw new Error(
+            `Failed to confirm prewarmed memory status: ${memoryStatusResponse.status} ${memoryStatusResponse.text ?? ""}`.trim(),
+          );
+        }
+        const memoryStatus = memoryStatusResponse.json as {
+          semanticReady?: boolean;
+        };
+        if (memoryStatus.semanticReady) {
+          prewarmed = true;
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, prewarmIntervalMs));
     }
     if (!prewarmed) {
       throw new Error("Timed out waiting for prewarmed semantic memory.");

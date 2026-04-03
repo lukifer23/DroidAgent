@@ -515,6 +515,7 @@ if (TEST_MODE && E2E_RESET_TOKEN && E2E_STATE_PATH && E2E_ROOT_DIR) {
       paths.uploadsDir,
       paths.signalCliConfigDir,
       paths.tailscaleDir,
+      paths.openClawHomeDir,
       paths.openClawStateDir,
       runtimeSettings.workspaceRoot ?? fixture.workspaceRoot,
     ];
