@@ -17,7 +17,7 @@
     "@lydell/node-pty": "1.2.0-beta.3",
     "@simplewebauthn/server": "^13.3.0",
     "better-sqlite3": "^12.8.0",
-    "drizzle-orm": "^0.45.1",
+    "drizzle-orm": "^0.45.2",
     "hono": "^4.12.9",
     "openclaw": "2026.3.31",
     "set-cookie-parser": "^2.7.1",
